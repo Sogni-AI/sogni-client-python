@@ -1261,7 +1261,7 @@ class ProjectsApi(EventEmitter):
         remove = self.on("availableModels", ready)
         try:
             return await asyncio.wait_for(future, timeout)
-        except TimeoutError as error:
+        except asyncio.TimeoutError as error:
             raise TimeoutError("Timeout waiting for models") from error
         finally:
             remove()

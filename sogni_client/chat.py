@@ -626,7 +626,7 @@ class ChatApi(EventEmitter):
         remove = self.on("modelsUpdated", ready)
         try:
             return await asyncio.wait_for(future, timeout)
-        except TimeoutError as error:
+        except asyncio.TimeoutError as error:
             raise TimeoutError("Timeout waiting for LLM models") from error
         finally:
             remove()
@@ -735,7 +735,7 @@ class ChatApi(EventEmitter):
             return stream
         try:
             return await stream.wait(300)
-        except TimeoutError as error:
+        except asyncio.TimeoutError as error:
             self._active_streams.pop(job_id, None)
             raise TimeoutError(f"Chat completion timed out after 300s (jobID: {job_id})") from error
 
