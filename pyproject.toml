@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sogni-client"
+version = "5.1.0a24"
+description = "Async Python SDK for image, video, audio, and LLM inference on the Sogni Supernet"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "ISC"
+license-files = ["LICENSE"]
+authors = [{ name = "Sogni AI" }]
+keywords = [
+  "sogni",
+  "generative-ai",
+  "image-generation",
+  "video-generation",
+  "llm",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: AsyncIO",
+  "License :: OSI Approved :: ISC License (ISCL)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "eth-account>=0.13,<1",
+  "httpx>=0.27,<1",
+  "websockets>=13,<17",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.9",
+]
+
+[project.urls]
+Homepage = "https://www.sogni.ai"
+Documentation = "https://sdk-docs.sogni.ai"
+Repository = "https://github.com/Sogni-AI/sogni-client-python"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sogni_client"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/LICENSE",
+  "/README.md",
+  "/examples",
+  "/pyproject.toml",
+  "/sogni_client",
+  "/tests",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]
