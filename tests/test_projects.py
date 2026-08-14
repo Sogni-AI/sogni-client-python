@@ -373,6 +373,56 @@ async def test_create_normalizes_python_names_uploads_assets_and_annotates_conte
 
 
 @pytest.mark.asyncio
+async def test_krea_identity_edit_uploads_context_image_and_enforces_limit() -> None:
+    client = FakeClient([{"data": {"uploadUrl": "https://upload.example/context"}}])
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+
+    project = await api.create(
+        type="image",
+        model_id="krea2_identity_edit_v1_2",
+        positive_prompt="Change the jacket to blue and preserve identity.",
+        number_of_media=1,
+        width=1024,
+        height=1024,
+        steps=10,
+        guidance=1,
+        token_type="spark",
+        context_images=[PNG],
+    )
+
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    keyframe = request["keyFrames"][0]
+    assert keyframe["modelID"] == "krea2_identity_edit_v1_2"
+    assert keyframe["guidanceScale"] == 1
+    assert keyframe["hasContextImage1"] is True
+    assert keyframe["hasContextImage2"] is False
+    assert request["tokenType"] == "spark"
+    assert client.rest.calls[0] == {
+        "method": "GET",
+        "path": "/v1/image/uploadUrl",
+        "params": {
+            "imageId": ANY,
+            "jobId": project.id,
+            "type": "contextImage1",
+            "contentType": "image/png",
+        },
+    }
+    assert client.rest.calls[1]["method"] == "PUT"
+    assert client.rest.calls[1]["content_type"] == "image/png"
+
+    with pytest.raises(ApiError, match="Up to 2 context images"):
+        await api.create(
+            type="image",
+            model_id="krea2_identity_edit_v1_2",
+            positive_prompt="Too many references.",
+            number_of_media=1,
+            context_images=[PNG, PNG, PNG],
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_normalizes_nested_control_net_python_names() -> None:
     client = FakeClient()
     api = ProjectsApi(client)
