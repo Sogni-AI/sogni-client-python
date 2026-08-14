@@ -48,6 +48,41 @@ asyncio.run(main())
 provided. Pass `app_id="..."` when you deliberately need a stable socket
 identity.
 
+## Edit an image with Krea 2 Identity Edit
+
+Pass one or two local reference images through `context_images`. For two-image
+edits, place the base scene first and the identity or detail reference second.
+
+```python
+project = await sogni.projects.create(
+    type="image",
+    model_id="krea2_identity_edit_v1_2",
+    positive_prompt=(
+        "Change only the jacket to vivid sapphire blue. Preserve the exact "
+        "facial identity, expression, framing, background, and lighting."
+    ),
+    number_of_media=1,
+    width=1024,
+    height=1024,
+    steps=10,
+    guidance=1,
+    token_type="spark",
+    context_images=["reference.png"],
+)
+print(await project.wait_for_completion(timeout=900))
+```
+
+The runnable example accepts one or two image paths and can also create a batch:
+
+```bash
+python examples/krea_identity_edit.py reference.png \
+  --prompt "Change only the jacket to vivid sapphire blue; preserve identity."
+
+python examples/krea_identity_edit.py scene.png identity.png \
+  --prompt "Use the first image as the base scene and the second for identity." \
+  --count 4
+```
+
 ## Chat
 
 Socket-backed completion:
