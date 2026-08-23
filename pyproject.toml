@@ -45,7 +45,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://www.sogni.ai"
-Documentation = "https://sdk-docs.sogni.ai"
+Documentation = "https://docs.sogni.ai/sogni-sdk/python/"
 Repository = "https://github.com/Sogni-AI/sogni-client-python"
 
 [tool.hatch.build.targets.wheel]
