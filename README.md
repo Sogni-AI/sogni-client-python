@@ -7,11 +7,23 @@ Supernet. It follows the public surface and wire protocol of the TypeScript
 > The Python port is currently beta. Keep credentials in environment variables
 > or your system keychain; never commit them to source control.
 
+[Official quickstart](https://docs.sogni.ai/sogni-sdk/python/) ·
+[Examples](https://github.com/Sogni-AI/sogni-client-python/tree/main/examples) ·
+[Sogni API reference](https://docs.sogni.ai/api-reference/)
+
 ## Install
 
-From the standalone repository:
+Install the latest beta directly from the official GitHub repository:
 
 ```bash
+python -m pip install "sogni-client @ git+https://github.com/Sogni-AI/sogni-client-python.git@main"
+```
+
+For an editable source checkout:
+
+```bash
+git clone https://github.com/Sogni-AI/sogni-client-python.git
+cd sogni-client-python
 python -m pip install -e .
 ```
 
@@ -169,3 +181,9 @@ python -m build
 ```
 
 Live integration tests require explicit credentials and are not run by default.
+
+## Documentation
+
+- [Python SDK quickstart](https://docs.sogni.ai/sogni-sdk/python/)
+- [Sogni SDK overview](https://docs.sogni.ai/sogni-sdk/)
+- [REST API reference](https://docs.sogni.ai/api-reference/)
