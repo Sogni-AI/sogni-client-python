@@ -1,6 +1,16 @@
 """Async Python SDK for the Sogni Supernet."""
 
 from .account import AccountApi, CurrentAccount
+from .attribution import (
+    build_sogni_attribution_headers,
+    buildSogniAttributionHeaders,
+    normalize_connection_attribution,
+    normalizeConnectionAttribution,
+    resolve_workload_attribution,
+    resolveWorkloadAttribution,
+    workload_attribution_to_wire_fields,
+    workloadAttributionToWireFields,
+)
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
 from .chat import (
     ChatApi,
@@ -39,7 +49,7 @@ from .utils import (
 )
 from .workflows import CreativeWorkflowsApi, CreativeWorkflowTemplatesApi
 
-__version__ = "5.1.0a24"
+__version__ = "5.21.3"
 
 __all__ = [
     "SUBSCRIPTION_ERROR_CODES",
@@ -69,13 +79,21 @@ __all__ = [
     "StatsApi",
     "TokenAuthManager",
     "calculate_video_frames",
+    "build_sogni_attribution_headers",
+    "buildSogniAttributionHeaders",
     "create_job_request_message",
     "is_sogni_tool_call",
     "is_subscription_limit_error",
     "isSogniToolCall",
     "isSubscriptionLimitError",
+    "normalize_connection_attribution",
+    "normalizeConnectionAttribution",
     "parse_creative_workflow_sse_chunk",
     "parse_tool_call_arguments",
     "parseCreativeWorkflowSseChunk",
     "parseToolCallArguments",
+    "resolve_workload_attribution",
+    "resolveWorkloadAttribution",
+    "workload_attribution_to_wire_fields",
+    "workloadAttributionToWireFields",
 ]

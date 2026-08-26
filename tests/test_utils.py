@@ -95,9 +95,9 @@ def test_new_id_returns_uppercase_uuid_strings() -> None:
         ("wan_v2.2-14b-fp8_t2v", 5, 16, 81),
         ("wan_v2.2-14b-fp8_t2v", 5, 32, 81),
         # LTX generates at the requested fps and snaps to the 1 + n*8 lattice.
-        ("ltx23-22b-dev_t2v", 5, 24, 121),
-        ("ltx2-19b-dev_t2v", 4, 24, 97),
-        ("ltx23-22b-dev_t2v", 1, 25, 25),
+        ("ltx23-22b-fp8_t2v_dev", 5, 24, 121),
+        ("ltx2-19b-fp8_t2v", 4, 24, 97),
+        ("ltx23-22b-fp8_t2v_dev", 1, 25, 25),
         # Partner/external models use the ordinary duration * fps + 1 rule.
         ("seedance-2-0-fast", 5, 24, 121),
         ("happyhorse-1.1-t2v", 3, 24, 73),
@@ -112,7 +112,7 @@ def test_calculate_video_frames_matches_javascript_sdk(
 
 
 def test_calculate_video_frames_applies_explicit_bounds_after_model_rules() -> None:
-    assert calculate_video_frames("ltx23-22b-dev_t2v", 1, 8, min_frames=17) == 17
+    assert calculate_video_frames("ltx23-22b-fp8_t2v_dev", 1, 8, min_frames=17) == 17
     assert calculate_video_frames("wan_v2.2-14b-fp8_t2v", 20, 32, max_frames=161) == 161
 
 
@@ -125,7 +125,7 @@ def test_video_workflow_detection_rejects_family_invalid_suffixes() -> None:
     ("model", "wan", "ltx", "seedance", "happyhorse", "video", "external", "audio"),
     [
         ("wan_v2.2-14b-fp8_i2v", True, False, False, False, True, False, False),
-        ("ltx23-22b-dev_t2v", False, True, False, False, True, False, False),
+        ("ltx23-22b-fp8_t2v_dev", False, True, False, False, True, False, False),
         ("seedance-2-0-mini", False, False, True, False, True, True, False),
         ("happyhorse-1.1-r2v", False, False, False, True, True, True, False),
         ("ace_step_1.5_xl_turbo", False, False, False, False, False, False, True),
@@ -155,8 +155,8 @@ def test_model_family_predicates(
     ("model", "expected"),
     [
         ("wan_v2.2-14b-fp8_i2v", "i2v"),
-        ("wan_v2.2-14b-fp8_animate-move", "animate-move"),
-        ("ltx23-22b-dev_v2v", "v2v"),
+        ("wan_v2.2-14b-fp8_animate-move_lightx2v", "animate-move"),
+        ("ltx23-22b-fp8_v2v_dev", "v2v"),
         ("happyhorse-1.1-r2v", "r2v"),
         ("happyhorse-1.1-t2v", "t2v"),
         ("flux1-schnell-fp8", None),

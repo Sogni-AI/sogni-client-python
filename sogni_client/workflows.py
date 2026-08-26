@@ -14,10 +14,17 @@ from urllib.parse import quote
 
 from .errors import ApiError
 from .transport import ApiClient, RestClient
-from .utils import parse_sse_chunk
+from .utils import new_id, parse_sse_chunk
 
 _MISSING = object()
 _TERMINAL_WORKFLOW_STATUSES = {"completed", "failed", "cancelled"}
+
+
+def _attribution_headers(
+    client: Any, app_source: str | None, override: Any, operation_id: str
+) -> dict[str, str]:
+    builder = getattr(client, "attribution_headers", None)
+    return builder(app_source, override, operation_id) if callable(builder) else {}
 
 
 def _values(params: Mapping[str, Any] | None, kwargs: Mapping[str, Any]) -> dict[str, Any]:
@@ -296,7 +303,12 @@ class CreativeWorkflowsApi:
         if media_references is not _MISSING and media_references is not None:
             body["media_references"] = media_references
 
-        headers: dict[str, str] = {}
+        headers = _attribution_headers(
+            self.client,
+            app_source,
+            _pick(values, "attribution", default=None),
+            new_id(),
+        )
         idempotency_key = _pick(values, "idempotency_key", "idempotencyKey", default=None)
         if idempotency_key:
             headers["Idempotency-Key"] = str(idempotency_key)
@@ -313,9 +325,18 @@ class CreativeWorkflowsApi:
     ) -> dict[str, Any]:
         values = _values(params, kwargs)
         body = self._billing_body(values)
+        app_source = _pick(values, "app_source", "appSource", default=None)
+        if app_source is None:
+            app_source = self.client.app_source
         response = await self.client.rest.post(
             f"/v1/creative-agent/workflows/{quote(str(workflow_id), safe='')}/resume",
             body,
+            headers=_attribution_headers(
+                self.client,
+                app_source,
+                _pick(values, "attribution", default=None),
+                new_id(),
+            ),
         )
         data = _workflow_data(response)
         if "workflow" not in data:
@@ -330,12 +351,21 @@ class CreativeWorkflowsApi:
     ) -> dict[str, Any]:
         values = _values(params, kwargs)
         body = self._billing_body(values)
+        app_source = _pick(values, "app_source", "appSource", default=None)
+        if app_source is None:
+            app_source = self.client.app_source
         seed_overrides = _pick(values, "seed_overrides", "seedOverrides", default=_MISSING)
         if seed_overrides is not _MISSING and seed_overrides is not None:
             body["seed_overrides"] = seed_overrides
         response = await self.client.rest.post(
             f"/v1/creative-agent/workflows/{quote(str(workflow_id), safe='')}/reseed",
             body,
+            headers=_attribution_headers(
+                self.client,
+                app_source,
+                _pick(values, "attribution", default=None),
+                new_id(),
+            ),
         )
         data = _workflow_data(response)
         if "workflow" not in data:

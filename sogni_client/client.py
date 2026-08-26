@@ -46,6 +46,7 @@ class SogniClient:
         *,
         app_id: str | None = None,
         app_source: str | None = None,
+        attribution: dict[str, Any] | None = None,
         network: str = "fast",
         api_key: str | None = None,
         auth_type: str = "token",
@@ -77,6 +78,7 @@ class SogniClient:
 
         app_id = pick(app_id, "app_id", "appId") or str(uuid.uuid4())
         app_source = pick(app_source, "app_source", "appSource")
+        attribution = pick(attribution, "attribution")
         network = pick(network, "network")
         api_key = pick(api_key, "api_key", "apiKey")
         auth_type = pick(auth_type, "auth_type", "authType")
@@ -110,6 +112,8 @@ class SogniClient:
             "http_client": http_client,
             "socket_http_client": socket_http_client,
         }
+        if attribution is not None:
+            transport_kwargs["attribution"] = attribution
         if websocket_factory is not None:
             transport_kwargs["websocket_factory"] = websocket_factory
         api_client = ApiClient(**transport_kwargs)

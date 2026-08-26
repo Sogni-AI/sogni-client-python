@@ -83,6 +83,18 @@ def fake_client(rest: FakeRest, *, app_source: str | None = "pytest-client") -> 
     return SimpleNamespace(rest=rest, app_source=app_source)
 
 
+def attributed_client(rest: FakeRest) -> Any:
+    return SimpleNamespace(
+        rest=rest,
+        app_source="pytest-client",
+        attribution_headers=lambda app_source, override, operation_id: {
+            "X-App-Source": app_source,
+            "X-Sogni-Workload-Kind": override["workloadKind"],
+            "X-Sogni-Operation-Id": operation_id,
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_workflow_start_serializes_python_names_to_canonical_wire_shape() -> None:
     workflow = {"workflowId": "wf-1", "status": "queued"}
@@ -150,6 +162,25 @@ async def test_workflow_start_accepts_javascript_aliases_and_template_inputs() -
         "confirm_cost": True,
     }
     assert rest.calls[0]["headers"] == {"Idempotency-Key": "camel-key"}
+
+
+@pytest.mark.asyncio
+async def test_workflow_start_combines_idempotency_and_attribution_headers() -> None:
+    rest = FakeRest([{"data": {"workflow": {"workflowId": "wf-attributed"}}}])
+    api = CreativeWorkflowsApi(attributed_client(rest))
+
+    await api.start(
+        input={"steps": []},
+        idempotency_key="workflow-operation",
+        attribution={"workloadKind": "agent_mediated"},
+    )
+
+    assert rest.calls[0]["headers"] == {
+        "X-App-Source": "pytest-client",
+        "X-Sogni-Workload-Kind": "agent_mediated",
+        "X-Sogni-Operation-Id": rest.calls[0]["headers"]["X-Sogni-Operation-Id"],
+        "Idempotency-Key": "workflow-operation",
+    }
 
 
 @pytest.mark.asyncio

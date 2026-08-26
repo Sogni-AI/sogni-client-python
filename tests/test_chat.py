@@ -175,10 +175,18 @@ def tool_call(
 def test_sogni_tools_expose_all_canonical_names_and_helpers() -> None:
     definitions = SogniTools.all
 
-    assert len(definitions) == len(HOSTED_TOOL_NAMES) == 24
+    assert len(definitions) == len(HOSTED_TOOL_NAMES) == 25
     assert {item["function"]["name"] for item in definitions} == set(HOSTED_TOOL_NAMES)
     assert SogniTools.generateImage["function"]["name"] == "generate_image"
+    assert SogniTools.upscaleImage["function"]["name"] == "upscale_image"
     assert SogniTools.compose_workflow["function"]["name"] == "compose_workflow"
+    video_to_video = next(
+        item for item in definitions if item["function"]["name"] == "video_to_video"
+    )
+    assert (
+        "wan3.0-video"
+        not in video_to_video["function"]["parameters"]["properties"]["videoModel"]["enum"]
+    )
     assert is_sogni_tool_call(tool_call()) is True
     assert is_sogni_tool_call(tool_call("not_sogni")) is False
     assert parse_tool_call_arguments(tool_call(arguments='{"count":2}')) == {"count": 2}
@@ -186,6 +194,11 @@ def test_sogni_tools_expose_all_canonical_names_and_helpers() -> None:
     assert parse_tool_call_arguments(tool_call(arguments="[]")) == {}
     with pytest.raises(AttributeError):
         _ = SogniTools.not_a_tool
+
+
+def test_direct_video_to_video_does_not_route_wan3_as_an_edit_model() -> None:
+    assert ChatToolsApi._resolve_model("video_to_video", {"videoModel": "wan3"}) is None
+    assert ChatToolsApi._resolve_model("video_to_video", {"videoModel": "wan3.0-video"}) is None
 
 
 def test_direct_hosted_tool_schemas_match_standalone_golden_fingerprints() -> None:

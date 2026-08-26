@@ -13,12 +13,18 @@ import httpx
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import ConnectionClosed
 
+from .attribution import (
+    build_sogni_attribution_headers,
+    connection_attribution_query,
+    normalize_connection_attribution,
+    resolve_workload_attribution,
+)
 from .auth import ApiKeyAuthManager, AuthManager, CookieAuthManager, TokenAuthManager
 from .errors import ApiError
 from .events import EventEmitter
 from .utils import b64_json_decode, b64_json_encode, drop_none
 
-LIB_VERSION = "5.1.0a24"
+LIB_VERSION = "5.21.3"
 PROTOCOL_VERSION = "3.0.0"
 SWITCH_CONNECTION = 4015
 
@@ -194,6 +200,7 @@ class WebSocketClient(EventEmitter):
         network: str,
         *,
         app_source: str | None = None,
+        connection_attribution: dict[str, Any] | None = None,
         socket_event_subscriptions: dict[str, bool] | None = None,
         socket_http_client: httpx.AsyncClient | None = None,
         connect_factory: Callable[..., Any] = websocket_connect,
@@ -203,6 +210,7 @@ class WebSocketClient(EventEmitter):
         self.auth = auth
         self.app_id = app_id
         self.app_source = app_source.strip() if app_source and app_source.strip() else None
+        self.connection_attribution = normalize_connection_attribution(connection_attribution)
         self.socket_event_subscriptions = socket_event_subscriptions
         self.supernet_type = network
         http_scheme = "http" if urlsplit(base_url).scheme in {"http", "ws"} else "https"
@@ -246,6 +254,7 @@ class WebSocketClient(EventEmitter):
             }
             if self.app_source:
                 query["appSource"] = self.app_source
+            query.update(connection_attribution_query(self.connection_attribution))
             subscriptions = {
                 key: enabled
                 for key, enabled in (self.socket_event_subscriptions or {}).items()
@@ -379,6 +388,7 @@ class ApiClient(EventEmitter):
         network: str,
         auth_type: str,
         app_source: str | None = None,
+        attribution: dict[str, Any] | None = None,
         socket_event_subscriptions: dict[str, bool] | None = None,
         disable_socket: bool = False,
         http_client: httpx.AsyncClient | None = None,
@@ -388,6 +398,15 @@ class ApiClient(EventEmitter):
         super().__init__()
         self.app_id = app_id
         self.app_source = app_source.strip() if app_source and app_source.strip() else None
+        raw_attribution = attribution if isinstance(attribution, dict) else {}
+        connection = raw_attribution.get("connection")
+        workload = raw_attribution.get("workload")
+        self.attribution: dict[str, dict[str, Any]] = {}
+        normalized_connection = normalize_connection_attribution(connection)
+        if normalized_connection:
+            self.attribution["connection"] = normalized_connection
+        if isinstance(workload, dict):
+            self.attribution["workload"] = dict(workload)
         if auth_type == "apiKey":
             self.auth: AuthManager = ApiKeyAuthManager()
         elif auth_type == "cookies":
@@ -401,6 +420,7 @@ class ApiClient(EventEmitter):
             app_id,
             network,
             app_source=self.app_source,
+            connection_attribution=self.attribution.get("connection"),
             socket_event_subscriptions=socket_event_subscriptions,
             socket_http_client=socket_http_client,
             connect_factory=websocket_factory,
@@ -420,6 +440,31 @@ class ApiClient(EventEmitter):
     @property
     def isAuthenticated(self) -> bool:
         return self.is_authenticated
+
+    def resolve_workload_attribution(
+        self,
+        override: dict[str, Any] | None = None,
+        fallback_operation_id: str | None = None,
+    ) -> dict[str, str] | None:
+        return resolve_workload_attribution(
+            self.attribution.get("workload"), override, fallback_operation_id
+        )
+
+    resolveWorkloadAttribution = resolve_workload_attribution
+
+    def attribution_headers(
+        self,
+        app_source: str | None,
+        override: dict[str, Any] | None = None,
+        fallback_operation_id: str | None = None,
+    ) -> dict[str, str]:
+        return build_sogni_attribution_headers(
+            app_source=app_source,
+            connection=self.attribution.get("connection"),
+            workload=self.resolve_workload_attribution(override, fallback_operation_id),
+        )
+
+    attributionHeaders = attribution_headers
 
     async def start(self) -> None:
         if self.socket_enabled and self.auth.is_authenticated and not self.socket.is_connected:

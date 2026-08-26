@@ -15,11 +15,18 @@ from urllib.parse import quote
 
 import httpx
 
+from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ChatJobError, extract_chat_job_error_fields
 from .events import EventEmitter
 from .projects import ProjectsApi
 from .transport import ApiClient
-from .utils import new_id, normalize_params, parse_sse_chunk
+from .utils import (
+    is_minimax_h3_model,
+    is_wan3_model,
+    new_id,
+    normalize_params,
+    parse_sse_chunk,
+)
 
 HOSTED_TOOL_NAMES = (
     "generate_image",
@@ -28,6 +35,7 @@ HOSTED_TOOL_NAMES = (
     "edit_image",
     "apply_style",
     "restore_photo",
+    "upscale_image",
     "refine_result",
     "animate_photo",
     "change_angle",
@@ -47,6 +55,18 @@ HOSTED_TOOL_NAMES = (
     "compose_workflow",
     "compose_workflow_template",
 )
+
+
+def _resolve_attribution(client: Any, override: Any, operation_id: str) -> dict[str, str] | None:
+    resolver = getattr(client, "resolve_workload_attribution", None)
+    return resolver(override, operation_id) if callable(resolver) else None
+
+
+def _attribution_headers(
+    client: Any, app_source: str | None, override: Any, operation_id: str
+) -> dict[str, str]:
+    builder = getattr(client, "attribution_headers", None)
+    return builder(app_source, override, operation_id) if callable(builder) else {}
 
 
 def _load_hosted_tools() -> dict[str, dict[str, Any]]:
@@ -83,6 +103,7 @@ class _SogniTools:
         "generateMusic": "generate_music",
         "applyStyle": "apply_style",
         "restorePhoto": "restore_photo",
+        "upscaleImage": "upscale_image",
         "refineResult": "refine_result",
         "changeAngle": "change_angle",
         "animatePhoto": "animate_photo",
@@ -381,6 +402,103 @@ class ChatToolsApi:
         "generate_music",
     }
 
+    _IMAGE_SELECTORS = {
+        "chatgpt": "gpt-image-2",
+        "chatgpt-image": "gpt-image-2",
+        "openai": "gpt-image-2",
+        "openai-image": "gpt-image-2",
+        "gpt-image": "gpt-image-2",
+        "gpt-image-2": "gpt-image-2",
+        "z-turbo": "z_image_turbo_bf16",
+        "krea2-turbo": "krea2_turbo_fp8_scaled",
+        "krea-2-turbo": "krea2_turbo_fp8_scaled",
+    }
+    _EDIT_SELECTORS = {
+        **_IMAGE_SELECTORS,
+        "qwen-lightning": "qwen_image_edit_2511_fp8_lightning",
+        "qwen": "qwen_image_edit_2511_fp8",
+        "krea2-identity-edit": "krea2_identity_edit_v1_2",
+        "krea-2-identity-edit": "krea2_identity_edit_v1_2",
+    }
+    _VIDEO_SELECTORS = {
+        "ltx25": "ltx25-22b-int8_t2v_distilled",
+        "ltx23": "ltx23-22b-fp8_t2v_distilled",
+        "wan22": "wan_v2.2-14b-fp8_t2v_lightx2v",
+        "seedance2": "seedance-2-0",
+        "seedance2-mini": "seedance-2-0-mini",
+        "seedance2-fast": "seedance-2-0-mini",
+        "seedance2-5": "seedance-2-5",
+        "minimax-h3": "minimax-h3-fl2va-fp8_t2v",
+        "minimax-h3-turbo": "minimax-h3-fl2va-fp8_t2v_turbo",
+        "happyhorse": "happyhorse-1.1-t2v",
+        "wan3": "wan3.0-video",
+        "wan3.0": "wan3.0-video",
+        "wan3-video": "wan3.0-video",
+    }
+    _IMAGE_VIDEO_SELECTORS = {
+        **_VIDEO_SELECTORS,
+        "ltx25": "ltx25-22b-int8_i2v_distilled",
+        "ltx23": "ltx23-22b-fp8_i2v_distilled",
+        "wan22": "wan_v2.2-14b-fp8_i2v_lightx2v",
+        "minimax-h3": "minimax-h3-fl2va-fp8_i2v",
+        "minimax-h3-turbo": "minimax-h3-fl2va-fp8_i2v_turbo",
+        "happyhorse": "happyhorse-1.1-i2v",
+    }
+    _SOUND_VIDEO_SELECTORS = {
+        "wan-s2v": "wan_v2.2-14b-fp8_s2v_lightx2v",
+        "seedance2": "seedance-2-0",
+        "seedance2-mini": "seedance-2-0",
+        "seedance2-fast": "seedance-2-0",
+        "seedance2-5": "seedance-2-5",
+        "ltx25-ia2v": "ltx25-22b-int8_ia2v_distilled",
+        "ltx25-a2v": "ltx25-22b-int8_a2v_distilled",
+        "ltx23-ia2v": "ltx23-22b-fp8_ia2v_distilled",
+        "ltx23-a2v": "ltx23-22b-fp8_a2v_distilled",
+        "wan3": "wan3.0-video",
+    }
+    _V2V_SELECTORS = {
+        "ltx25": "ltx25-22b-int8_v2v_distilled",
+        "ltx25-v2v": "ltx25-22b-int8_v2v_distilled",
+        "ltx23": "ltx23-22b-fp8_v2v_distilled",
+        "ltx23-v2v": "ltx23-22b-fp8_v2v_distilled",
+        "seedance2": "seedance-2-0",
+        "seedance2-5": "seedance-2-5",
+    }
+
+    @staticmethod
+    def _selector_key(value: str) -> str:
+        return "-".join(value.strip().lower().replace("_", "-").split())
+
+    @classmethod
+    def _resolve_model(cls, name: str, args: dict[str, Any]) -> str | None:
+        video_tool = name in {"generate_video", "sound_to_video", "video_to_video"}
+        requested = args.get("videoModel") if video_tool else args.get("model")
+        requested = requested or (args.get("video_model") if video_tool else None)
+        if not isinstance(requested, str) or not requested.strip():
+            return None
+        selectors = (
+            cls._EDIT_SELECTORS
+            if name == "edit_image"
+            else cls._IMAGE_SELECTORS
+            if name == "generate_image"
+            else cls._SOUND_VIDEO_SELECTORS
+            if name == "sound_to_video"
+            else cls._V2V_SELECTORS
+            if name == "video_to_video"
+            else cls._IMAGE_VIDEO_SELECTORS
+            if name == "generate_video" and args.get("referenceImageIndices")
+            else cls._VIDEO_SELECTORS
+            if name == "generate_video"
+            else {}
+        )
+        resolved = selectors.get(requested, selectors.get(cls._selector_key(requested), requested))
+        if name == "video_to_video" and (
+            is_wan3_model(resolved)
+            or cls._selector_key(resolved) in {"wan3", "wan3.0", "wan3-video"}
+        ):
+            return None
+        return resolved
+
     def __init__(self, projects: ProjectsApi) -> None:
         self.projects = projects
 
@@ -406,7 +524,7 @@ class ChatToolsApi:
                 if name in {"generate_video", "sound_to_video", "video_to_video"}
                 else "image"
             )
-            requested = args.get("model") or args.get("video_model")
+            requested = self._resolve_model(name, args)
             candidates = [model for model in models if model.get("media", "image") == media]
             model_id = (
                 requested
@@ -420,12 +538,19 @@ class ChatToolsApi:
                 "numberOfMedia": max(
                     1,
                     min(
-                        16, round(args.get("number_of_variations", options.get("numberOfMedia", 1)))
+                        16,
+                        round(
+                            args.get(
+                                "numberOfVariations",
+                                args.get("number_of_variations", options.get("numberOfMedia", 1)),
+                            )
+                        ),
                     ),
                 ),
             }
-            if args.get("negative_prompt"):
-                project_params["negativePrompt"] = args["negative_prompt"]
+            negative_prompt = args.get("negativePrompt", args.get("negative_prompt"))
+            if negative_prompt:
+                project_params["negativePrompt"] = negative_prompt
             for source, target in (
                 ("duration", "duration"),
                 ("width", "width"),
@@ -434,13 +559,14 @@ class ChatToolsApi:
                 ("bpm", "bpm"),
                 ("lyrics", "lyrics"),
                 ("keyscale", "keyscale"),
+                ("outputFormat", "outputFormat"),
                 ("output_format", "outputFormat"),
             ):
                 if args.get(source) is not None:
                     project_params[target] = args[source]
             if media == "video":
-                project_params.setdefault("fps", 24)
-                project_params.setdefault("duration", 5)
+                project_params.setdefault("fps", 30 if is_wan3_model(model_id) else 24)
+                project_params.setdefault("duration", 6 if is_minimax_h3_model(model_id) else 5)
                 project_params.setdefault("width", 768)
                 project_params.setdefault("height", 512)
             if options.get("tokenType"):
@@ -720,6 +846,9 @@ class ChatApi(EventEmitter):
             ),
             "taskProfile": params.get("taskProfile"),
             "response_format": params.get("responseFormat", params.get("response_format")),
+            **workload_attribution_to_wire_fields(
+                _resolve_attribution(self.client, params.get("attribution"), job_id)
+            ),
         }
         if params.get("safeContentFilter") is not None:
             request["safeContentFilter"] = params["safeContentFilter"]
@@ -823,8 +952,12 @@ class ChatApi(EventEmitter):
         }
         if str(body.get("sogni_tools", "")).lower() == "rich":
             body["sogni_tools"] = "creative-tools"
+        app_source = body["app_source"]
+        headers = _attribution_headers(self.client, app_source, params.get("attribution"), new_id())
         try:
-            return await self.client.rest.post("/v1/chat/completions", body, timeout=300)
+            return await self.client.rest.post(
+                "/v1/chat/completions", body, headers=headers, timeout=300
+            )
         except ApiError as error:
             extracted = extract_chat_job_error_fields(error.payload)
             if extracted:
@@ -837,18 +970,21 @@ class ChatApi(EventEmitter):
             raise
 
     async def execute_hosted_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+        app_source = params.get("appSource", params.get("app_source")) or self.client.app_source
         return await self.client.rest.post(
             "/v1/creative-agent/tools/execute",
             {
                 "tool": params["tool"],
                 "arguments": params.get("arguments", {}),
-                "app_source": params.get("appSource", params.get("app_source"))
-                or self.client.app_source,
+                "app_source": app_source,
                 "token_type": params.get("tokenType", params.get("token_type")),
                 "safe_content_filter": params.get(
                     "safeContentFilter", params.get("safe_content_filter")
                 ),
             },
+            headers=_attribution_headers(
+                self.client, app_source, params.get("attribution"), new_id()
+            ),
             timeout=300,
         )
 
@@ -891,9 +1027,12 @@ class ChatApi(EventEmitter):
             "app_source": params.get("appSource") or self.client.app_source,
             "runtime_config": params.get("runtimeConfig"),
         }
-        headers = (
-            {"Idempotency-Key": params["idempotencyKey"]} if params.get("idempotencyKey") else None
+        operation_id = params.get("idempotencyKey") or new_id()
+        headers = _attribution_headers(
+            self.client, body["app_source"], params.get("attribution"), operation_id
         )
+        if params.get("idempotencyKey"):
+            headers["Idempotency-Key"] = params["idempotencyKey"]
         response = await self._run_request("POST", "/v1/chat/runs", body, headers)
         return response["data"]["run"]
 

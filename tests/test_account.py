@@ -120,6 +120,33 @@ def test_account_tracks_client_and_socket_state_events() -> None:
     assert api.current_account.network is None
 
 
+def test_account_maps_free_spark_lock_and_active_fair_use_window() -> None:
+    client = FakeClient(FakeRest())
+    api = AccountApi(client)
+    future_reset = datetime.now(timezone.utc).timestamp() * 1000 + 60_000
+
+    client.socket.emit(
+        "subscriptionEntitlementUpdated",
+        {
+            "active": True,
+            "freeSparkLocked": True,
+            "freeSparkUnlockPath": "trial",
+            "subscription": {
+                "status": "active",
+                "tier": "unlimited",
+                "fairUse": {"limited": True, "resetAt": future_reset, "reason": "daily"},
+            },
+        },
+    )
+
+    assert api.current_account.free_spark_locked is True
+    assert api.current_account.freeSparkLocked is True
+    assert api.current_account.free_spark_unlock_path == "trial"
+    fair_use = api.current_account.subscription["fairUse"]
+    assert fair_use["limited"] is True
+    assert fair_use["resetAt"].endswith("Z")
+
+
 def test_socket_authentication_and_entitlement_mapping_reject_stale_versions() -> None:
     client = FakeClient(FakeRest())
     api = AccountApi(client)
@@ -387,7 +414,7 @@ async def test_subscription_endpoints_unwrap_and_serialize_false_and_empty_value
         [
             {"data": {"subscription": subscription}},
             {"data": {"usage": usage}},
-            {"data": {"eligible": False, "reasonCode": "wallet_already_used"}},
+            {"data": {"eligible": False, "reasonCode": "not_eligible"}},
             {"status": "success"},
             {"data": {"plans": plans}},
             {"data": {"url": "https://checkout.example/session"}},
@@ -401,7 +428,7 @@ async def test_subscription_endpoints_unwrap_and_serialize_false_and_empty_value
     assert await api.getSubscriptionUsage() is usage
     assert await api.getTrialEligibility() == {
         "eligible": False,
-        "reasonCode": "wallet_already_used",
+        "reasonCode": "not_eligible",
     }
     await api.setDeviceId(deviceId="device-1")
     assert await api.getSubscriptionPlans() is plans

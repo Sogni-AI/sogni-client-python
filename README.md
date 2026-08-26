@@ -144,17 +144,21 @@ remain accepted to simplify migration.
 
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.1.0-alpha.24`. The
+This release tracks the current TypeScript source at `5.21.3`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
-streaming chat, workflows, templates, replay, and the canonical 24 hosted-tool
+streaming chat, workflows, templates, replay, and the canonical 25 hosted-tool
 schemas.
+
+Current model and transport coverage includes LTX 2.5, MiniMax H3 and H3 Turbo,
+Seedance 2.5, Wan 3, RTX VSR, MiniMax Music 3, LoRA catalog discovery, queue
+start estimates, confirmed cancellation, and connection/workload attribution.
 
 The Python API is async-first; `AsyncSogniClient` is an alias of
 `SogniClient`, not a synchronous wrapper. Browser-only cookie coordination and
 multi-tab behavior have no Python equivalent. Local image references are
 uploaded with their detected MIME type, but the TypeScript client's optional
-browser-side image resizing is not reproduced. All 24 canonical tool schemas
+browser-side image resizing is not reproduced. All 25 canonical tool schemas
 are exposed; the local project-backed executor handles the six direct media
 generation tools, while the remaining tools run through the hosted or durable
 chat APIs. Live, credentialed smoke tests are intentionally separate from the

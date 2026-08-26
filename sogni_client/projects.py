@@ -5,16 +5,27 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import math
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
+from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ProjectError
 from .events import DataEntity, EventEmitter
 from .transport import ApiClient
 from .utils import (
+    MINIMAX_H3_BASE_FRAMES,
+    MINIMAX_H3_DIMENSION_STEP,
+    MINIMAX_H3_FRAME_STEP,
+    MINIMAX_H3_MAX_DIMENSION,
+    MINIMAX_H3_MAX_DURATION,
+    MINIMAX_H3_MAX_FRAMES,
+    MINIMAX_H3_MAX_PIXELS,
+    MINIMAX_H3_MIN_DURATION,
+    MINIMAX_H3_MIN_FRAMES,
     calculate_video_frames,
     detect_content_type,
     get_video_workflow_type,
@@ -22,12 +33,19 @@ from .utils import (
     is_external_video_model,
     is_happyhorse_model,
     is_ltx_model,
+    is_minimax_h3_model,
+    is_minimax_h3_reference_model,
+    is_minimax_h3_turbo_model,
+    is_seedance25_model,
     is_seedance_model,
     is_video_model,
+    is_wan3_model,
     new_id,
     normalize_params,
     read_media,
 )
+
+_LOGGER = logging.getLogger("sogni_client")
 
 VIDEO_WORKFLOW_ASSETS: dict[str, dict[str, str]] = {
     "t2v": {
@@ -43,6 +61,14 @@ VIDEO_WORKFLOW_ASSETS: dict[str, dict[str, str]] = {
         "referenceImageEnd": "optional",
         "referenceAudio": "forbidden",
         "referenceAudioIdentity": "optional",
+        "referenceVideo": "forbidden",
+        "referenceMask": "forbidden",
+    },
+    "flf2v": {
+        "referenceImage": "required",
+        "referenceImageEnd": "required",
+        "referenceAudio": "forbidden",
+        "referenceAudioIdentity": "forbidden",
         "referenceVideo": "forbidden",
         "referenceMask": "forbidden",
     },
@@ -104,6 +130,33 @@ VIDEO_WORKFLOW_ASSETS: dict[str, dict[str, str]] = {
     },
 }
 
+_MINIMAX_H3_R2V_ASSETS = {
+    "referenceImage": "optional",
+    "referenceImageEnd": "forbidden",
+    "referenceAudio": "optional",
+    "referenceAudioIdentity": "forbidden",
+    "referenceVideo": "optional",
+    "referenceMask": "forbidden",
+}
+_MINIMAX_H3_I2V_ASSETS = {
+    "referenceImage": "optional",
+    "referenceImageEnd": "optional",
+    "referenceAudio": "forbidden",
+    "referenceAudioIdentity": "forbidden",
+    "referenceVideo": "forbidden",
+    "referenceMask": "forbidden",
+}
+_MINIMAX_H3_MAX_REFERENCE_IMAGES = 9
+_MINIMAX_H3_MAX_REFERENCE_VIDEOS = 3
+_MINIMAX_H3_MAX_REFERENCE_AUDIOS = 3
+_MINIMAX_H3_MAX_REFERENCE_FILES = 12
+_SEEDANCE_REFERENCE_LIMITS = {
+    "seedance-2-0": (9, 3, 3, 12),
+    "seedance-2-0-mini": (9, 3, 3, 12),
+    "seedance-2-0-fast": (9, 3, 3, 12),
+    "seedance-2-5": (30, 10, 10, 50),
+}
+
 _SAMPLER_ALIASES = {
     "Euler": "euler",
     "Euler a": "euler_a",
@@ -139,7 +192,6 @@ _EXTENDED_IMAGE_SIZE_MODEL_IDS = {
     "qwen_image_edit_2511_fp8_lightning",
     "qwen_image_2512_fp8",
     "qwen_image_2512_fp8_lightning",
-    "flux2_dev_fp8",
 }
 _KREA_IDENTITY_EDIT_MODEL_IDS = {
     "krea2_identity_edit_v1_2",
@@ -147,6 +199,18 @@ _KREA_IDENTITY_EDIT_MODEL_IDS = {
 }
 _PROJECT_TIMEOUT_SECONDS = 2 * 60
 _MAX_FAILED_SYNC_ATTEMPTS = 3
+_CANCELLATION_CONFIRMATION_TIMEOUT_SECONDS = 120
+_RUNTIME_LIMIT_FLOOR_SECONDS = {
+    "fast": {"image": 30 * 60, "audio": 30 * 60, "video": 90 * 60},
+    "relaxed": {"image": 2 * 60 * 60, "audio": 2 * 60 * 60, "video": 8 * 60 * 60},
+}
+_RUNTIME_LIMIT_ETA_MULTIPLIER = 6
+_RUNTIME_LIMIT_MAX_SECONDS = 12 * 60 * 60
+_DEFAULT_LORA_CONSTRAINTS = {
+    "maxPerRequest": 8,
+    "minStrength": -100,
+    "maxStrength": 100,
+}
 _PROJECT_STATUS_MAP = {
     "pending": "pending",
     "active": "queued",
@@ -182,6 +246,14 @@ _ENHANCEMENT_DEFAULTS: dict[str, Any] = {
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _format_runtime_limit(seconds: float) -> str:
+    minutes = round(seconds / 60)
+    if minutes % 60 == 0:
+        hours = minutes // 60
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
 def _api_error(message: str) -> ApiError:
@@ -223,6 +295,8 @@ def _validate_number(
 
 
 def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
+    if model_id == "rtx_vsr_pro":
+        return 512, 15360
     if model_id in _KREA_IDENTITY_EDIT_MODEL_IDS:
         return 512, 2048
     if model_id == "gpt-image-2":
@@ -330,32 +404,230 @@ def _validate_reference_array(value: Any, name: str) -> list[str]:
     return [item for item in value if item.strip()]
 
 
-def _validate_video_assets(params: dict[str, Any]) -> None:
-    model_id = params["modelId"]
+def _video_asset_requirements(model_id: str) -> dict[str, str] | None:
+    workflow = get_video_workflow_type(model_id)
+    if not workflow:
+        return None
+    if workflow == "r2v" and is_minimax_h3_model(model_id):
+        return _MINIMAX_H3_R2V_ASSETS
+    if workflow == "i2v" and is_minimax_h3_model(model_id):
+        return _MINIMAX_H3_I2V_ASSETS
+    return VIDEO_WORKFLOW_ASSETS[workflow]
+
+
+def _media_slots(single: Any, multiple: Any) -> list[tuple[int, Any]]:
+    values = [single, *(multiple or [])]
+    return [(index, value) for index, value in enumerate(values, 1) if value]
+
+
+def _video_context_slots(params: dict[str, Any]) -> list[tuple[int, Any]]:
+    contexts = params.get("contextImages") or []
+    offset = 1 if params.get("referenceImage") else 0
+    return [(offset + index, value) for index, value in enumerate(contexts, 1)]
+
+
+def _validate_h3_params(params: dict[str, Any]) -> None:
+    if not is_minimax_h3_model(params["modelId"]):
+        return
+    if params.get("fps") is not None and params["fps"] != 24:
+        raise _api_error("MiniMax H3 fps is fixed at 24. Omit fps or set it to 24.")
+    expected_steps = 4 if is_minimax_h3_turbo_model(params["modelId"]) else 20
+    if params.get("steps") is not None and params["steps"] != expected_steps:
+        suffix = " Turbo" if expected_steps == 4 else ""
+        raise _api_error(f"MiniMax H3{suffix} steps are fixed at {expected_steps}.")
+    if params.get("guidance") is not None and params["guidance"] != 1:
+        raise _api_error("MiniMax H3 guidance is fixed at 1.")
+    if str(params.get("negativePrompt") or "").strip():
+        raise _api_error(
+            "MiniMax H3 has no negative-prompt input. Put requested exclusions in positivePrompt."
+        )
+    if params.get("frames") is not None:
+        frames = params["frames"]
+        if (
+            isinstance(frames, bool)
+            or not isinstance(frames, int)
+            or not MINIMAX_H3_MIN_FRAMES <= frames <= MINIMAX_H3_MAX_FRAMES
+            or (frames - MINIMAX_H3_BASE_FRAMES) % MINIMAX_H3_FRAME_STEP
+        ):
+            raise _api_error("MiniMax H3 frames must be 124 + n*17 in the inclusive range 124-362.")
+    if (params.get("width") is None) != (params.get("height") is None):
+        raise _api_error("MiniMax H3 width and height must be provided together.")
+    if params.get("width") is not None:
+        width, height = params["width"], params["height"]
+        if (
+            isinstance(width, bool)
+            or isinstance(height, bool)
+            or not isinstance(width, int)
+            or not isinstance(height, int)
+            or width < MINIMAX_H3_DIMENSION_STEP
+            or height < MINIMAX_H3_DIMENSION_STEP
+            or width > MINIMAX_H3_MAX_DIMENSION
+            or height > MINIMAX_H3_MAX_DIMENSION
+            or width % MINIMAX_H3_DIMENSION_STEP
+            or height % MINIMAX_H3_DIMENSION_STEP
+            or width * height > MINIMAX_H3_MAX_PIXELS
+        ):
+            raise _api_error(
+                "MiniMax H3 dimensions must use a 32px grid, stay at or below 1344px per axis, and fit within 1,032,192 pixels."
+            )
+
+
+def _validate_h3_references(params: dict[str, Any]) -> None:
+    for field in ("referenceImageUrls", "referenceVideoUrls", "referenceAudioUrls"):
+        if params.get(field) is not None:
+            raise _api_error(
+                f"MiniMax H3 r2v does not accept {field}; pass files through the Sogni asset upload fields instead."
+            )
+    images = bool(params.get("referenceImage")) + len(params.get("contextImages") or [])
+    videos = len(_media_slots(params.get("referenceVideo"), params.get("referenceVideos")))
+    audios = len(_media_slots(params.get("referenceAudio"), params.get("referenceAudios")))
+    durations = params.get("referenceVideoDurations")
+    if videos and durations is None:
+        raise _api_error(
+            f"MiniMax H3 r2v referenceVideoDurations must contain one entry for each uploaded reference video (expected {videos})."
+        )
+    if durations is not None:
+        if not isinstance(durations, list) or len(durations) != videos:
+            raise _api_error(
+                f"MiniMax H3 r2v referenceVideoDurations must contain one entry for each uploaded reference video (expected {videos})."
+            )
+        total = 0.0
+        for index, duration in enumerate(durations):
+            if (
+                isinstance(duration, bool)
+                or not isinstance(duration, (int, float))
+                or not math.isfinite(duration)
+                or duration < 1.95
+                or duration > 15.05
+            ):
+                raise _api_error(
+                    f"MiniMax H3 r2v referenceVideoDurations[{index}] must be between 2 and 15 seconds."
+                )
+            total += duration
+        if total > 15.05:
+            raise _api_error(
+                f"MiniMax H3 r2v reference videos may total at most 15 seconds (got {total:g})."
+            )
+    for count, maximum, label in (
+        (images, _MINIMAX_H3_MAX_REFERENCE_IMAGES, "reference images"),
+        (videos, _MINIMAX_H3_MAX_REFERENCE_VIDEOS, "reference videos"),
+        (audios, _MINIMAX_H3_MAX_REFERENCE_AUDIOS, "reference audios"),
+    ):
+        if count > maximum:
+            raise _api_error(
+                f"MiniMax H3 r2v supports at most {maximum} uploaded {label} (got {count})."
+            )
+    if images + videos + audios > _MINIMAX_H3_MAX_REFERENCE_FILES:
+        raise _api_error(
+            f"MiniMax H3 r2v supports at most 12 reference files in total (got {images + videos + audios}: {images} image, {videos} video, {audios} audio)."
+        )
+    if images + videos < 1:
+        raise _api_error(
+            "MiniMax H3 r2v needs at least one uploaded visual reference. Attach an image through referenceImage/contextImages or a video through referenceVideo/referenceVideos."
+        )
+
+
+def _validate_seedance_task(params: dict[str, Any]) -> None:
+    task = params.get("seedanceTaskType")
+    is_25 = is_seedance25_model(params["modelId"])
+    if task is not None and task not in {"reference", "edit", "extend"}:
+        raise _api_error("seedanceTaskType must be reference, edit, or extend.")
+    if task is not None and not is_25:
+        raise _api_error("seedanceTaskType is supported only by Seedance 2.5.")
+    if not is_25:
+        return
+    image_urls = _validate_reference_array(params.get("referenceImageUrls"), "referenceImageUrls")
+    video_urls = _validate_reference_array(params.get("referenceVideoUrls"), "referenceVideoUrls")
+    audio_urls = _validate_reference_array(params.get("referenceAudioUrls"), "referenceAudioUrls")
+    has_frames = bool(params.get("referenceImage") or params.get("referenceImageEnd"))
+    has_video = bool(params.get("referenceVideo") or video_urls)
+    has_loose = bool(image_urls or has_video or params.get("referenceAudio") or audio_urls)
+    if task is None and has_loose:
+        raise _api_error("Seedance 2.5 loose-reference requests require seedanceTaskType.")
+    if task is not None and has_frames:
+        raise _api_error(
+            "seedanceTaskType is for Seedance 2.5 loose-reference, edit, or extend requests; omit it for first/last-frame generation."
+        )
+    if task in {"edit", "extend"} and not has_video:
+        raise _api_error(f"Seedance 2.5 {task} requires at least one reference video.")
+    if task == "reference" and not has_loose:
+        raise _api_error(
+            "Seedance 2.5 reference requires at least one loose image, video, or audio reference."
+        )
+
+
+def _validate_wan3_references(params: dict[str, Any]) -> None:
     images = _validate_reference_array(params.get("referenceImageUrls"), "referenceImageUrls")
     videos = _validate_reference_array(params.get("referenceVideoUrls"), "referenceVideoUrls")
     audios = _validate_reference_array(params.get("referenceAudioUrls"), "referenceAudioUrls")
-    if is_seedance_model(model_id):
-        image_count = (
-            bool(params.get("referenceImage")) + bool(params.get("referenceImageEnd")) + len(images)
+    for field in ("referenceFileUrl", "referenceLinkUrl"):
+        value = params.get(field)
+        if value is not None and (
+            not isinstance(value, str) or not value.strip().startswith("https://")
+        ):
+            raise _api_error(f"{field} must be a valid public HTTPS URL.")
+    if params.get("referenceFileUrl") and params.get("referenceLinkUrl"):
+        raise _api_error("Wan 3 accepts either one reference file or one reference link, not both.")
+    for field in ("promptExtend", "watermark", "smartDuration"):
+        if params.get(field) is not None and not isinstance(params[field], bool):
+            raise _api_error(f"Wan 3 {field} must be a boolean.")
+    if params.get("smartDuration") and params.get("duration") is not None:
+        raise _api_error("Wan 3 smartDuration and duration are mutually exclusive.")
+    if params.get("fps") is not None and params["fps"] != 30:
+        raise _api_error("Wan 3 output is fixed at 30 fps.")
+    if params.get("ratio") is not None and params["ratio"] not in {
+        "adaptive",
+        "16:9",
+        "4:3",
+        "1:1",
+        "3:4",
+        "9:16",
+    }:
+        raise _api_error("Wan 3 ratio must be adaptive, 16:9, 4:3, 1:1, 3:4, or 9:16.")
+    if params.get("referenceAudioIdentity") or params.get("referenceMask"):
+        raise _api_error("Wan 3 does not support audio-identity or mask inputs.")
+    if params.get("seed") is not None and (
+        isinstance(params["seed"], bool)
+        or not isinstance(params["seed"], int)
+        or not 0 <= params["seed"] <= 2_147_483_647
+    ):
+        raise _api_error("Wan 3 seed must be an integer from 0 through 2147483647.")
+    video_count = bool(params.get("referenceVideo")) + len(videos)
+    audio_count = bool(params.get("referenceAudio")) + len(audios)
+    has_frames = bool(params.get("referenceImage") or params.get("referenceImageEnd"))
+    has_document = bool(params.get("referenceFileUrl") or params.get("referenceLinkUrl"))
+    has_loose = bool(images or video_count or audio_count or has_document)
+    if params.get("referenceImageEnd") and not params.get("referenceImage"):
+        raise _api_error("Wan 3 last-frame generation requires a first-frame referenceImage.")
+    if has_frames and has_loose:
+        raise _api_error(
+            "Wan 3 first/last-frame anchors cannot be combined with loose media, file, or link references."
         )
-        video_count = bool(params.get("referenceVideo")) + len(videos)
-        audio_count = bool(
-            params.get("referenceAudio") or params.get("referenceAudioIdentity")
-        ) + len(audios)
-        if image_count > 9:
-            raise _api_error("Seedance supports at most 9 image assets.")
-        if video_count > 3:
-            raise _api_error("Seedance supports at most 3 video assets.")
-        if audio_count > 3:
-            raise _api_error("Seedance supports at most 3 audio assets.")
-        if image_count + video_count + audio_count > 12:
-            raise _api_error("Seedance supports at most 12 total asset files.")
-        if audio_count and not image_count and not video_count:
-            raise _api_error(
-                "Seedance audio references require at least one image or video reference."
-            )
-        return
+    if len(images) > 10:
+        raise _api_error("Wan 3 supports at most 10 reference images.")
+    if video_count > 5:
+        raise _api_error("Wan 3 supports at most 5 reference videos.")
+    if audio_count > 5:
+        raise _api_error("Wan 3 supports at most 5 reference audio clips.")
+    if not str(params.get("positivePrompt") or "").strip() and not has_frames and not has_loose:
+        raise _api_error("Wan 3 requires a prompt or at least one media, file, or link input.")
+
+
+def _validate_video_assets(params: dict[str, Any]) -> None:
+    model_id = params["modelId"]
+    for field in ("contextImages", "referenceVideos", "referenceAudios"):
+        value = params.get(field)
+        if value is not None and (not isinstance(value, list) or any(not item for item in value)):
+            raise _api_error(f"{field} must be an array without empty entries.")
+        if value is not None and not is_minimax_h3_reference_model(model_id):
+            raise _api_error(f"{field} is supported only by MiniMax H3 r2v models.")
+    if params.get("referenceVideoDurations") is not None and not is_minimax_h3_reference_model(
+        model_id
+    ):
+        raise _api_error("referenceVideoDurations is supported only by MiniMax H3 r2v models.")
+    images = _validate_reference_array(params.get("referenceImageUrls"), "referenceImageUrls")
+    videos = _validate_reference_array(params.get("referenceVideoUrls"), "referenceVideoUrls")
+    audios = _validate_reference_array(params.get("referenceAudioUrls"), "referenceAudioUrls")
     if is_happyhorse_model(model_id):
         if params.get("referenceVideo") or videos:
             raise _api_error("HappyHorse models do not support reference video assets.")
@@ -374,9 +646,53 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
         if workflow == "t2v" and count:
             raise _api_error("HappyHorse t2v does not support reference images.")
         return
-    if images or videos or audios:
+    if is_wan3_model(model_id):
+        _validate_wan3_references(params)
+        return
+    if is_seedance_model(model_id):
+        _validate_seedance_task(params)
+        image_count = (
+            bool(params.get("referenceImage")) + bool(params.get("referenceImageEnd")) + len(images)
+        )
+        video_count = bool(params.get("referenceVideo")) + len(videos)
+        audio_count = bool(
+            params.get("referenceAudio") or params.get("referenceAudioIdentity")
+        ) + len(audios)
+        try:
+            image_max, video_max, audio_max, total_max = _SEEDANCE_REFERENCE_LIMITS[model_id]
+        except KeyError as error:
+            raise _api_error(
+                f'Unknown Seedance model "{model_id}"; no reference-asset limits are defined for it.'
+            ) from error
+        if image_count > image_max:
+            raise _api_error(f"{model_id} supports at most {image_max} image assets.")
+        if video_count > video_max:
+            raise _api_error(f"{model_id} supports at most {video_max} video assets.")
+        if audio_count > audio_max:
+            raise _api_error(f"{model_id} supports at most {audio_max} audio assets.")
+        if image_count + video_count + audio_count > total_max:
+            raise _api_error(f"{model_id} supports at most {total_max} total asset files.")
+        if (
+            not is_seedance25_model(model_id)
+            and audio_count
+            and not image_count
+            and not video_count
+        ):
+            raise _api_error(
+                "Seedance audio references require at least one image or video reference."
+            )
+        return
+    if is_minimax_h3_reference_model(model_id):
+        _validate_h3_references(params)
+    elif (
+        images
+        or videos
+        or audios
+        or params.get("referenceFileUrl")
+        or params.get("referenceLinkUrl")
+    ):
         raise _api_error(
-            "referenceImageUrls, referenceVideoUrls, and referenceAudioUrls are supported only by Seedance and HappyHorse models."
+            "External reference URLs are supported only by Seedance, HappyHorse, and Wan 3 models."
         )
     workflow = get_video_workflow_type(model_id)
     if not workflow:
@@ -387,7 +703,10 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
         )
     if params.get("sam2Coordinates") and workflow != "animate-replace":
         raise _api_error("sam2Coordinates is only supported for animate-replace workflows.")
-    for asset, requirement in VIDEO_WORKFLOW_ASSETS[workflow].items():
+    requirements = _video_asset_requirements(model_id)
+    if not requirements:
+        return
+    for asset, requirement in requirements.items():
         present = bool(params.get(asset))
         if requirement == "required" and not present:
             raise _api_error(f"{workflow} workflow requires {asset}. Please provide this asset.")
@@ -425,7 +744,12 @@ def create_job_request_message(
             keyframe.pop(undefined_key)
     if params.get("negativePrompt") and not (
         project_type == "audio"
-        or (project_type == "video" and is_external_video_model(params["modelId"]))
+        or (
+            project_type == "video"
+            and (
+                is_external_video_model(params["modelId"]) or is_minimax_h3_model(params["modelId"])
+            )
+        )
     ):
         keyframe["negativePrompt"] = params["negativePrompt"]
     elif project_type in {"audio", "video"}:
@@ -451,9 +775,10 @@ def create_job_request_message(
                 "krea2_",
                 "dark_beast_krea2_",
                 "qwen_image_",
-                "flux2_",
                 "wan_",
                 "ace_step",
+                "rtx_vsr_",
+                "minimax_music3",
             )
         )
         if comfy:
@@ -539,16 +864,31 @@ def create_job_request_message(
         if not is_video_model(params["modelId"]):
             raise _api_error("Video generation is only supported for video models.")
         _validate_video_assets(params)
-        pairs = {
-            "referenceImage": "hasReferenceImage",
-            "referenceImageEnd": "hasReferenceImageEnd",
-            "referenceAudio": "hasReferenceAudio",
-            "referenceVideo": "hasReferenceVideo",
-            "referenceAudioIdentity": "hasReferenceAudioIdentity",
-        }
-        for source, target in pairs.items():
-            if params.get(source):
-                keyframe[target] = True
+        _validate_h3_params(params)
+        if params.get("referenceImage"):
+            keyframe["hasReferenceImage"] = True
+        for slot, _value in _video_context_slots(params):
+            keyframe[f"hasContextImage{slot}"] = True
+        if params.get("referenceImageEnd"):
+            keyframe["hasReferenceImageEnd"] = True
+        if is_minimax_h3_reference_model(params["modelId"]):
+            for slot, _value in _media_slots(
+                params.get("referenceAudio"), params.get("referenceAudios")
+            ):
+                keyframe[f"hasReferenceAudio{slot}"] = True
+            for slot, _value in _media_slots(
+                params.get("referenceVideo"), params.get("referenceVideos")
+            ):
+                keyframe[f"hasReferenceVideo{slot}"] = True
+                duration = (params.get("referenceVideoDurations") or [])[slot - 1]
+                keyframe[f"referenceVideo{slot}DurationSeconds"] = duration
+        else:
+            if params.get("referenceAudio"):
+                keyframe["hasReferenceAudio"] = True
+            if params.get("referenceVideo"):
+                keyframe["hasReferenceVideo"] = True
+        if params.get("referenceAudioIdentity"):
+            keyframe["hasReferenceAudioIdentity"] = True
         if params.get("referenceMask") and params.get("controlNet", {}).get("name") == "inpaint":
             keyframe["hasReferenceMask"] = True
         for source, target in (
@@ -558,6 +898,19 @@ def create_job_request_message(
         ):
             if params.get(source):
                 keyframe[target] = params[source]
+        for source, target in (
+            ("referenceFileUrl", "referenceFileURL"),
+            ("referenceLinkUrl", "referenceLinkURL"),
+            ("promptExtend", "promptExtend"),
+            ("watermark", "watermark"),
+            ("ratio", "ratio"),
+            ("seedanceTaskType", "seedanceTaskType"),
+        ):
+            if params.get(source) is not None:
+                keyframe[target] = params[source]
+        if params.get("smartDuration"):
+            keyframe["smartDuration"] = True
+            keyframe["frames"] = calculate_video_frames(params["modelId"], 30, 30)
         field_map = {
             "generateAudio": "generateAudio",
             "audioIdentityStrength": "identityGuidanceScale",
@@ -585,19 +938,29 @@ def create_job_request_message(
                 keyframe[target] = value
         if params.get("fps") is not None:
             keyframe["fps"] = params["fps"]
-        elif is_external_video_model(params["modelId"]):
+        elif is_wan3_model(params["modelId"]):
+            keyframe["fps"] = 30
+        elif is_external_video_model(params["modelId"]) or is_minimax_h3_model(params["modelId"]):
             keyframe["fps"] = 24
         if params.get("duration") is not None:
             duration = float(params["duration"])
             minimum = (
-                3
+                MINIMAX_H3_MIN_DURATION
+                if is_minimax_h3_model(params["modelId"])
+                else 2
+                if is_wan3_model(params["modelId"])
+                else 3
                 if is_happyhorse_model(params["modelId"])
                 else 4
                 if is_seedance_model(params["modelId"])
                 else 1
             )
             maximum = (
-                15
+                MINIMAX_H3_MAX_DURATION
+                if is_minimax_h3_model(params["modelId"])
+                else 30
+                if is_seedance25_model(params["modelId"]) or is_wan3_model(params["modelId"])
+                else 15
                 if is_external_video_model(params["modelId"])
                 else 20
                 if is_ltx_model(params["modelId"]) or "_animate-" in params["modelId"]
@@ -606,7 +969,9 @@ def create_job_request_message(
             if not minimum <= duration <= maximum:
                 raise ValueError(f"Video duration must be between {minimum} and {maximum}")
             keyframe["frames"] = calculate_video_frames(
-                params["modelId"], duration, params.get("fps", 24)
+                params["modelId"],
+                duration,
+                params.get("fps", 30 if is_wan3_model(params["modelId"]) else 24),
             )
         if params.get("sam2Coordinates") is not None:
             keyframe["sam2Coordinates"] = json.dumps(
@@ -626,12 +991,16 @@ def create_job_request_message(
                 )
             keyframe["currentControlNetsJob"] = [raw]
         if params.get("width") and params.get("height"):
-            keyframe["width"] = _validate_number(
-                params["width"], minimum=480, property_name="Video width"
-            )
-            keyframe["height"] = _validate_number(
-                params["height"], minimum=480, property_name="Video height"
-            )
+            if is_minimax_h3_model(params["modelId"]):
+                keyframe["width"] = params["width"]
+                keyframe["height"] = params["height"]
+            else:
+                keyframe["width"] = _validate_number(
+                    params["width"], minimum=480, property_name="Video width"
+                )
+                keyframe["height"] = _validate_number(
+                    params["height"], minimum=480, property_name="Video height"
+                )
         keyframe["comfySampler"] = _validate_option(params.get("sampler"), options, "sampler")
         keyframe["comfyScheduler"] = _validate_option(params.get("scheduler"), options, "scheduler")
 
@@ -664,6 +1033,7 @@ def create_job_request_message(
             "billingMode": params.get("billingMode"),
             "outputFormat": params.get("outputFormat")
             or ("mp3" if project_type == "audio" else "mp4" if project_type == "video" else "png"),
+            **workload_attribution_to_wire_fields(params.get("attribution")),
         }
     )
     if params.get("network"):
@@ -681,7 +1051,10 @@ class Job(DataEntity):
         self._api = api
         self._enhancement_project: Project | None = None
         self._enhancement_listener: Any = None
+        self._runtime_timeout: asyncio.TimerHandle | None = None
         self.on("updated", self._handle_updated)
+        if self.status == "processing":
+            self._start_runtime_timeout()
 
     @property
     def id(self) -> str:
@@ -793,6 +1166,12 @@ class Job(DataEntity):
         return self._data.get("etaSeconds")
 
     etaSeconds = eta_seconds
+
+    @property
+    def eta_range(self) -> dict[str, float] | None:
+        return self._data.get("etaRange")
+
+    etaRange = eta_range
 
     @property
     def enhanced_image(self) -> dict[str, Any] | None:
@@ -928,6 +1307,51 @@ class Job(DataEntity):
             with contextlib.suppress(Exception):
                 await self.get_result_url()
 
+    def _update(self, delta: dict[str, Any]) -> None:
+        if "eta" in delta and isinstance(delta.get("eta"), datetime):
+            delta["etaSeconds"] = round((delta["eta"] - _now()).total_seconds())
+            if not isinstance(self._data.get("etaStartedAt"), datetime):
+                delta.setdefault("etaStartedAt", _now())
+        super()._update(delta)
+        if self.status == "processing":
+            self._start_runtime_timeout()
+        elif self.finished:
+            self._stop_runtime_timeout()
+
+    def _runtime_limit_seconds(self) -> float:
+        network = self._project.params.get("network")
+        if network not in {"fast", "relaxed"}:
+            network = self._api._current_network()
+        if network not in {"fast", "relaxed"}:
+            network = "relaxed"
+        media = self._project.type if self._project.type in {"video", "audio"} else "image"
+        floor = _RUNTIME_LIMIT_FLOOR_SECONDS[network][media]
+        eta = self._data.get("etaSeconds")
+        eta_budget = (
+            float(eta) * _RUNTIME_LIMIT_ETA_MULTIPLIER
+            if isinstance(eta, (int, float)) and not isinstance(eta, bool) and eta > 0
+            else 0
+        )
+        return min(_RUNTIME_LIMIT_MAX_SECONDS, max(floor, eta_budget))
+
+    def _start_runtime_timeout(self) -> None:
+        if self._runtime_timeout is not None or self.finished:
+            return
+        limit = self._runtime_limit_seconds()
+        self._runtime_timeout = asyncio.get_running_loop().call_later(
+            limit, self._runtime_timeout_elapsed, limit
+        )
+
+    def _runtime_timeout_elapsed(self, limit: float) -> None:
+        self._runtime_timeout = None
+        if self.status == "processing" and not self._project.finished:
+            self._project._handle_job_runtime_timeout(self, limit)
+
+    def _stop_runtime_timeout(self) -> None:
+        if self._runtime_timeout is not None:
+            self._runtime_timeout.cancel()
+            self._runtime_timeout = None
+
     def _handle_updated(self, keys: list[str]) -> None:
         if any(key in keys for key in ("step", "stepCount", "externalProgress", "eta")):
             self.emit("progress", self.progress)
@@ -993,6 +1417,18 @@ class Project(DataEntity):
     queuePosition = queue_position
 
     @property
+    def estimated_start_at(self) -> datetime | None:
+        return self._data.get("estimatedStartAt")
+
+    estimatedStartAt = estimated_start_at
+
+    @property
+    def queue_status(self) -> str | None:
+        return self._data.get("queueStatus")
+
+    queueStatus = queue_status
+
+    @property
     def jobs(self) -> list[Job]:
         return list(self._jobs)
 
@@ -1051,6 +1487,9 @@ class Project(DataEntity):
         if self.finished and self._timeout_handle is not None:
             self._timeout_handle.cancel()
             self._timeout_handle = None
+        if self.finished:
+            for job in self._jobs:
+                job._stop_runtime_timeout()
         if ("status" in keys or "jobs" in keys) and self.status == "completed":
             all_started = len(self._jobs) >= int(self.params.get("numberOfMedia", 1))
             if all_started and all(job.finished for job in self._jobs):
@@ -1088,6 +1527,31 @@ class Project(DataEntity):
         if not self.finished:
             asyncio.create_task(self._check_for_timeout())
 
+    def _handle_job_runtime_timeout(self, job: Job, limit_seconds: float) -> None:
+        if self.finished or job.finished or job not in self._jobs:
+            return
+        limit = _format_runtime_limit(limit_seconds)
+        job_error = {"code": 0, "message": f"Job exceeded the maximum runtime of {limit}"}
+        asyncio.create_task(self._notify_runtime_timeout(job))
+        for project_job in self._jobs:
+            if not project_job.finished:
+                project_job._update({"status": "failed", "error": job_error})
+        self._update(
+            {
+                "status": "failed",
+                "error": {
+                    "code": 0,
+                    "message": f"Job {job.id} exceeded the maximum runtime of {limit}; project canceled",
+                },
+            }
+        )
+
+    async def _notify_runtime_timeout(self, job: Job) -> None:
+        try:
+            await self._api._notify_project_timed_out(self.id)
+        except Exception:
+            _LOGGER.exception("Failed to cancel project %s after job %s timed out", self.id, job.id)
+
     async def _check_for_timeout(self) -> None:
         if self.finished:
             return
@@ -1095,9 +1559,18 @@ class Project(DataEntity):
         if idle_seconds < _PROJECT_TIMEOUT_SECONDS:
             self._arm_timeout()
             return
+        live_project_ids = await self._api._list_active_project_ids()
+        if live_project_ids is not None and self.id in live_project_ids:
+            self._failed_sync_attempts = 0
+            self._keep_alive()
+            return
+        socket_confirms_gone = live_project_ids is not None
         try:
             await self._sync_to_server()
-        except Exception:
+        except Exception as error:
+            if isinstance(error, ApiError) and error.status == 404 and not socket_confirms_gone:
+                self._arm_timeout()
+                return
             self._failed_sync_attempts += 1
             if self._failed_sync_attempts < _MAX_FAILED_SYNC_ATTEMPTS:
                 self._arm_timeout()
@@ -1187,8 +1660,11 @@ class ProjectsApi(EventEmitter):
         self._supported_models_at = 0.0
         self._model_tiers: dict[str, Any] | None = None
         self._model_tiers_at = 0.0
+        self._current_network_type: str | None = None
+        self._cancellation_requests: dict[str, asyncio.Task[None]] = {}
+        self._lora_catalog_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         socket = client.socket
-        socket.on("changeNetwork", lambda _data: self._set_available_models([]))
+        socket.on("changeNetwork", self._handle_change_network)
         socket.on("swarmModels", self._handle_swarm_models)
         socket.on("jobState", self._handle_job_state)
         socket.on("jobProgress", self._handle_job_progress)
@@ -1208,6 +1684,15 @@ class ProjectsApi(EventEmitter):
         return list(self._projects)
 
     trackedProjects = tracked_projects
+
+    def _handle_change_network(self, data: Any) -> None:
+        network = data.get("network") if isinstance(data, dict) else data
+        if network in {"fast", "relaxed"}:
+            self._current_network_type = network
+        self._set_available_models([])
+
+    def _current_network(self) -> str | None:
+        return self._current_network_type
 
     def is_video_model_id(self, model_id: str) -> bool:
         model = next(
@@ -1277,6 +1762,10 @@ class ProjectsApi(EventEmitter):
         options = await self.get_model_options(data["modelId"])
         request_params = dict(data)
         request_params["appSource"] = data.get("appSource") or self.client.app_source
+        resolver = getattr(self.client, "resolve_workload_attribution", None)
+        request_params["attribution"] = (
+            resolver(data.get("attribution"), project.id) if callable(resolver) else None
+        )
         request = create_job_request_message(project.id, request_params, options)
         await self._process_assets(project, data, request)
         await self.client.socket.send("jobRequest", request)
@@ -1295,8 +1784,6 @@ class ProjectsApi(EventEmitter):
             max_context = (
                 16
                 if data["modelId"] == "gpt-image-2"
-                else 6
-                if data["modelId"].startswith("flux2_")
                 else 2
                 if "kontext" in data["modelId"] or "identity_edit" in data["modelId"]
                 else 3
@@ -1310,14 +1797,39 @@ class ProjectsApi(EventEmitter):
                 if value and value is not True:
                     await self._upload_asset(project.id, role, value, media=media)
         elif data["type"] == "video":
+            h3_reference = is_minimax_h3_reference_model(data["modelId"])
+            if data.get("referenceImage") and data["referenceImage"] is not True:
+                content_type = await self._upload_asset(
+                    project.id, "referenceImage", data["referenceImage"], media=False
+                )
+                request["keyFrames"][0]["referenceImageContentType"] = content_type
+            for slot, value in _video_context_slots(data):
+                if value is not True:
+                    await self._upload_asset(project.id, f"contextImage{slot}", value, media=False)
+            if data.get("referenceImageEnd") and data["referenceImageEnd"] is not True:
+                content_type = await self._upload_asset(
+                    project.id, "referenceImageEnd", data["referenceImageEnd"], media=False
+                )
+                request["keyFrames"][0]["referenceImageEndContentType"] = content_type
+            if h3_reference:
+                for media_name, single_name, plural_name in (
+                    ("referenceAudio", "referenceAudio", "referenceAudios"),
+                    ("referenceVideo", "referenceVideo", "referenceVideos"),
+                ):
+                    for slot, value in _media_slots(data.get(single_name), data.get(plural_name)):
+                        if value is True:
+                            continue
+                        role = f"{media_name}{slot}"
+                        content_type = await self._upload_asset(project.id, role, value, media=True)
+                        request["keyFrames"][0][f"{role}ContentType"] = content_type
             for role, media in (
-                ("referenceImage", False),
-                ("referenceImageEnd", False),
                 ("referenceAudio", True),
                 ("referenceAudioIdentity", True),
                 ("referenceVideo", True),
                 ("referenceMask", False),
             ):
+                if h3_reference and role in {"referenceAudio", "referenceVideo"}:
+                    continue
                 value = data.get(role)
                 if role == "referenceMask" and data.get("controlNet", {}).get("name") != "inpaint":
                     continue
@@ -1358,17 +1870,74 @@ class ProjectsApi(EventEmitter):
         response = await self.client.rest.get(f"/v1/projects/{quote(project_id)}")
         return response["data"]["project"]
 
+    async def _list_active_project_ids(self) -> list[str] | None:
+        try:
+            response = await self.client.socket.get("/api/v1/artist/projects/active")
+        except Exception:
+            return None
+        projects = response.get("projects") if isinstance(response, dict) else None
+        if not isinstance(projects, list):
+            return None
+        return [
+            item["id"]
+            for item in projects
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
+
     async def cancel(self, project_id: str) -> None:
-        await self.client.socket.send(
-            "jobError",
-            {
-                "jobID": project_id,
-                "error": "artistCanceled",
-                "error_message": "artistCanceled",
-                "isFromWorker": False,
-            },
-        )
+        existing = self._cancellation_requests.get(project_id)
+        if existing is not None:
+            await existing
+            return
+        task = asyncio.create_task(self._cancel_once(project_id))
+        self._cancellation_requests[project_id] = task
+        try:
+            await task
+        finally:
+            if self._cancellation_requests.get(project_id) is task:
+                self._cancellation_requests.pop(project_id, None)
+
+    async def _cancel_once(self, project_id: str) -> None:
         project = next((item for item in self._projects if item.id == project_id), None)
+        if project is not None and project.finished:
+            return
+        confirmation: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        def confirmed(data: Any) -> None:
+            if not isinstance(data, dict) or data.get("jobID") != project_id:
+                return
+            if confirmation.done():
+                return
+            if data.get("didCancel"):
+                confirmation.set_result(None)
+            else:
+                confirmation.set_exception(
+                    RuntimeError(
+                        data.get("error_message")
+                        or "Cancellation could not be confirmed. The job is still running; please try again."
+                    )
+                )
+
+        remove = self.client.socket.on("artistCancelConfirmation", confirmed)
+        try:
+            await asyncio.gather(
+                self.client.socket.send(
+                    "jobError",
+                    {
+                        "jobID": project_id,
+                        "error": "artistCanceled",
+                        "error_message": "artistCanceled",
+                        "isFromWorker": False,
+                    },
+                ),
+                asyncio.wait_for(confirmation, timeout=_CANCELLATION_CONFIRMATION_TIMEOUT_SECONDS),
+            )
+        except asyncio.TimeoutError as error:
+            raise RuntimeError(
+                "Cancellation could not be confirmed. The job is still running; please try again."
+            ) from error
+        finally:
+            remove()
         if project:
             self._projects.remove(project)
             for job in project.jobs:
@@ -1494,6 +2063,8 @@ class ProjectsApi(EventEmitter):
         for field in (
             "steps",
             "guidance",
+            "width",
+            "height",
             "duration",
             "bpm",
             "promptStrength",
@@ -1507,6 +2078,8 @@ class ProjectsApi(EventEmitter):
                 options[field] = self._map_options(tier[field])
         if tier.get("composerMode"):
             options["composerMode"] = {"default": tier["composerMode"]["default"]}
+        if tier.get("maxPixels") is not None:
+            options["maxPixels"] = tier["maxPixels"]
         return options
 
     getModelOptions = get_model_options
@@ -1547,7 +2120,7 @@ class ProjectsApi(EventEmitter):
         workflow = get_video_workflow_type(model_id)
         return {
             "workflowType": workflow,
-            **({"assets": VIDEO_WORKFLOW_ASSETS[workflow]} if workflow else {}),
+            **({"assets": _video_asset_requirements(model_id)} if workflow else {}),
         }
 
     getVideoAssetConfig = get_video_asset_config
@@ -1644,7 +2217,33 @@ class ProjectsApi(EventEmitter):
         )
         response = await self.client.socket.get(
             "/api/v1/job-video/estimate/" + "/".join(quote(str(item)) for item in path),
-            {"hasVideoInput": 1 if has_video else None},
+            {
+                "hasVideoInput": 1 if has_video else None,
+                "referenceImageCount": (
+                    math.floor(data["referenceImageCount"])
+                    if isinstance(data.get("referenceImageCount"), (int, float))
+                    and not isinstance(data.get("referenceImageCount"), bool)
+                    and math.isfinite(data["referenceImageCount"])
+                    and data["referenceImageCount"] >= 0
+                    else None
+                ),
+                "referenceVideoCount": (
+                    math.floor(data["referenceVideoCount"])
+                    if isinstance(data.get("referenceVideoCount"), (int, float))
+                    and not isinstance(data.get("referenceVideoCount"), bool)
+                    and math.isfinite(data["referenceVideoCount"])
+                    and data["referenceVideoCount"] >= 0
+                    else None
+                ),
+                "referenceVideoDurationSeconds": (
+                    data["referenceVideoDurationSeconds"]
+                    if isinstance(data.get("referenceVideoDurationSeconds"), (int, float))
+                    and not isinstance(data.get("referenceVideoDurationSeconds"), bool)
+                    and math.isfinite(data["referenceVideoDurationSeconds"])
+                    and data["referenceVideoDurationSeconds"] >= 0
+                    else None
+                ),
+            },
         )
         return self._cost(response)
 
@@ -1668,6 +2267,63 @@ class ProjectsApi(EventEmitter):
 
     estimateAudioCost = estimate_audio_cost
 
+    async def available_loras(
+        self, params: dict[str, Any] | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
+        data = normalize_params(params, **kwargs)
+        model_id = data.get("modelId")
+        cache_key = model_id or ""
+        cached = self._lora_catalog_cache.get(cache_key)
+        if cached and not data.get("forceRefresh") and time.time() - cached[0] < 300:
+            return dict(cached[1])
+        response = await self.client.rest.get(
+            "/v1/loras/comfy", {"modelId": model_id} if model_id else {}
+        )
+        payload = response.get("data", {}) if isinstance(response, dict) else {}
+        all_loras = payload.get("loras") if isinstance(payload.get("loras"), list) else []
+        scoped = (
+            [item for item in all_loras if model_id in (item.get("modelIds") or [])]
+            if model_id
+            else all_loras
+        )
+        models = payload.get("models")
+        if not isinstance(models, list):
+            models = sorted(
+                {
+                    candidate
+                    for item in all_loras
+                    if isinstance(item, dict)
+                    for candidate in item.get("modelIds") or []
+                    if isinstance(candidate, str)
+                }
+            )
+        catalog = {
+            "lastUpdated": payload.get("lastUpdated"),
+            "loras": scoped,
+            "models": models,
+            "constraints": payload.get("constraints") or dict(_DEFAULT_LORA_CONSTRAINTS),
+        }
+        self._lora_catalog_cache[cache_key] = (time.time(), catalog)
+        return dict(catalog)
+
+    availableLoras = available_loras
+
+    async def get_lora(self, lora_id: str) -> dict[str, Any] | None:
+        catalog = await self.available_loras()
+        return next((item for item in catalog["loras"] if item.get("loraId") == lora_id), None)
+
+    getLora = get_lora
+
+    async def supports_loras(self, model_id: str) -> bool:
+        return model_id in (await self.available_loras())["models"]
+
+    supportsLoras = supports_loras
+
+    async def lora_constraints(self) -> dict[str, Any]:
+        return dict((await self.available_loras())["constraints"])
+
+    loraConstraints = lora_constraints
+
     def _project(self, project_id: str) -> Project | None:
         return next((item for item in self._projects if item.id == project_id), None)
 
@@ -1676,14 +2332,30 @@ class ProjectsApi(EventEmitter):
             return
         kind = data.get("type")
         if kind == "queued":
-            self.emit(
-                "project",
-                {
-                    "type": "queued",
-                    "projectId": data.get("jobID"),
-                    "queuePosition": data.get("queuePosition"),
-                },
+            seconds = data.get("estimatedStartSeconds")
+            estimated = (
+                seconds
+                if isinstance(seconds, (int, float))
+                and not isinstance(seconds, bool)
+                and math.isfinite(seconds)
+                and seconds >= 0
+                else None
             )
+            queue_status = (
+                data.get("queueStatus")
+                if data.get("queueStatus") in {"waiting", "no-workers"}
+                else None
+            )
+            event = {
+                "type": "queued",
+                "projectId": data.get("jobID"),
+                "queuePosition": data.get("queuePosition"),
+            }
+            if estimated is not None:
+                event["estimatedStartSeconds"] = estimated
+            if queue_status is not None:
+                event["queueStatus"] = queue_status
+            self.emit("project", event)
         elif kind == "jobCompleted":
             self.emit(
                 "project",
@@ -1707,11 +2379,22 @@ class ProjectsApi(EventEmitter):
         if not project:
             return
         if kind == "queued":
-            project._update({"status": "queued", "queuePosition": data.get("queuePosition", -1)})
+            project._update(
+                {
+                    "status": "queued",
+                    "queuePosition": data.get("queuePosition", -1),
+                    "estimatedStartAt": (
+                        _now() + timedelta(seconds=estimated) if estimated is not None else None
+                    ),
+                    "queueStatus": queue_status,
+                }
+            )
         elif kind == "jobCompleted":
             project._update({"status": "completed"})
             self._schedule_gc()
         elif kind in {"initiatingModel", "jobStarted"}:
+            if project.estimated_start_at is not None or project.queue_status is not None:
+                project._update({"estimatedStartAt": None, "queueStatus": None})
             job = project.job(data.get("imgID", "")) or project._add_job(
                 {
                     "id": data.get("imgID"),
@@ -1759,6 +2442,9 @@ class ProjectsApi(EventEmitter):
             ("step", "step"),
             ("stepCount", "stepCount"),
             ("progress", "progress"),
+            ("etaSeconds", "etaSeconds"),
+            ("etaMin", "etaMin"),
+            ("etaMax", "etaMax"),
         ):
             value = data.get(source)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -1776,6 +2462,14 @@ class ProjectsApi(EventEmitter):
             data.get("progress"), bool
         ):
             delta["externalProgress"] = data["progress"]
+        if (
+            isinstance(data.get("etaMin"), (int, float))
+            and not isinstance(data.get("etaMin"), bool)
+            and isinstance(data.get("etaMax"), (int, float))
+            and not isinstance(data.get("etaMax"), bool)
+            and data["etaMax"] > 0
+        ):
+            delta["etaRange"] = {"min": data["etaMin"], "max": data["etaMax"]}
         job._update(delta)
         if project.status != "processing":
             project._update({"status": "processing"})

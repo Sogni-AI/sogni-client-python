@@ -11,6 +11,66 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+_LTX_WORKFLOWS = ("t2v", "i2v", "a2v", "ia2v", "v2v")
+_LTX_VIDEO_MODEL_IDS = {
+    *{
+        f"{prefix}_{workflow}{suffix}"
+        for workflow in _LTX_WORKFLOWS
+        for prefix, suffix in (
+            ("ltx2-19b-fp8", ""),
+            ("ltx2-19b-fp8", "_distilled"),
+            ("ltx23-22b-fp8", "_distilled"),
+            ("ltx23-22b-fp8", "_dev"),
+            ("ltx25-22b-int8", "_distilled"),
+            ("ltx25-22b-int8", "_dev"),
+        )
+    },
+    "ltx23-22b-10eros-v1.4-fp8mixed_i2v",
+}
+_WAN_VIDEO_MODEL_IDS = {
+    "wan_v2.2-14b-fp8_t2v",
+    "wan_v2.2-14b-fp8_i2v",
+    "wan_v2.2-14b-fp8_t2v_lightx2v",
+    "wan_v2.2-14b-fp8_i2v_lightx2v",
+    "wan_v2.2-14b-fp8_s2v_lightx2v",
+    "wan_v2.2-14b-fp8_animate-move_lightx2v",
+    "wan_v2.2-14b-fp8_animate-replace_lightx2v",
+}
+_SEEDANCE_VIDEO_MODEL_IDS = {
+    "seedance-2-0",
+    "seedance-2-0-mini",
+    "seedance-2-0-fast",
+    "seedance-2-5",
+}
+_HAPPYHORSE_VIDEO_MODEL_IDS = {
+    "happyhorse-1.1-t2v",
+    "happyhorse-1.1-i2v",
+    "happyhorse-1.1-r2v",
+}
+_WAN3_VIDEO_MODEL_IDS = {"wan3.0-video"}
+_MINIMAX_H3_VIDEO_MODEL_IDS = {
+    "minimax-h3-fl2va-fp8_t2v",
+    "minimax-h3-fl2va-fp8_i2v",
+    "minimax-h3-fl2va-fp8_flf2v",
+    "minimax-h3-ref2va-fp8_r2v",
+    "minimax-h3-fl2va-fp8_t2v_turbo",
+    "minimax-h3-fl2va-fp8_i2v_turbo",
+    "minimax-h3-fl2va-fp8_flf2v_turbo",
+    "minimax-h3-ref2va-fp8_r2v_turbo",
+}
+
+LTX2_FRAME_STEP = 8
+MINIMAX_H3_FPS = 24
+MINIMAX_H3_FRAME_STEP = 17
+MINIMAX_H3_BASE_FRAMES = 124
+MINIMAX_H3_MIN_FRAMES = 124
+MINIMAX_H3_MAX_FRAMES = 362
+MINIMAX_H3_DIMENSION_STEP = 32
+MINIMAX_H3_MAX_DIMENSION = 1344
+MINIMAX_H3_MAX_PIXELS = 1_032_192
+MINIMAX_H3_MIN_DURATION = MINIMAX_H3_MIN_FRAMES / MINIMAX_H3_FPS
+MINIMAX_H3_MAX_DURATION = MINIMAX_H3_MAX_FRAMES / MINIMAX_H3_FPS
+
 
 def new_id() -> str:
     return str(uuid.uuid4()).upper()
@@ -51,31 +111,73 @@ def b64_json_decode(data: str) -> Any:
 
 
 def is_wan_model(model_id: str) -> bool:
-    return model_id.startswith("wan_")
+    return model_id in _WAN_VIDEO_MODEL_IDS
+
+
+def is_wan_animate_model(model_id: str) -> bool:
+    return model_id in {
+        "wan_v2.2-14b-fp8_animate-move_lightx2v",
+        "wan_v2.2-14b-fp8_animate-replace_lightx2v",
+    }
 
 
 def is_ltx_model(model_id: str) -> bool:
-    return model_id.startswith(("ltx2-", "ltx23-"))
+    return model_id in _LTX_VIDEO_MODEL_IDS
 
 
 def is_seedance_model(model_id: str) -> bool:
-    return model_id.startswith("seedance-2-0")
+    return model_id in _SEEDANCE_VIDEO_MODEL_IDS
+
+
+def is_seedance25_model(model_id: str) -> bool:
+    return model_id == "seedance-2-5"
 
 
 def is_happyhorse_model(model_id: str) -> bool:
-    return model_id.startswith("happyhorse-1.1")
+    return model_id in _HAPPYHORSE_VIDEO_MODEL_IDS
+
+
+def is_wan3_model(model_id: str) -> bool:
+    return model_id in _WAN3_VIDEO_MODEL_IDS
+
+
+def is_minimax_h3_model(model_id: str) -> bool:
+    return model_id in _MINIMAX_H3_VIDEO_MODEL_IDS
+
+
+def is_minimax_h3_turbo_model(model_id: str) -> bool:
+    return model_id in {
+        "minimax-h3-fl2va-fp8_t2v_turbo",
+        "minimax-h3-fl2va-fp8_i2v_turbo",
+        "minimax-h3-fl2va-fp8_flf2v_turbo",
+        "minimax-h3-ref2va-fp8_r2v_turbo",
+    }
+
+
+def is_minimax_h3_reference_model(model_id: str) -> bool:
+    return is_minimax_h3_model(model_id) and get_video_workflow_type(model_id) == "r2v"
 
 
 def is_external_video_model(model_id: str) -> bool:
-    return is_seedance_model(model_id) or is_happyhorse_model(model_id)
+    return is_seedance_model(model_id) or is_happyhorse_model(model_id) or is_wan3_model(model_id)
 
 
 def is_video_model(model_id: str) -> bool:
-    return model_id.startswith(("wan_", "ltx2-", "ltx23-", "seedance-2-0", "happyhorse-1.1"))
+    return any(
+        predicate(model_id)
+        for predicate in (
+            is_wan_model,
+            is_ltx_model,
+            is_seedance_model,
+            is_happyhorse_model,
+            is_wan3_model,
+            is_minimax_h3_model,
+        )
+    )
 
 
 def is_audio_model(model_id: str) -> bool:
-    return model_id.startswith("ace_step")
+    return model_id.startswith("ace_step") or model_id == "minimax_music3"
 
 
 def calculate_video_frames(
@@ -95,10 +197,25 @@ def calculate_video_frames(
 
     if is_wan_model(model_id):
         frames = js_round(duration * 16) + 1
+    elif is_minimax_h3_model(model_id):
+        requested_frames = js_round(duration * MINIMAX_H3_FPS)
+        minimum = max(MINIMAX_H3_MIN_FRAMES, min_frames or MINIMAX_H3_MIN_FRAMES)
+        maximum = min(MINIMAX_H3_MAX_FRAMES, max_frames or MINIMAX_H3_MAX_FRAMES)
+        minimum_step = math.ceil((minimum - MINIMAX_H3_BASE_FRAMES) / MINIMAX_H3_FRAME_STEP)
+        maximum_step = math.floor((maximum - MINIMAX_H3_BASE_FRAMES) / MINIMAX_H3_FRAME_STEP)
+        if minimum_step > maximum_step:
+            raise ValueError(
+                f"No valid MiniMax H3 frame count exists between {minimum} and {maximum}"
+            )
+        requested_step = js_round(
+            (requested_frames - MINIMAX_H3_BASE_FRAMES) / MINIMAX_H3_FRAME_STEP
+        )
+        steps = min(maximum_step, max(minimum_step, requested_step))
+        return MINIMAX_H3_BASE_FRAMES + steps * MINIMAX_H3_FRAME_STEP
     else:
         frames = js_round(duration * fps) + 1
         if is_ltx_model(model_id):
-            frames = js_round((frames - 1) / 8) * 8 + 1
+            frames = js_round((frames - 1) / LTX2_FRAME_STEP) * LTX2_FRAME_STEP + 1
     if min_frames is not None:
         frames = max(min_frames, frames)
     if max_frames is not None:
@@ -107,9 +224,16 @@ def calculate_video_frames(
 
 
 def get_video_workflow_type(model_id: str) -> str | None:
+    if is_wan3_model(model_id):
+        return "t2v"
     if is_happyhorse_model(model_id):
         for kind in ("r2v", "i2v", "t2v"):
             if f"-{kind}" in model_id:
+                return kind
+        return None
+    if is_minimax_h3_model(model_id):
+        for kind in ("r2v", "flf2v", "i2v", "t2v"):
+            if f"_{kind}" in model_id:
                 return kind
         return None
     if not (is_wan_model(model_id) or is_ltx_model(model_id) or is_seedance_model(model_id)):

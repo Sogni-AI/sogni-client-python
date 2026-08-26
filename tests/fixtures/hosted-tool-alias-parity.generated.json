@@ -13,7 +13,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_image",
       "sdkToolName": "generate_image",
-      "hostedSchemaSha256": "621645d181d6adb1ffddc7b88b41bcfa379dd075db94d95e6fca0ab2cd75ff49",
+      "hostedSchemaSha256": "e75fdfdfbd893349066b994ea39982fe21cb41163d42cc25a88d62aea7ca268d",
       "hostedRequired": [
         "prompt"
       ],
@@ -49,7 +49,7 @@
       "executionMode": "direct",
       "hostedToolName": "edit_image",
       "sdkToolName": "edit_image",
-      "hostedSchemaSha256": "6c894ffcc439de3cc5bde99092cdaf08f21ebd8b7232b0bdaf5e62d7a8d9c27b",
+      "hostedSchemaSha256": "ee78142d677810cffb06013b751e4ae8c137dd1128b7e04b1cc9c2ac2a71c1b9",
       "hostedRequired": [
         "prompt"
       ],
@@ -83,7 +83,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_video",
       "sdkToolName": "generate_video",
-      "hostedSchemaSha256": "1b6f26fec4c79a45de79aa1fee5550ec77e8727010d57b6a625e923645932452",
+      "hostedSchemaSha256": "5e3f7263877113e7a6c4186f94a923c831ade3c57f154b1c7cf266e6f3794a89",
       "hostedRequired": [
         "prompt"
       ],
@@ -92,6 +92,11 @@
         "expandPrompt",
         "skipPromptProcessing",
         "duration",
+        "smartDuration",
+        "ratio",
+        "watermark",
+        "referenceFileUrl",
+        "referenceLinkUrl",
         "negativePrompt",
         "videoModel",
         "generateAudio",
@@ -103,7 +108,9 @@
         "targetResolution",
         "numberOfVariations",
         "aspectRatio",
-        "voicePersonaName"
+        "voicePersonaName",
+        "loras",
+        "loraStrengths"
       ],
       "argumentAliasTargets": [
         "prompt",
@@ -126,7 +133,7 @@
       "executionMode": "direct",
       "hostedToolName": "animate_photo",
       "sdkToolName": "animate_photo",
-      "hostedSchemaSha256": "75092d0106e74ea205c0a85dba2d7efde262135eea63437b0a6488125f5058d6",
+      "hostedSchemaSha256": "fce1f15428a89aa88a69f5b7db3fff353f308cfcc47830566be9b8b6d7c236a6",
       "hostedRequired": [
         "prompt"
       ],
@@ -136,7 +143,11 @@
         "skipPromptProcessing",
         "videoModel",
         "negativePrompt",
+        "generateAudio",
         "duration",
+        "smartDuration",
+        "ratio",
+        "watermark",
         "targetResolution",
         "sourceImageIndex",
         "sourceImageIndices",
@@ -146,7 +157,9 @@
         "frameRole",
         "endImageIndex",
         "endImageIndices",
-        "voicePersonaName"
+        "voicePersonaName",
+        "loras",
+        "loraStrengths"
       ],
       "argumentAliasTargets": [
         "prompt",
@@ -170,17 +183,23 @@
       "executionMode": "direct",
       "hostedToolName": "sound_to_video",
       "sdkToolName": "sound_to_video",
-      "hostedSchemaSha256": "d4256ae213fcd3b516c9967f2e3aacf0e2af3ca39375e98c3a19c89b664ccd1b",
+      "hostedSchemaSha256": "ed15b5b997ddec08707930afccf0f766ce878a918dddd6c753c53d4a5935cb8e",
       "hostedRequired": [
         "prompt"
       ],
       "hostedPropertyNames": [
         "prompt",
         "expandPrompt",
+        "negativePrompt",
         "audioSourceIndex",
         "sourceImageIndex",
         "audioStart",
         "duration",
+        "smartDuration",
+        "ratio",
+        "watermark",
+        "referenceFileUrl",
+        "referenceLinkUrl",
         "videoModel",
         "generateAudio",
         "numberOfVariations",
@@ -206,7 +225,7 @@
       "executionMode": "direct",
       "hostedToolName": "video_to_video",
       "sdkToolName": "video_to_video",
-      "hostedSchemaSha256": "54b3996f970a5272d6989e602f62c45b54c3d3c1a191c1619a0dd7a96515ccdc",
+      "hostedSchemaSha256": "e59293e3a56dc6a0620fb05f72a8be8efb37a536d9bb9237602f1be7b1b04014",
       "hostedRequired": [
         "prompt"
       ],
@@ -220,6 +239,9 @@
         "generateAudio",
         "targetResolution",
         "sourceImageIndex",
+        "outpaintPosition",
+        "outpaintAspectRatio",
+        "maskImageIndex",
         "duration",
         "numberOfVariations"
       ],
@@ -244,7 +266,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_music",
       "sdkToolName": "generate_music",
-      "hostedSchemaSha256": "5cccd9708cb10f58cbc140ed59c502a7fd7ed5e5f7f340378e9e35e0f0de974a",
+      "hostedSchemaSha256": "8842553d6432dc877e6b491e9def89e378b240f2bf65ae91ae606daae8412c88",
       "hostedRequired": [
         "prompt"
       ],

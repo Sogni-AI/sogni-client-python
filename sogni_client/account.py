@@ -41,6 +41,8 @@ def _account_defaults() -> dict[str, Any]:
         "username": None,
         "email": None,
         "subscription": None,
+        "free_spark_locked": None,
+        "free_spark_unlock_path": None,
     }
 
 
@@ -125,6 +127,8 @@ class CurrentAccount(DataEntity):
             aliases = {
                 "networkStatus": "network_status",
                 "walletAddress": "wallet_address",
+                "freeSparkLocked": "free_spark_locked",
+                "freeSparkUnlockPath": "free_spark_unlock_path",
             }
             for source, target in aliases.items():
                 if source in supplied and target not in supplied:
@@ -174,6 +178,14 @@ class CurrentAccount(DataEntity):
         return self._data.get("subscription")
 
     @property
+    def free_spark_locked(self) -> bool | None:
+        return self._data.get("free_spark_locked")
+
+    @property
+    def free_spark_unlock_path(self) -> str | None:
+        return self._data.get("free_spark_unlock_path")
+
+    @property
     def is_unlimited(self) -> bool:
         subscription = self.subscription
         return bool(
@@ -188,6 +200,8 @@ class CurrentAccount(DataEntity):
     networkStatus = property(lambda self: self.network_status)
     walletAddress = property(lambda self: self.wallet_address)
     isUnlimited = property(lambda self: self.is_unlimited)
+    freeSparkLocked = property(lambda self: self.free_spark_locked)
+    freeSparkUnlockPath = property(lambda self: self.free_spark_unlock_path)
 
 
 class AccountApi(EventEmitter):
@@ -337,7 +351,24 @@ class AccountApi(EventEmitter):
             mapped["capabilities"] = {"unlimited": True}
         else:
             mapped["capabilities"] = {}
+        fair_use = subscription.get("fairUse")
+        if (
+            isinstance(fair_use, dict)
+            and fair_use.get("limited") is True
+            and isinstance(fair_use.get("resetAt"), (int, float))
+            and fair_use["resetAt"] > datetime.now(timezone.utc).timestamp() * 1000
+        ):
+            mapped["fairUse"] = {
+                **fair_use,
+                "resetAt": _iso_from_milliseconds(fair_use["resetAt"]),
+            }
         return mapped
+
+    def _apply_free_spark_locked(self, locked: Any, unlock_path: Any) -> None:
+        if not isinstance(locked, bool):
+            return
+        path = unlock_path if unlock_path in {"trial", "purchase"} else None
+        self.current_account._update({"free_spark_locked": locked, "free_spark_unlock_path": path})
 
     def _apply_subscription(
         self,
@@ -368,6 +399,10 @@ class AccountApi(EventEmitter):
         return True
 
     def _on_subscription_entitlement_updated(self, data: Any) -> None:
+        if isinstance(data, dict):
+            self._apply_free_spark_locked(
+                data.get("freeSparkLocked"), data.get("freeSparkUnlockPath")
+            )
         mapped = self._map_socket_subscription(data)
         if mapped is None:
             return
@@ -380,6 +415,7 @@ class AccountApi(EventEmitter):
     def _on_socket_authenticated(self, data: Any) -> Any:
         if not isinstance(data, dict):
             return None
+        self._apply_free_spark_locked(data.get("freeSparkLocked"), data.get("freeSparkUnlockPath"))
         if isinstance(self.client.auth, ApiKeyAuthManager):
             self.current_account._update(
                 {"username": data.get("username"), "wallet_address": data.get("address")}

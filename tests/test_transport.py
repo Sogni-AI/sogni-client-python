@@ -209,10 +209,40 @@ async def test_websocket_connect_builds_protocol_query_and_exact_auth_headers() 
         assert query["clientType"] == ["artist"]
         assert query["forceWorkerId"] == ["fast"]
         assert json.loads(query["socketEventSubscriptions"][0]) == {"modelAvailability": False}
-        assert query["clientName"] == ["Sogni/3.0.0 (sogni-client) 5.1.0a24"]
+        assert query["clientName"] == ["Sogni/3.0.0 (sogni-client) 5.21.3"]
         assert call["additional_headers"] == {"api-key": "socket-secret"}
         assert call["ping_interval"] == call["ping_timeout"] == 15
         assert call["max_size"] is None
+    finally:
+        await socket.aclose()
+
+
+@pytest.mark.asyncio
+async def test_websocket_connect_serializes_connection_attribution_query() -> None:
+    auth = ApiKeyAuthManager()
+    await auth.authenticate("socket-secret")
+    factory = FakeSocketFactory()
+    socket = WebSocketClient(
+        "wss://socket.sogni.ai/connect",
+        auth,
+        "APP-123",
+        "fast",
+        connection_attribution={
+            "interaction_kind": "external_agent",
+            "agent_framework": "codex",
+            "agent_surface": "sdk",
+            "execution_mode": "server",
+        },
+        connect_factory=factory,
+    )
+
+    await socket.connect()
+    try:
+        query = parse_qs(urlsplit(factory.calls[0]["url"]).query)
+        assert query["interactionKind"] == ["external_agent"]
+        assert query["agentFramework"] == ["codex"]
+        assert query["agentSurface"] == ["sdk"]
+        assert query["executionMode"] == ["server"]
     finally:
         await socket.aclose()
 

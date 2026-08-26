@@ -221,7 +221,7 @@ def test_external_video_request_uses_fixed_fps_urls_and_omits_negative_prompt() 
         "external-1",
         {
             "type": "video",
-            "modelId": "seedance-2-0-pro_t2v",
+            "modelId": "seedance-2-0",
             "positivePrompt": "cinematic coast",
             "negativePrompt": "text",
             "numberOfMedia": 1,
@@ -244,7 +244,7 @@ def test_external_video_request_uses_fixed_fps_urls_and_omits_negative_prompt() 
             "external-invalid",
             {
                 "type": "video",
-                "modelId": "seedance-2-0-pro_t2v",
+                "modelId": "seedance-2-0",
                 "positivePrompt": "music",
                 "numberOfMedia": 1,
                 "referenceAudioUrls": ["https://cdn.example/audio.mp3"],
@@ -313,6 +313,218 @@ def test_audio_request_keeps_audio_fields_and_omits_negative_prompt() -> None:
     assert "negativePrompt" not in keyframe
     assert message["numberOfImages"] == 2
     assert message["outputFormat"] == "mp3"
+
+
+def test_minimax_h3_reference_request_uses_numbered_assets_and_frame_grid() -> None:
+    message = create_job_request_message(
+        "h3-reference",
+        {
+            "type": "video",
+            "modelId": "minimax-h3-ref2va-fp8_r2v",
+            "positivePrompt": "A character walks into frame and speaks.",
+            "negativePrompt": "",
+            "numberOfMedia": 1,
+            "duration": 6,
+            "referenceImage": True,
+            "contextImages": [True],
+            "referenceVideo": True,
+            "referenceVideoDurations": [4],
+            "referenceAudio": True,
+            "width": 1024,
+            "height": 768,
+            "attribution": {
+                "workloadKind": "agent_mediated",
+                "operationId": "H3-OP",
+            },
+        },
+        model_options("video"),
+    )
+
+    keyframe = message["keyFrames"][0]
+    assert keyframe["fps"] == 24
+    assert keyframe["frames"] == 141
+    assert keyframe["hasReferenceImage"] is True
+    assert keyframe["hasContextImage2"] is True
+    assert keyframe["hasReferenceVideo1"] is True
+    assert keyframe["referenceVideo1DurationSeconds"] == 4
+    assert keyframe["hasReferenceAudio1"] is True
+    assert message["workloadKind"] == "agent_mediated"
+    assert message["operationId"] == "H3-OP"
+
+
+def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
+    wan3 = create_job_request_message(
+        "wan3",
+        {
+            "type": "video",
+            "modelId": "wan3.0-video",
+            "positivePrompt": "",
+            "numberOfMedia": 1,
+            "smartDuration": True,
+            "referenceLinkUrl": "https://example.com/reference",
+            "promptExtend": False,
+            "ratio": "9:16",
+            "watermark": False,
+            "wan3TaskType": "extend",
+        },
+        model_options("video"),
+    )["keyFrames"][0]
+    assert wan3["fps"] == 30
+    assert wan3["frames"] == 901
+    assert wan3["referenceLinkURL"] == "https://example.com/reference"
+    assert wan3["promptExtend"] is False
+    assert wan3["ratio"] == "9:16"
+    assert wan3["watermark"] is False
+    assert "wan3TaskType" not in wan3
+
+    with pytest.raises(ApiError, match="promptExtend must be a boolean"):
+        create_job_request_message(
+            "wan3-invalid-prompt-expand",
+            {
+                "type": "video",
+                "modelId": "wan3.0-video",
+                "positivePrompt": "Keep this literal.",
+                "numberOfMedia": 1,
+                "promptExtend": "false",
+            },
+            model_options("video"),
+        )
+
+    seedance = create_job_request_message(
+        "seedance25",
+        {
+            "type": "video",
+            "modelId": "seedance-2-5",
+            "positivePrompt": "Use the soundtrack as a loose timing reference.",
+            "numberOfMedia": 1,
+            "duration": 30,
+            "seedanceTaskType": "reference",
+            "referenceAudioUrls": ["https://cdn.example/audio.mp3"],
+        },
+        model_options("video"),
+    )["keyFrames"][0]
+    assert seedance["frames"] == 721
+    assert seedance["seedanceTaskType"] == "reference"
+
+
+@pytest.mark.asyncio
+async def test_queue_eta_liveness_and_eta_confidence_are_observable() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    project = Project(
+        {
+            "type": "video",
+            "modelId": "seedance-2-5",
+            "positivePrompt": "queued",
+            "numberOfMedia": 1,
+        },
+        api,
+    )
+    api._projects.append(project)
+
+    api._handle_job_state(
+        {
+            "type": "queued",
+            "jobID": project.id,
+            "queuePosition": 2,
+            "estimatedStartSeconds": 90,
+            "queueStatus": "waiting",
+        }
+    )
+    assert project.queue_status == "waiting"
+    assert project.estimated_start_at is not None
+
+    api._handle_job_state({"type": "jobStarted", "jobID": project.id, "imgID": "job-eta"})
+    api._handle_job_progress(
+        {
+            "jobID": project.id,
+            "imgID": "job-eta",
+            "progress": 0.1,
+            "etaMin": 40,
+            "etaMax": 80,
+        }
+    )
+    job = project.job("job-eta")
+    assert job is not None
+    assert job.eta_range == {"min": 40, "max": 80}
+    assert project.estimated_start_at is None
+    assert project.queue_status is None
+
+    api._list_active_project_ids = AsyncMock(return_value=[project.id])
+    api.get = AsyncMock(side_effect=AssertionError("REST must not be used for an active project"))
+    project._last_updated = project_now() - timedelta(minutes=3)
+    await project._check_for_timeout()
+    assert project.status == "processing"
+    api.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancel_waits_for_server_confirmation_and_deduplicates_requests() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    project = Project(
+        {
+            "type": "image",
+            "modelId": "flux1-schnell-fp8",
+            "positivePrompt": "cancel",
+            "numberOfMedia": 1,
+        },
+        api,
+    )
+    api._projects.append(project)
+
+    async def confirm(message_type: str, data: Any) -> None:
+        client.socket.sent.append((message_type, data))
+        client.socket.emit("artistCancelConfirmation", {"jobID": project.id, "didCancel": True})
+
+    client.socket.send = AsyncMock(side_effect=confirm)
+    await asyncio.gather(api.cancel(project.id), api.cancel(project.id))
+
+    assert client.socket.send.await_count == 1
+    assert project.status == "canceled"
+    assert project not in api.tracked_projects
+
+
+@pytest.mark.asyncio
+async def test_lora_catalog_is_scoped_cached_and_exposes_constraints() -> None:
+    client = FakeClient(
+        [
+            {
+                "data": {
+                    "lastUpdated": "2026-08-26T00:00:00Z",
+                    "loras": [
+                        {"loraId": "warm", "modelIds": ["krea2_turbo_fp8_scaled"]},
+                        {"loraId": "other", "modelIds": ["z_image_bf16"]},
+                    ],
+                    "constraints": {"maxPerRequest": 4, "minStrength": -2, "maxStrength": 2},
+                }
+            },
+            {
+                "data": {
+                    "lastUpdated": "2026-08-26T00:00:00Z",
+                    "loras": [
+                        {"loraId": "warm", "modelIds": ["krea2_turbo_fp8_scaled"]},
+                        {"loraId": "other", "modelIds": ["z_image_bf16"]},
+                    ],
+                    "models": ["krea2_turbo_fp8_scaled", "z_image_bf16"],
+                    "constraints": {"maxPerRequest": 4, "minStrength": -2, "maxStrength": 2},
+                }
+            },
+        ]
+    )
+    api = ProjectsApi(client)
+
+    first = await api.available_loras(model_id="krea2_turbo_fp8_scaled")
+    second = await api.available_loras(model_id="krea2_turbo_fp8_scaled")
+
+    assert [item["loraId"] for item in first["loras"]] == ["warm"]
+    assert second == first
+    assert (await api.get_lora("warm"))["loraId"] == "warm"
+    assert await api.lora_constraints() == {
+        "maxPerRequest": 4,
+        "minStrength": -2,
+        "maxStrength": 2,
+    }
 
 
 @pytest.mark.asyncio
@@ -502,7 +714,7 @@ async def test_external_progress_ignores_booleans_and_eta_provides_progress_fall
     project = Project(
         {
             "type": "video",
-            "modelId": "seedance-2-0-pro_t2v",
+            "modelId": "seedance-2-0",
             "positivePrompt": "coast",
             "numberOfMedia": 1,
         },
@@ -686,7 +898,7 @@ async def test_project_timeout_retries_then_notifies_server_and_fails_local_stat
     project = Project(
         {
             "type": "video",
-            "modelId": "seedance-2-0-pro_t2v",
+            "modelId": "seedance-2-0",
             "positivePrompt": "timeout",
             "numberOfMedia": 1,
         },
@@ -708,6 +920,7 @@ async def test_project_timeout_retries_then_notifies_server_and_fails_local_stat
             {"status": "error", "message": "not ready", "errorCode": 404},
         )
     )
+    api._list_active_project_ids = AsyncMock(return_value=[])
     waiting = asyncio.create_task(project.wait_for_completion())
     project._last_updated = project_now() - timedelta(minutes=3)
 
