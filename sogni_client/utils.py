@@ -47,7 +47,7 @@ _HAPPYHORSE_VIDEO_MODEL_IDS = {
     "happyhorse-1.1-i2v",
     "happyhorse-1.1-r2v",
 }
-_WAN3_VIDEO_MODEL_IDS = {"wan3.0-video"}
+_WAN3_VIDEO_MODEL_IDS = {"wan3.0-video", "wan3.0-spicy-video"}
 _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-fl2va-fp8_t2v",
     "minimax-h3-fl2va-fp8_i2v",
@@ -56,8 +56,19 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-fl2va-fp8_t2v_turbo",
     "minimax-h3-fl2va-fp8_i2v_turbo",
     "minimax-h3-fl2va-fp8_flf2v_turbo",
+    "minimax-h3-fastvideo-int8_t2v_turbo",
+    "minimax-h3-fastvideo-int8_i2v_turbo",
+    "minimax-h3-fastvideo-int8_flf2v_turbo",
     "minimax-h3-ref2va-fp8_r2v_turbo",
+    "minimax-h3-fl2va-fp8_t2v_balanced",
+    "minimax-h3-fl2va-fp8_i2v_balanced",
+    "minimax-h3-fl2va-fp8_flf2v_balanced",
+    "minimax-h3-ref2va-fp8_r2v_balanced",
 }
+_MINIMAX_H3_TURBO_PATTERN = re.compile(
+    r"^minimax-h3-(?:fl2va-fp8|fastvideo-int8)_(?:t2v|i2v|flf2v)_turbo$"
+)
+_MINIMAX_H3_BALANCED_PATTERN = re.compile(r"^minimax-h3-fl2va-fp8_(?:t2v|i2v|flf2v)_balanced$")
 
 LTX2_FRAME_STEP = 8
 MINIMAX_H3_FPS = 24
@@ -141,17 +152,37 @@ def is_wan3_model(model_id: str) -> bool:
     return model_id in _WAN3_VIDEO_MODEL_IDS
 
 
+def is_wan3_enhanced_model(model_id: str) -> bool:
+    """Check for the Wan 3.0 Enhanced model specifically."""
+
+    return model_id == "wan3.0-spicy-video"
+
+
 def is_minimax_h3_model(model_id: str) -> bool:
     return model_id in _MINIMAX_H3_VIDEO_MODEL_IDS
 
 
 def is_minimax_h3_turbo_model(model_id: str) -> bool:
-    return model_id in {
-        "minimax-h3-fl2va-fp8_t2v_turbo",
-        "minimax-h3-fl2va-fp8_i2v_turbo",
-        "minimax-h3-fl2va-fp8_flf2v_turbo",
-        "minimax-h3-ref2va-fp8_r2v_turbo",
-    }
+    """One of the 4-step MiniMax H3 Turbo workflows.
+
+    FL2VA and FastH3 both cover t2v/i2v/flf2v; Ref2VA uses its dedicated r2v
+    Turbo LoRA. FastH3 has no r2v mode.
+    """
+
+    return bool(_MINIMAX_H3_TURBO_PATTERN.match(model_id)) or (
+        model_id == "minimax-h3-ref2va-fp8_r2v_turbo"
+    )
+
+
+def is_minimax_h3_balanced_model(model_id: str) -> bool:
+    """One of the 8-step MiniMax H3 Balanced workflows.
+
+    FL2VA covers t2v/i2v/flf2v; Ref2VA uses its matching Larry v4 adapter for r2v.
+    """
+
+    return bool(_MINIMAX_H3_BALANCED_PATTERN.match(model_id)) or (
+        model_id == "minimax-h3-ref2va-fp8_r2v_balanced"
+    )
 
 
 def is_minimax_h3_reference_model(model_id: str) -> bool:

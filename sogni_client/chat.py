@@ -420,6 +420,9 @@ class ChatToolsApi:
         "krea2-identity-edit": "krea2_identity_edit_v1_2",
         "krea-2-identity-edit": "krea2_identity_edit_v1_2",
     }
+    # Existing "minimax-h3-*-turbo" selectors stay on LightX2V Turbo; FastH3 is the
+    # separate FastVideo VSA four-step engine and needs its own explicit aliases.
+    # FastH3 has no r2v mode.
     _VIDEO_SELECTORS = {
         "ltx25": "ltx25-22b-int8_t2v_distilled",
         "ltx23": "ltx23-22b-fp8_t2v_distilled",
@@ -429,20 +432,54 @@ class ChatToolsApi:
         "seedance2-fast": "seedance-2-0-mini",
         "seedance2-5": "seedance-2-5",
         "minimax-h3": "minimax-h3-fl2va-fp8_t2v",
+        "minimax-h3-t2v": "minimax-h3-fl2va-fp8_t2v",
         "minimax-h3-turbo": "minimax-h3-fl2va-fp8_t2v_turbo",
+        "minimax-h3-t2v-turbo": "minimax-h3-fl2va-fp8_t2v_turbo",
+        "minimax-h3-fasth3-turbo": "minimax-h3-fastvideo-int8_t2v_turbo",
+        "minimax-h3-fasth3-t2v-turbo": "minimax-h3-fastvideo-int8_t2v_turbo",
+        "minimax-h3-balanced": "minimax-h3-fl2va-fp8_t2v_balanced",
+        "minimax-h3-t2v-balanced": "minimax-h3-fl2va-fp8_t2v_balanced",
+        "minimax-h3-r2v": "minimax-h3-ref2va-fp8_r2v",
+        "minimax-h3-r2v-turbo": "minimax-h3-ref2va-fp8_r2v_turbo",
+        "minimax-h3-r2v-balanced": "minimax-h3-ref2va-fp8_r2v_balanced",
         "happyhorse": "happyhorse-1.1-t2v",
+        "happyhorse1.1": "happyhorse-1.1-t2v",
         "wan3": "wan3.0-video",
         "wan3.0": "wan3.0-video",
         "wan3-video": "wan3.0-video",
     }
+    # Spelled out rather than spread from the text map: the t2v-only aliases must
+    # not leak in here, matching the JS IMAGE_VIDEO_MODEL_SELECTORS table exactly.
     _IMAGE_VIDEO_SELECTORS = {
-        **_VIDEO_SELECTORS,
         "ltx25": "ltx25-22b-int8_i2v_distilled",
         "ltx23": "ltx23-22b-fp8_i2v_distilled",
         "wan22": "wan_v2.2-14b-fp8_i2v_lightx2v",
+        "seedance2": "seedance-2-0",
+        "seedance2-mini": "seedance-2-0-mini",
+        "seedance2-fast": "seedance-2-0-mini",
+        "seedance2-5": "seedance-2-5",
         "minimax-h3": "minimax-h3-fl2va-fp8_i2v",
+        "minimax-h3-i2v": "minimax-h3-fl2va-fp8_i2v",
+        "minimax-h3-flf2v": "minimax-h3-fl2va-fp8_flf2v",
         "minimax-h3-turbo": "minimax-h3-fl2va-fp8_i2v_turbo",
+        "minimax-h3-i2v-turbo": "minimax-h3-fl2va-fp8_i2v_turbo",
+        "minimax-h3-flf2v-turbo": "minimax-h3-fl2va-fp8_flf2v_turbo",
+        "minimax-h3-fasth3-turbo": "minimax-h3-fastvideo-int8_i2v_turbo",
+        "minimax-h3-fasth3-i2v-turbo": "minimax-h3-fastvideo-int8_i2v_turbo",
+        "minimax-h3-fasth3-flf2v-turbo": "minimax-h3-fastvideo-int8_flf2v_turbo",
+        "minimax-h3-balanced": "minimax-h3-fl2va-fp8_i2v_balanced",
+        "minimax-h3-i2v-balanced": "minimax-h3-fl2va-fp8_i2v_balanced",
+        "minimax-h3-flf2v-balanced": "minimax-h3-fl2va-fp8_flf2v_balanced",
+        "minimax-h3-r2v": "minimax-h3-ref2va-fp8_r2v",
+        "minimax-h3-r2v-turbo": "minimax-h3-ref2va-fp8_r2v_turbo",
+        "minimax-h3-r2v-balanced": "minimax-h3-ref2va-fp8_r2v_balanced",
         "happyhorse": "happyhorse-1.1-i2v",
+        "happyhorse1.1": "happyhorse-1.1-i2v",
+        "happyhorse-1.1-i2v": "happyhorse-1.1-i2v",
+        "happyhorse-1.1-r2v": "happyhorse-1.1-r2v",
+        "wan3": "wan3.0-video",
+        "wan3.0": "wan3.0-video",
+        "wan3-video": "wan3.0-video",
     }
     _SOUND_VIDEO_SELECTORS = {
         "wan-s2v": "wan_v2.2-14b-fp8_s2v_lightx2v",

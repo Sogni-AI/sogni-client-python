@@ -15,6 +15,12 @@ from urllib.parse import quote
 from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ProjectError
 from .events import DataEntity, EventEmitter
+from .recovery import (
+    PROJECT_LOST_ERROR,
+    is_llm_recovered_project,
+    is_recovered_job_finished,
+    project_params_from_recovered_project,
+)
 from .transport import ApiClient
 from .utils import (
     MINIMAX_H3_BASE_FRAMES,
@@ -33,12 +39,14 @@ from .utils import (
     is_external_video_model,
     is_happyhorse_model,
     is_ltx_model,
+    is_minimax_h3_balanced_model,
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
     is_minimax_h3_turbo_model,
     is_seedance25_model,
     is_seedance_model,
     is_video_model,
+    is_wan3_enhanced_model,
     is_wan3_model,
     new_id,
     normalize_params,
@@ -199,6 +207,18 @@ _KREA_IDENTITY_EDIT_MODEL_IDS = {
 }
 _PROJECT_TIMEOUT_SECONDS = 2 * 60
 _MAX_FAILED_SYNC_ATTEMPTS = 3
+# How long after `connected` to wait for the server's `authenticated` frame
+# before pulling the recovery snapshot over HTTP instead. The primary socket
+# gets the frame within milliseconds; a client sharing that socket only ever
+# sees a replayed `connected`.
+_AUTHENTICATED_GRACE_SECONDS = 1.5
+# A project this client created moments before a sync cannot be expected in the
+# snapshot yet (the request may still be in flight), so it is not treated as
+# missing.
+_RECENTLY_CREATED_GRACE_SECONDS = 5.0
+# Retries for the REST lookup of a project the socket no longer lists.
+_MISSING_PROJECT_ATTEMPTS = 4
+_MISSING_PROJECT_RETRY_SECONDS = 2.5
 _CANCELLATION_CONFIRMATION_TIMEOUT_SECONDS = 120
 _RUNTIME_LIMIT_FLOOR_SECONDS = {
     "fast": {"image": 30 * 60, "audio": 30 * 60, "video": 90 * 60},
@@ -431,9 +451,11 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
         return
     if params.get("fps") is not None and params["fps"] != 24:
         raise _api_error("MiniMax H3 fps is fixed at 24. Omit fps or set it to 24.")
-    expected_steps = 4 if is_minimax_h3_turbo_model(params["modelId"]) else 20
+    is_turbo = is_minimax_h3_turbo_model(params["modelId"])
+    is_balanced = is_minimax_h3_balanced_model(params["modelId"])
+    expected_steps = 4 if is_turbo else 8 if is_balanced else 20
     if params.get("steps") is not None and params["steps"] != expected_steps:
-        suffix = " Turbo" if expected_steps == 4 else ""
+        suffix = " Turbo" if is_turbo else " Balanced" if is_balanced else ""
         raise _api_error(f"MiniMax H3{suffix} steps are fixed at {expected_steps}.")
     if params.get("guidance") is not None and params["guidance"] != 1:
         raise _api_error("MiniMax H3 guidance is fixed at 1.")
@@ -482,10 +504,9 @@ def _validate_h3_references(params: dict[str, Any]) -> None:
     videos = len(_media_slots(params.get("referenceVideo"), params.get("referenceVideos")))
     audios = len(_media_slots(params.get("referenceAudio"), params.get("referenceAudios")))
     durations = params.get("referenceVideoDurations")
-    if videos and durations is None:
-        raise _api_error(
-            f"MiniMax H3 r2v referenceVideoDurations must contain one entry for each uploaded reference video (expected {videos})."
-        )
+    # Duration hints are optional client-side preflight metadata. When present,
+    # validate them early; when omitted, Socket probes the uploaded media and
+    # overwrites any claimed values before pricing and admission.
     if durations is not None:
         if not isinstance(durations, list) or len(durations) != videos:
             raise _api_error(
@@ -557,6 +578,7 @@ def _validate_seedance_task(params: dict[str, Any]) -> None:
 
 
 def _validate_wan3_references(params: dict[str, Any]) -> None:
+    is_enhanced = is_wan3_enhanced_model(params["modelId"])
     images = _validate_reference_array(params.get("referenceImageUrls"), "referenceImageUrls")
     videos = _validate_reference_array(params.get("referenceVideoUrls"), "referenceVideoUrls")
     audios = _validate_reference_array(params.get("referenceAudioUrls"), "referenceAudioUrls")
@@ -568,11 +590,23 @@ def _validate_wan3_references(params: dict[str, Any]) -> None:
             raise _api_error(f"{field} must be a valid public HTTPS URL.")
     if params.get("referenceFileUrl") and params.get("referenceLinkUrl"):
         raise _api_error("Wan 3 accepts either one reference file or one reference link, not both.")
-    for field in ("promptExtend", "watermark", "smartDuration"):
+    if is_enhanced and (params.get("referenceFileUrl") or params.get("referenceLinkUrl")):
+        raise _api_error("Wan 3.0 Enhanced does not accept document or webpage references.")
+    for field in ("promptExtend", "watermark"):
         if params.get(field) is not None and not isinstance(params[field], bool):
             raise _api_error(f"Wan 3 {field} must be a boolean.")
-    if params.get("smartDuration") and params.get("duration") is not None:
-        raise _api_error("Wan 3 smartDuration and duration are mutually exclusive.")
+    if is_enhanced and params.get("watermark") is not None:
+        raise _api_error("Wan 3.0 Enhanced does not expose a watermark option.")
+    # smartDuration is retired. It let Wan 3 choose 2-30s AFTER admission, so the
+    # quote had to reserve the 30-second maximum for a render that usually came
+    # back far shorter - and the Wan 3 Enhanced launch credit settled against that
+    # reserved ceiling rather than the delivered video. Send an explicit duration,
+    # which covers the identical range and is charged exactly as quoted.
+    # The server rejects it too; this only fails faster and closer to the caller.
+    if params.get("smartDuration") is not None:
+        raise _api_error(
+            "Wan 3 smartDuration has been retired. Send an explicit duration between 2 and 30 seconds instead."
+        )
     if params.get("fps") is not None and params["fps"] != 30:
         raise _api_error("Wan 3 output is fixed at 30 fps.")
     if params.get("ratio") is not None and params["ratio"] not in {
@@ -597,7 +631,7 @@ def _validate_wan3_references(params: dict[str, Any]) -> None:
     has_frames = bool(params.get("referenceImage") or params.get("referenceImageEnd"))
     has_document = bool(params.get("referenceFileUrl") or params.get("referenceLinkUrl"))
     has_loose = bool(images or video_count or audio_count or has_document)
-    if params.get("referenceImageEnd") and not params.get("referenceImage"):
+    if not is_enhanced and params.get("referenceImageEnd") and not params.get("referenceImage"):
         raise _api_error("Wan 3 last-frame generation requires a first-frame referenceImage.")
     if has_frames and has_loose:
         raise _api_error(
@@ -880,8 +914,11 @@ def create_job_request_message(
                 params.get("referenceVideo"), params.get("referenceVideos")
             ):
                 keyframe[f"hasReferenceVideo{slot}"] = True
-                duration = (params.get("referenceVideoDurations") or [])[slot - 1]
-                keyframe[f"referenceVideo{slot}DurationSeconds"] = duration
+                # Duration hints are optional; Socket probes the uploaded media
+                # and overwrites any claim, so only forward what the caller gave.
+                durations = params.get("referenceVideoDurations") or []
+                if slot - 1 < len(durations):
+                    keyframe[f"referenceVideo{slot}DurationSeconds"] = durations[slot - 1]
         else:
             if params.get("referenceAudio"):
                 keyframe["hasReferenceAudio"] = True
@@ -908,9 +945,6 @@ def create_job_request_message(
         ):
             if params.get(source) is not None:
                 keyframe[target] = params[source]
-        if params.get("smartDuration"):
-            keyframe["smartDuration"] = True
-            keyframe["frames"] = calculate_video_frames(params["modelId"], 30, 30)
         field_map = {
             "generateAudio": "generateAudio",
             "audioIdentityStrength": "identityGuidanceScale",
@@ -1137,13 +1171,65 @@ class Job(DataEntity):
 
     @property
     def is_nsfw(self) -> bool:
+        """Whether the server withheld this job's media for sensitive content.
+
+        The render ran with the Sensitive Content Filter ON, a signal fired, and
+        there is no media to download. Unchanged from every earlier release: a
+        render the artist made with the filter OFF is delivered and merely
+        labelled, and reports False here. Read :attr:`nsfw_detected` for that and
+        decide from the viewer's own current filter setting whether to blur it.
+        """
+
         return bool(self._data.get("isNSFW"))
 
     isNSFW = is_nsfw
 
     @property
+    def nsfw_detected(self) -> bool:
+        """Whether the safety signal is a label on delivered media, not a withhold.
+
+        True only when the artist rendered with the filter off, in which case
+        :attr:`result_url` is available like any other completed job.
+        """
+
+        return bool(self._data.get("nsfwDetected"))
+
+    nsfwDetected = nsfw_detected
+
+    @property
+    def nsfw_sources(self) -> list[str]:
+        """Which safety signals fired: ``prompt`` and/or ``image``.
+
+        Empty when none fired or none were reported.
+        """
+
+        return list(self._data.get("nsfwSources") or [])
+
+    nsfwSources = nsfw_sources
+
+    @property
+    def is_withheld(self) -> bool:
+        """Whether the server withheld this job's media for sensitive content.
+
+        True only for a job that ran with the Sensitive Content Filter ON; it
+        means no media exists to download.
+        """
+
+        return self.is_nsfw and not self.nsfw_detected
+
+    isWithheld = is_withheld
+
+    @property
     def has_result_media(self) -> bool:
-        return self.status == "completed" and not self.is_nsfw
+        """Whether a result media file exists for download.
+
+        Media existence, not a content judgement. A render the artist made with
+        the Sensitive Content Filter off is delivered even when a safety signal
+        fired on it (see :attr:`nsfw_detected`), so it has media like any other
+        result. Only a job the server actually withheld has none.
+        """
+
+        return self.status == "completed" and not self.is_withheld
 
     hasResultMedia = has_result_media
 
@@ -1246,7 +1332,9 @@ class Job(DataEntity):
             raise RuntimeError("Enhancement is only available for images")
         if self.status != "completed":
             raise RuntimeError("Job is not completed yet")
-        if self.is_nsfw:
+        # Only withheld media is unusable here. Media the artist rendered with the
+        # filter off exists and can be enhanced like any other result.
+        if self.is_withheld:
             raise RuntimeError("Job did not pass NSFW filter")
 
         values = _nested_params(normalize_params(overrides, **kwargs))
@@ -1291,7 +1379,10 @@ class Job(DataEntity):
             ),
             "seed": data.get("seedUsed", self.seed),
             "isNSFW": bool(data.get("triggeredNSFWFilter")),
+            "nsfwDetected": data.get("nsfwDetected") is True,
         }
+        if data.get("nsfwSources") is not None:
+            delta["nsfwSources"] = list(data.get("nsfwSources") or [])
         status = _JOB_STATUS_MAP.get(data.get("status"))
         if status:
             delta["status"] = status
@@ -1299,10 +1390,12 @@ class Job(DataEntity):
         if not self.result_url and direct_url:
             delta["resultUrl"] = direct_url
         self._update(delta)
+        # Withheld media has nothing to mint. Labelled-but-delivered media does.
+        # A record claiming both resolves to withheld, the safe reading.
         if (
             not self.result_url
             and status == "completed"
-            and not bool(data.get("triggeredNSFWFilter"))
+            and not (bool(data.get("triggeredNSFWFilter")) and data.get("nsfwDetected") is not True)
         ):
             with contextlib.suppress(Exception):
                 await self.get_result_url()
@@ -1362,10 +1455,24 @@ class Job(DataEntity):
 
 
 class Project(DataEntity):
-    def __init__(self, params: dict[str, Any], api: ProjectsApi) -> None:
+    def __init__(
+        self,
+        params: dict[str, Any],
+        api: ProjectsApi,
+        *,
+        id: str | None = None,
+        recovered: bool = False,
+    ) -> None:
+        """
+        :param id: Reuse a server-known project id instead of minting a new one.
+            Used when a project is rebuilt from a recovery snapshot.
+        :param recovered: Mark the project as rebuilt from a server snapshot
+            rather than created by this client.
+        """
+
         super().__init__(
             {
-                "id": new_id(),
+                "id": id or new_id(),
                 "startedAt": _now(),
                 "params": params,
                 "queuePosition": -1,
@@ -1373,6 +1480,7 @@ class Project(DataEntity):
             }
         )
         self._api = api
+        self._recovered = bool(recovered)
         self._jobs: list[Job] = []
         self._completion = asyncio.get_running_loop().create_future()
         self._last_emitted_progress = -1
@@ -1385,6 +1493,26 @@ class Project(DataEntity):
     @property
     def id(self) -> str:
         return self._data["id"]
+
+    @property
+    def started_at(self) -> datetime:
+        """When this client started - or, for a recovered project, first learned about - it."""
+
+        return self._data["startedAt"]
+
+    startedAt = started_at
+
+    @property
+    def recovered(self) -> bool:
+        """True when this project was rebuilt from a server snapshot.
+
+        After a reconnect, a restart, or in a second client sharing the account,
+        instead of being created by this client. Its :attr:`params` are
+        reconstructed from the original request and omit asset inputs (starting
+        images, reference media).
+        """
+
+        return self._recovered
 
     @property
     def params(self) -> dict[str, Any]:
@@ -1446,6 +1574,18 @@ class Project(DataEntity):
         return max(0, min(100, round(sum(job.progress for job in self._jobs) / count)))
 
     async def wait_for_completion(self, timeout: float | None = None) -> list[str]:
+        """Wait for every job to settle and return the result URLs.
+
+        :param timeout: Seconds to wait, or ``None`` to wait indefinitely.
+
+        A timeout raises :class:`asyncio.TimeoutError` but does **not** cancel
+        the project: the render continues on the Supernet and this coroutine can
+        be awaited again. Size the timeout against real end-to-end time (queue
+        wait plus render), not render time alone -- ``estimate_video_cost`` and
+        friends report ``estimatedTotalSeconds`` when the server has benchmark
+        samples. Call :meth:`cancel` if you actually want the project stopped.
+        """
+
         if self.status == "completed":
             return self.result_urls
         if self.status == "failed":
@@ -1555,6 +1695,11 @@ class Project(DataEntity):
     async def _check_for_timeout(self) -> None:
         if self.finished:
             return
+        if self._api._should_defer_project_timeouts():
+            # The socket is down. Silence is expected, not staleness: the server
+            # keeps rendering and hands the project back on reconnect.
+            self._keep_alive()
+            return
         idle_seconds = (_now() - self._last_updated).total_seconds()
         if idle_seconds < _PROJECT_TIMEOUT_SECONDS:
             self._arm_timeout()
@@ -1626,6 +1771,8 @@ class Project(DataEntity):
                     "workerName": worker.get("name"),
                     "seed": raw.get("seedUsed"),
                     "isNSFW": bool(raw.get("triggeredNSFWFilter")),
+                    "nsfwDetected": raw.get("nsfwDetected") is True,
+                    "nsfwSources": list(raw.get("nsfwSources") or []),
                     "resultUrl": _raw_result_url(raw),
                 }
             )
@@ -1663,6 +1810,20 @@ class ProjectsApi(EventEmitter):
         self._current_network_type: str | None = None
         self._cancellation_requests: dict[str, asyncio.Task[None]] = {}
         self._lora_catalog_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._transport_disconnected = False
+        self._connected_at = 0.0
+        self._authenticated_timer: asyncio.TimerHandle | None = None
+        self._sync_lock = asyncio.Lock()
+        self._recovered_completed_ids: set[str] = set()
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        # Recovery timings. Overridable so regression tests can run the flow in
+        # fractions of a second instead of seconds.
+        self._recovery_tuning = {
+            "authenticated_grace_seconds": _AUTHENTICATED_GRACE_SECONDS,
+            "recently_created_grace_seconds": _RECENTLY_CREATED_GRACE_SECONDS,
+            "missing_project_attempts": _MISSING_PROJECT_ATTEMPTS,
+            "missing_project_retry_seconds": _MISSING_PROJECT_RETRY_SECONDS,
+        }
         socket = client.socket
         socket.on("changeNetwork", self._handle_change_network)
         socket.on("swarmModels", self._handle_swarm_models)
@@ -1671,7 +1832,9 @@ class ProjectsApi(EventEmitter):
         socket.on("jobETA", self._handle_job_eta)
         socket.on("jobResult", self._handle_job_result)
         socket.on("jobError", self._handle_job_error)
+        socket.on("authenticated", self._handle_socket_authenticated)
         client.on("disconnected", self._handle_disconnect)
+        client.on("connected", self._handle_connect)
 
     @property
     def available_models(self) -> list[dict[str, Any]]:
@@ -1883,6 +2046,396 @@ class ProjectsApi(EventEmitter):
             for item in projects
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         ]
+
+    async def sync(self, reason: str = "manual") -> dict[str, Any]:
+        """Reconcile this client's projects with the server.
+
+        Pulls the recovery snapshot (``GET /api/v1/artist/projects/sync`` on the
+        socket host, scoped to this app id) and replays whatever this client
+        missed: in-flight projects get their current job states, projects that
+        finished while away get their results, and projects the server no longer
+        knows are looked up on the REST API and failed if nothing was recorded.
+        Projects the server knows but this client does not are rebuilt and
+        tracked (see :attr:`Project.recovered`).
+
+        The SDK calls this on its own after every reconnect (using the
+        ``authenticated`` frame when it has one). Call it manually after a
+        foreground/online transition or when a consumer restores its own state.
+        Results are also broadcast as the ``projectsSynced`` event.
+        """
+
+        requested_at = time.time()
+        body = await self.client.socket.get(
+            "/api/v1/artist/projects/sync", {"appId": self.client.socket.app_id}
+        )
+        body = body if isinstance(body, dict) else {}
+        snapshot = {
+            "activeProjects": body.get("activeProjects")
+            if isinstance(body.get("activeProjects"), list)
+            else [],
+            "unclaimedCompletedProjects": body.get("unclaimedCompletedProjects")
+            if isinstance(body.get("unclaimedCompletedProjects"), list)
+            else [],
+        }
+        if isinstance(body.get("serverTime"), (int, float)):
+            snapshot["serverTime"] = body["serverTime"]
+        return await self._queue_sync(snapshot, reason, requested_at)
+
+    async def list_projects_elsewhere(self) -> list[dict[str, Any]]:
+        """In-flight projects this account owns on OTHER app instances.
+
+        Another client running a different Sogni app, another device, a headless
+        script. Read-only: they are not tracked, receive no events here and are
+        never reconciled; results land in the account's project history when they
+        finish. Each entry carries ``appSource``, ``appId``, ``status``,
+        ``createTime``, ``model`` and per-job ``performedSteps`` / ``stepCount``
+        (in ``workerJobs``), which is enough for an "in progress elsewhere"
+        affordance. The socket rate-limits this to 20 calls per 10s per account,
+        so poll on the order of tens of seconds. Requires a socket build that
+        tags recovered projects with ``appId``; older builds yield an empty list.
+        """
+
+        body = await self.client.socket.get("/api/v1/artist/projects/sync")
+        projects = body.get("activeProjects") if isinstance(body, dict) else None
+        own = self.client.socket.app_id
+        return [
+            project
+            for project in (projects if isinstance(projects, list) else [])
+            if isinstance(project, dict)
+            and project.get("id")
+            and isinstance(project.get("appId"), str)
+            and project["appId"] != own
+            and not is_llm_recovered_project(project)
+        ]
+
+    listProjectsElsewhere = list_projects_elsewhere
+
+    async def resolve_missing(
+        self,
+        project_ids: list[str],
+        attempts: int | None = None,
+        delay_seconds: float | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Look up projects the last snapshot did not list.
+
+        The REST API stores a project only once it finishes and the socket posts
+        it asynchronously, so a 404 is retried a few times; before anything is
+        declared lost the socket's live list is consulted once more, which covers
+        a request that was only registered after the snapshot was taken.
+
+        Each id resolves to one of ``{"state": "finished", "project": ...}``,
+        ``{"state": "active"}``, ``{"state": "lost"}``, or
+        ``{"state": "unknown", "error": ...}`` when a transport error prevented a
+        verdict (nothing is changed in that case).
+        """
+
+        max_attempts = max(1, attempts or int(self._recovery_tuning["missing_project_attempts"]))
+        retry_delay = (
+            delay_seconds
+            if delay_seconds is not None
+            else float(self._recovery_tuning["missing_project_retry_seconds"])
+        )
+        result: dict[str, dict[str, Any]] = {}
+        pending = list(dict.fromkeys(project_ids))
+        for attempt in range(max_attempts):
+            if not pending:
+                break
+            if attempt > 0:
+                await asyncio.sleep(retry_delay)
+            still_missing: list[str] = []
+            for project_id in pending:
+                try:
+                    project = await self.get(project_id)
+                    result[project_id] = {"state": "finished", "project": project}
+                except Exception as error:
+                    if isinstance(error, ApiError) and error.status == 404:
+                        still_missing.append(project_id)
+                    else:
+                        result[project_id] = {"state": "unknown", "error": error}
+            pending = still_missing
+        if pending:
+            # Last word goes to the socket: a project that reached the server
+            # after the snapshot was taken is in flight, not lost. `None` means
+            # the list could not be fetched, so the REST verdict stands.
+            live = await self._list_active_project_ids()
+            for project_id in pending:
+                result[project_id] = (
+                    {"state": "active"} if live and project_id in live else {"state": "lost"}
+                )
+        return result
+
+    resolveMissing = resolve_missing
+
+    async def _queue_sync(
+        self, snapshot: dict[str, Any], reason: str, requested_at: float
+    ) -> dict[str, Any]:
+        """Serialize syncs so two snapshots never interleave their replays."""
+
+        async with self._sync_lock:
+            return await self._reconcile(snapshot, reason, requested_at)
+
+    async def _reconcile(
+        self, snapshot: dict[str, Any], reason: str, requested_at: float
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "reason": reason,
+            "snapshot": snapshot,
+            "active": [],
+            "completed": [],
+            "lost": [],
+            "unverified": [],
+            "recoveredActive": [],
+            "recoveredCompleted": [],
+        }
+        seen: set[str] = set()
+
+        for recovered in snapshot.get("activeProjects") or []:
+            if not isinstance(recovered, dict):
+                continue
+            project_id = recovered.get("id")
+            if not project_id or is_llm_recovered_project(recovered) or project_id in seen:
+                continue
+            seen.add(project_id)
+            tracked = self._project(project_id)
+            if tracked is not None:
+                if tracked.finished:
+                    continue
+                await self._replay_recovered_project(tracked, recovered)
+                result["active"].append(project_id)
+            else:
+                project = self._rehydrate_project(recovered)
+                self._projects.append(project)
+                await self._replay_recovered_project(project, recovered)
+                result["recoveredActive"].append(recovered)
+
+        for recovered in snapshot.get("unclaimedCompletedProjects") or []:
+            if not isinstance(recovered, dict):
+                continue
+            project_id = recovered.get("id")
+            if not project_id or is_llm_recovered_project(recovered) or project_id in seen:
+                continue
+            seen.add(project_id)
+            tracked = self._project(project_id)
+            if tracked is not None:
+                if tracked.finished:
+                    continue
+                await self._replay_recovered_project(tracked, recovered)
+                result["completed"].append(project_id)
+            elif project_id not in self._recovered_completed_ids:
+                # The sync route is read-only, so the same finished project can
+                # show up again on the next sync; announce it once per client
+                # lifetime.
+                self._recovered_completed_ids.add(project_id)
+                project = self._rehydrate_project(recovered)
+                self._projects.append(project)
+                await self._replay_recovered_project(project, recovered)
+                result["recoveredCompleted"].append(
+                    {**recovered, "resultUrls": project.result_urls}
+                )
+
+        # Tracked, unfinished projects the server did not mention: either they
+        # finished (and the socket has already posted them to the REST API) or
+        # they are gone. Projects created moments ago may simply not be
+        # registered yet.
+        grace = float(self._recovery_tuning["recently_created_grace_seconds"])
+        cutoff = requested_at - grace
+        missing = [
+            project
+            for project in self._projects
+            if not project.finished
+            and project.id not in seen
+            and project.started_at.timestamp() <= cutoff
+        ]
+        if missing:
+            resolved = await self.resolve_missing([project.id for project in missing])
+            for project in missing:
+                if project.finished:
+                    continue  # a live event beat the lookup
+                resolution = resolved.get(project.id) or {}
+                state = resolution.get("state")
+                if state == "finished":
+                    await self._replay_raw_project(project, resolution["project"], False)
+                    result["completed"].append(project.id)
+                elif state == "active":
+                    project._keep_alive()
+                    result["active"].append(project.id)
+                elif state == "lost":
+                    self.emit(
+                        "project",
+                        {
+                            "type": "error",
+                            "projectId": project.id,
+                            "error": dict(PROJECT_LOST_ERROR),
+                        },
+                    )
+                    result["lost"].append(project.id)
+                else:
+                    result["unverified"].append(project.id)
+
+        if result["recoveredActive"]:
+            self.emit("activeProjectsRecovered", result["recoveredActive"])
+        if result["recoveredCompleted"]:
+            self.emit("completedProjectsRecovered", result["recoveredCompleted"])
+        self.emit("projectsSynced", result)
+        return result
+
+    def _rehydrate_project(self, recovered: dict[str, Any]) -> Project:
+        return Project(
+            project_params_from_recovered_project(recovered),
+            self,
+            id=recovered["id"],
+            recovered=True,
+        )
+
+    async def _replay_recovered_project(self, project: Project, recovered: dict[str, Any]) -> None:
+        await self._replay_raw_project(project, recovered, True)
+
+    async def _replay_raw_project(
+        self, project: Project, raw: dict[str, Any], include_in_flight_jobs: bool
+    ) -> None:
+        """Bring a tracked project up to date by replaying the frames it missed.
+
+        The frames are synthesized from a server-side view of the project. Going
+        through the regular handlers means every consumer - tracked ``Project``
+        instances and API-level ``project`` / ``job`` listeners alike - sees
+        exactly what a live connection would have delivered. Nothing is ever
+        downgraded: a job or project already finished locally ignores an older
+        in-flight state.
+        """
+
+        project_id = project.id
+        step_count = raw.get("stepCount")
+        if not isinstance(step_count, (int, float)) or isinstance(step_count, bool):
+            step_count = project.params.get("steps")
+        jobs: list[dict[str, Any]] = [
+            *(raw.get("workerJobs") or [] if include_in_flight_jobs else []),
+            *(raw.get("completedWorkerJobs") or []),
+        ]
+        replayed: set[str] = set()
+
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            img_id = job.get("imgID") or job.get("id")
+            if not img_id or img_id in replayed:
+                continue
+            replayed.add(img_id)
+            local = project.job(img_id)
+            status = job.get("status")
+            worker = job.get("worker") if isinstance(job.get("worker"), dict) else {}
+            worker_name = worker.get("username") or worker.get("name") or ""
+
+            if status == "jobCompleted":
+                if local is not None and local.finished:
+                    continue
+                frame: dict[str, Any] = {
+                    "jobID": project_id,
+                    "imgID": img_id,
+                    "triggeredNSFWFilter": bool(job.get("triggeredNSFWFilter")),
+                    "userCanceled": job.get("reason") == "artistCanceled",
+                }
+                if isinstance(job.get("performedSteps"), (int, float)):
+                    frame["performedStepCount"] = job["performedSteps"]
+                if isinstance(job.get("seedUsed"), (int, float)):
+                    frame["lastSeed"] = str(job["seedUsed"])
+                if isinstance(job.get("resultUrl"), str) and job["resultUrl"]:
+                    frame["resultUrl"] = job["resultUrl"]
+                if job.get("nsfwDetected") is not None:
+                    frame["nsfwDetected"] = job["nsfwDetected"]
+                if isinstance(job.get("nsfwSources"), list):
+                    frame["nsfwSources"] = job["nsfwSources"]
+                await self._apply_job_result(frame)
+                continue
+
+            if status == "jobError":
+                if local is not None and local.finished:
+                    continue
+                reason = job.get("reason") if isinstance(job.get("reason"), str) else ""
+                reason = reason or "genfailure"
+                self._handle_job_error(
+                    {
+                        "jobID": project_id,
+                        "imgID": img_id,
+                        "isFromWorker": True,
+                        "error": reason,
+                        "error_message": (
+                            "Sensitive content detected."
+                            if reason == "sensitiveContent"
+                            else reason
+                        ),
+                    }
+                )
+                continue
+
+            if (
+                not include_in_flight_jobs
+                or is_recovered_job_finished(str(status))
+                or (local is not None and local.finished)
+            ):
+                continue
+            if status in {"assigned", "initiatingModel"}:
+                self._handle_job_state(
+                    {
+                        "type": "initiatingModel",
+                        "jobID": project_id,
+                        "imgID": img_id,
+                        "workerName": worker_name,
+                    }
+                )
+            elif status in {"jobStarted", "jobProgress"}:
+                self._handle_job_state(
+                    {
+                        "type": "jobStarted",
+                        "jobID": project_id,
+                        "imgID": img_id,
+                        "workerName": worker_name,
+                    }
+                )
+                performed = job.get("performedSteps")
+                performed = performed if isinstance(performed, (int, float)) else 0
+                if performed > 0 or isinstance(step_count, (int, float)):
+                    progress: dict[str, Any] = {
+                        "jobID": project_id,
+                        "imgID": img_id,
+                        "step": performed,
+                    }
+                    if isinstance(step_count, (int, float)):
+                        progress["stepCount"] = step_count
+                    self._handle_job_progress(progress)
+
+        if project.finished:
+            return
+        status = raw.get("status")
+        if status == "completed":
+            self._handle_job_state({"type": "jobCompleted", "jobID": project_id})
+        elif status == "errored":
+            reason = raw.get("reason") if isinstance(raw.get("reason"), str) else ""
+            reason = reason or "genfailure"
+            self._handle_job_error(
+                {
+                    "jobID": project_id,
+                    "isFromWorker": True,
+                    "error": reason,
+                    "error_message": reason,
+                }
+            )
+        elif status == "cancelled":
+            # Route through the regular error path so API-level listeners learn
+            # about the cancellation too, then settle the instance on `canceled`.
+            self._handle_job_error(
+                {
+                    "jobID": project_id,
+                    "isFromWorker": False,
+                    "error": "artistCanceled",
+                    "error_message": "artistCanceled",
+                }
+            )
+            project._update({"status": "canceled", "error": None})
+        elif status in {"queued", "active"}:
+            # Position and start estimate arrive with the server's next queue
+            # broadcast (every 500ms); only the status is known here.
+            if project.status == "pending":
+                project._update({"status": "queued"})
 
     async def cancel(self, project_id: str) -> None:
         existing = self._cancellation_requests.get(project_id)
@@ -2128,12 +2681,27 @@ class ProjectsApi(EventEmitter):
     @staticmethod
     def _cost(response: dict[str, Any]) -> dict[str, Any]:
         quote_data = response["quote"]["project"]
-        return {
+        cost = {
             "token": quote_data["costInToken"],
             "usd": quote_data["costInUSD"],
             "spark": quote_data["costInSpark"],
             "sogni": quote_data["costInSogni"],
         }
+        # Live per-model/settings benchmark data, sourced from the server's rolling
+        # sample window rather than the render-second cost abstraction (which is
+        # calibrated for pricing and can diverge sharply from wall-clock time).
+        # Both keys are omitted whenever the server has no samples yet for this
+        # exact combination, so treat their absence as "no estimate available"
+        # rather than falling back to a guess.
+        benchmark = response.get("benchmark")
+        if isinstance(benchmark, dict):
+            render = benchmark.get("estimatedRenderTimeSec")
+            total = benchmark.get("estimatedTotalTimeSec")
+            if render is not None:
+                cost["estimatedRenderSeconds"] = render
+            if total is not None:
+                cost["estimatedTotalSeconds"] = total
+        return cost
 
     async def estimate_cost(
         self, params: dict[str, Any] | None = None, **kwargs: Any
@@ -2522,10 +3090,21 @@ class ProjectsApi(EventEmitter):
         project = self._project(data.get("jobID", ""))
         _, job = self._ensure_job(data) if project is not None else (None, None)
         url = _raw_result_url(data)
+        # Unchanged meaning: `isNSFW` says the server withheld the media. The label
+        # for media that WAS delivered is `nsfwDetected`, deliberately kept out of
+        # that flag so upgrading the SDK changes no existing app's behaviour.
+        # Several apps disable the filter for their own utility renders
+        # (transitions, thumbnails, restorations) and drop anything flagged;
+        # folding the label in here would silently delete that output.
         nsfw = bool(data.get("triggeredNSFWFilter"))
+        detected = data.get("nsfwDetected") is True
+        sources = (
+            list(data.get("nsfwSources") or []) if isinstance(data.get("nsfwSources"), list) else []
+        )
         canceled = bool(data.get("userCanceled"))
-        pass_nsfw = not nsfw or project is None or project.params.get("disableNSFWFilter")
-        if not url and pass_nsfw and not canceled:
+        # Withheld media has nothing to mint. Labelled-but-delivered media does.
+        withheld = nsfw and not detected
+        if not url and not withheld and not canceled:
             with contextlib.suppress(Exception):
                 if project is not None and project.type in {"video", "audio"}:
                     download: dict[str, Any] = {
@@ -2559,6 +3138,8 @@ class ProjectsApi(EventEmitter):
                 "seed": seed if seed is not None else job.seed,
                 "resultUrl": url,
                 "isNSFW": nsfw,
+                "nsfwDetected": detected,
+                "nsfwSources": sources,
                 "userCanceled": canceled,
             }
             if isinstance(steps, (int, float)):
@@ -2570,6 +3151,8 @@ class ProjectsApi(EventEmitter):
             "jobId": data.get("imgID"),
             "resultUrl": url,
             "isNSFW": nsfw,
+            "nsfwDetected": detected,
+            "nsfwSources": sources,
             "userCanceled": canceled,
         }
         if isinstance(steps, (int, float)):
@@ -2632,13 +3215,88 @@ class ProjectsApi(EventEmitter):
         ):
             project._update({"status": "failed", "error": error})
 
+    def _should_defer_project_timeouts(self) -> bool:
+        """A transport gap is not a generation failure.
+
+        The server keeps rendering while the socket is down.
+        """
+
+        return self._transport_disconnected
+
+    def _track_task(self, coro: Any) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
     def _handle_disconnect(self, _data: Any) -> None:
+        # A dropped socket used to fail every in-flight project. It no longer
+        # does: generation continues on the Supernet and the server hands the
+        # project back on reconnect, so hold the projects alive and quiet until
+        # then.
+        self._transport_disconnected = True
+        self._clear_authenticated_timer()
         self._set_available_models([])
         for project in self._projects:
             if not project.finished:
-                project._update(
-                    {"status": "failed", "error": {"code": 0, "message": "Server disconnected"}}
-                )
+                project._keep_alive()
+
+    def _handle_connect(self, _data: Any) -> None:
+        self._transport_disconnected = False
+        self._connected_at = time.time()
+        for project in self._projects:
+            if not project.finished:
+                project._keep_alive()
+        # The socket that authenticated receives `authenticated` right away; a
+        # client sharing that socket only sees the replayed `connected`. If no
+        # frame arrives shortly, pull the snapshot instead.
+        self._clear_authenticated_timer()
+        with contextlib.suppress(RuntimeError):
+            self._authenticated_timer = asyncio.get_running_loop().call_later(
+                float(self._recovery_tuning["authenticated_grace_seconds"]),
+                self._authenticated_grace_elapsed,
+            )
+
+    def _clear_authenticated_timer(self) -> None:
+        if self._authenticated_timer is not None:
+            self._authenticated_timer.cancel()
+            self._authenticated_timer = None
+
+    def _authenticated_grace_elapsed(self) -> None:
+        self._authenticated_timer = None
+
+        async def run() -> None:
+            try:
+                await self.sync("connected")
+            except Exception:
+                _LOGGER.warning("Project sync after connect failed", exc_info=True)
+
+        self._track_task(run())
+
+    def _handle_socket_authenticated(self, data: Any) -> None:
+        self._clear_authenticated_timer()
+        if not isinstance(data, dict):
+            data = {}
+        client_type = data.get("clientType")
+        if client_type and client_type != "artist":
+            return
+        snapshot = {
+            "activeProjects": data.get("activeProjects")
+            if isinstance(data.get("activeProjects"), list)
+            else [],
+            "unclaimedCompletedProjects": data.get("unclaimedCompletedProjects")
+            if isinstance(data.get("unclaimedCompletedProjects"), list)
+            else [],
+        }
+        requested_at = self._connected_at or time.time()
+
+        async def run() -> None:
+            try:
+                await self._queue_sync(snapshot, "authenticated", requested_at)
+            except Exception:
+                _LOGGER.error("Project recovery after authentication failed", exc_info=True)
+
+        self._track_task(run())
 
     def _schedule_gc(self) -> None:
         async def collect() -> None:

@@ -48,7 +48,10 @@ async def main(args: argparse.Namespace) -> None:
             token_type="spark",
             context_images=args.reference_images,
         )
-        for url in await project.wait_for_completion(timeout=900):
+        # No client-side timeout: a timeout here would abandon a render that is
+        # still running on the Supernet. The project carries its own runtime
+        # budget, and the SDK resumes it across reconnects.
+        for url in await project.wait_for_completion():
             print(url)
 
 

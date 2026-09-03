@@ -360,7 +360,7 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
             "modelId": "wan3.0-video",
             "positivePrompt": "",
             "numberOfMedia": 1,
-            "smartDuration": True,
+            "duration": 30,
             "referenceLinkUrl": "https://example.com/reference",
             "promptExtend": False,
             "ratio": "9:16",
@@ -389,6 +389,56 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
             },
             model_options("video"),
         )
+
+    # smartDuration is retired: it reserved the 30s maximum at admission while the
+    # render usually came back far shorter. Rejected at the SDK boundary now.
+    with pytest.raises(ApiError, match="smartDuration has been retired"):
+        create_job_request_message(
+            "wan3-smart-duration",
+            {
+                "type": "video",
+                "modelId": "wan3.0-video",
+                "positivePrompt": "Let the model pick.",
+                "numberOfMedia": 1,
+                "smartDuration": True,
+            },
+            model_options("video"),
+        )
+
+    # Wan 3.0 Enhanced is its own model id, with no document/link context and no
+    # watermark control, and it accepts an end frame without a first frame.
+    enhanced = create_job_request_message(
+        "wan3-enhanced",
+        {
+            "type": "video",
+            "modelId": "wan3.0-spicy-video",
+            "positivePrompt": "Enhanced render.",
+            "numberOfMedia": 1,
+            "duration": 10,
+            "referenceImageEnd": True,
+        },
+        model_options("video"),
+    )["keyFrames"][0]
+    assert enhanced["frames"] == 301
+
+    for field, message in (
+        ("referenceLinkUrl", "does not accept document or webpage references"),
+        ("watermark", "does not expose a watermark option"),
+    ):
+        value = "https://example.com/ref" if field == "referenceLinkUrl" else False
+        with pytest.raises(ApiError, match=message):
+            create_job_request_message(
+                f"wan3-enhanced-{field}",
+                {
+                    "type": "video",
+                    "modelId": "wan3.0-spicy-video",
+                    "positivePrompt": "Enhanced render.",
+                    "numberOfMedia": 1,
+                    "duration": 10,
+                    field: value,
+                },
+                model_options("video"),
+            )
 
     seedance = create_job_request_message(
         "seedance25",
@@ -1019,6 +1069,8 @@ async def test_projects_api_emits_normalized_public_project_and_job_events() -> 
         "jobId": "job-1",
         "resultUrl": "https://cdn.example/direct.mp4",
         "isNSFW": False,
+        "nsfwDetected": False,
+        "nsfwSources": [],
         "userCanceled": False,
         "steps": 4,
         "seed": 99,
@@ -1118,3 +1170,145 @@ async def test_estimate_enhancement_cost_delegates_to_image_estimator_defaults()
         "starting_image_strength": 0.49,
     }
     assert api.estimate_cost.await_args_list[1].kwargs["starting_image_strength"] == 0.15
+
+
+def test_minimax_h3_step_counts_are_fixed_per_acceleration_tier() -> None:
+    tiers = {
+        "minimax-h3-fl2va-fp8_t2v": (20, ""),
+        "minimax-h3-fl2va-fp8_t2v_balanced": (8, " Balanced"),
+        "minimax-h3-fl2va-fp8_t2v_turbo": (4, " Turbo"),
+        "minimax-h3-fastvideo-int8_t2v_turbo": (4, " Turbo"),
+        "minimax-h3-ref2va-fp8_r2v_balanced": (8, " Balanced"),
+    }
+    for model_id, (steps, label) in tiers.items():
+        params: dict[str, Any] = {
+            "type": "video",
+            "modelId": model_id,
+            "positivePrompt": "a kite",
+            "numberOfMedia": 1,
+            "steps": steps,
+        }
+        if model_id.endswith("_r2v_balanced"):
+            params["referenceImage"] = True
+        # The matching step count is accepted.
+        create_job_request_message("h3-steps", params, model_options("video"))
+
+        with pytest.raises(ApiError, match=f"MiniMax H3{label} steps are fixed at {steps}"):
+            create_job_request_message(
+                "h3-steps-bad", {**params, "steps": steps + 1}, model_options("video")
+            )
+
+
+def test_minimax_h3_reference_video_durations_are_optional_preflight_hints() -> None:
+    params: dict[str, Any] = {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_r2v",
+        "positivePrompt": "a subject walks",
+        "numberOfMedia": 1,
+        "referenceImage": True,
+        "referenceVideo": True,
+    }
+    # Socket probes the uploaded media, so omitting the hints is valid.
+    create_job_request_message("h3-r2v", params, model_options("video"))
+
+    # When supplied they are still validated early.
+    with pytest.raises(ApiError, match="must contain one entry for each uploaded reference video"):
+        create_job_request_message(
+            "h3-r2v-bad",
+            {**params, "referenceVideoDurations": [3.0, 4.0]},
+            model_options("video"),
+        )
+    with pytest.raises(ApiError, match=r"referenceVideoDurations\[0\] must be between 2 and 15"):
+        create_job_request_message(
+            "h3-r2v-range",
+            {**params, "referenceVideoDurations": [0.5]},
+            model_options("video"),
+        )
+
+
+def test_cost_estimates_carry_live_benchmark_seconds_only_when_the_server_has_samples() -> None:
+    quote = {
+        "quote": {
+            "project": {
+                "costInToken": "1",
+                "costInUSD": "2",
+                "costInSpark": "3",
+                "costInSogni": "4",
+            }
+        }
+    }
+    assert ProjectsApi._cost(quote) == {
+        "token": "1",
+        "usd": "2",
+        "spark": "3",
+        "sogni": "4",
+    }
+
+    benchmarked = ProjectsApi._cost(
+        {
+            **quote,
+            "benchmark": {
+                "estimatedRenderTimeSec": 91.5,
+                "medianRenderTimeSec": 88,
+                "sampleCount": 42,
+                "confidence": 0.8,
+                "estimatedWaitTimeSec": 30,
+                "estimatedTotalTimeSec": 121.5,
+            },
+        }
+    )
+    assert benchmarked["estimatedRenderSeconds"] == 91.5
+    assert benchmarked["estimatedTotalSeconds"] == 121.5
+
+    # A render-time-only benchmark omits the total rather than guessing one.
+    render_only = ProjectsApi._cost({**quote, "benchmark": {"estimatedRenderTimeSec": 10}})
+    assert render_only["estimatedRenderSeconds"] == 10
+    assert "estimatedTotalSeconds" not in render_only
+
+
+async def test_labelled_sensitive_media_is_delivered_while_withheld_media_is_not() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    project = Project(
+        {"type": "image", "modelId": "flux1-schnell-fp8", "numberOfMedia": 2},
+        api,
+    )
+    api._projects.append(project)
+
+    # Filter OFF: the signal fired but the media was delivered and merely labelled.
+    await api._apply_job_result(
+        {
+            "jobID": project.id,
+            "imgID": "JOB-LABELLED",
+            "resultUrl": "https://cdn.example/labelled.png",
+            "nsfwDetected": True,
+            "nsfwSources": ["image"],
+        }
+    )
+    labelled = project.job("JOB-LABELLED")
+    assert labelled is not None
+    # isNSFW keeps its historical meaning so upgrading changes nothing.
+    assert labelled.is_nsfw is False
+    assert labelled.nsfw_detected is True
+    assert labelled.nsfw_sources == ["image"]
+    assert labelled.is_withheld is False
+    assert labelled.has_result_media is True
+    assert labelled.result_url == "https://cdn.example/labelled.png"
+
+    # Filter ON: the server withheld the media and there is nothing to fetch.
+    await api._apply_job_result(
+        {
+            "jobID": project.id,
+            "imgID": "JOB-WITHHELD",
+            "triggeredNSFWFilter": True,
+        }
+    )
+    withheld = project.job("JOB-WITHHELD")
+    assert withheld is not None
+    assert withheld.is_nsfw is True
+    assert withheld.nsfw_detected is False
+    assert withheld.is_withheld is True
+    assert withheld.has_result_media is False
+    assert withheld.result_url is None
+    with pytest.raises(RuntimeError, match="did not pass NSFW filter"):
+        await withheld.enhance("light")

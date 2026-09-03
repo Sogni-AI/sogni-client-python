@@ -142,17 +142,77 @@ The client also exposes:
 Python `snake_case` arguments are preferred. Common JavaScript-style aliases
 remain accepted to simplify migration.
 
+## Resuming projects after a reconnect
+
+Generation keeps running on the Supernet while your socket is down. A dropped
+connection is a transport gap, not a failure: tracked projects stay alive, the
+client reconnects with capped exponential backoff for as long as the session is
+authenticated, and on every `authenticated` handshake it reconciles with the
+server. Whatever the client missed is replayed through the normal `project` /
+`job` events, so listeners attached before the gap keep receiving updates and
+`wait_for_completion()` still resolves.
+
+Projects the server knows about but this client does not (a restart, a second
+client sharing the account, cleared local state) are rebuilt as tracked
+`Project` instances with `project.recovered is True`. Their `params` are
+reconstructed from the original request; asset inputs are not recoverable.
+
+```python
+# Every reconciliation reports what changed. `snapshot` is the raw server view,
+# for apps that keep their own project store.
+sogni.projects.on("projectsSynced", lambda r: print(r["reason"], r["active"], r["lost"]))
+
+# In-flight projects this client was not tracking; they are tracked now, so
+# `project` / `job` events follow as usual.
+sogni.projects.on("activeProjectsRecovered", lambda projects: ...)
+
+# Projects that finished while this client was away, result URLs already resolved.
+sogni.projects.on("completedProjectsRecovered", lambda projects: ...)
+
+# Ask for a fresh reconciliation yourself, e.g. after waking from sleep.
+await sogni.projects.sync()
+```
+
+A project the server no longer lists is looked up on the REST API (which only
+stores finished projects) a few times before it is declared lost; it then fails
+with an error where `is_project_lost_error(error)` is `True`. Apps that persist
+project ids themselves can run the same lookup with
+`sogni.projects.resolve_missing(ids)`.
+
+The same snapshot answers "is anything rendering elsewhere on this account?" —
+`sogni.projects.list_projects_elsewhere()` returns those in-flight projects
+read-only (`appSource`, `status`, `model`, per-job step counts). The socket
+rate-limits it to 20 calls per 10s per account, so poll on the order of tens of
+seconds.
+
+Recovery is per app instance: the server hands projects back to the `appId` that
+created them, so persist your `appId` and reuse it across restarts.
+
+## Sensitive content
+
+`job.is_nsfw` means the server **withheld** the media: the render ran with the
+Sensitive Content Filter on, a signal fired, and there is nothing to download.
+When the artist turns the filter off the media is delivered and merely labelled
+— that case reports `job.nsfw_detected` with `job.nsfw_sources` (`prompt`
+and/or `image`), has a `result_url` like any other result, and leaves
+`job.is_nsfw` false. Use `job.has_result_media` (or `job.is_withheld`) to decide
+whether media exists, and the viewer's own filter setting to decide whether to
+blur it.
+
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.21.3`. The
+This release tracks the current TypeScript source at `5.27.1`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 25 hosted-tool
 schemas.
 
-Current model and transport coverage includes LTX 2.5, MiniMax H3 and H3 Turbo,
-Seedance 2.5, Wan 3, RTX VSR, MiniMax Music 3, LoRA catalog discovery, queue
-start estimates, confirmed cancellation, and connection/workload attribution.
+Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
+tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
+FastH3 `fastvideo-int8` Turbo engine), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
+RTX VSR, MiniMax Music 3, LoRA catalog discovery, queue start estimates,
+live-benchmarked render/total time on cost quotes, in-flight project recovery
+across reconnects, confirmed cancellation, and connection/workload attribution.
 
 The Python API is async-first; `AsyncSogniClient` is an alias of
 `SogniClient`, not a synchronous wrapper. Browser-only cookie coordination and

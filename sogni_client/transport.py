@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
@@ -27,6 +28,12 @@ from .utils import b64_json_decode, b64_json_encode, drop_none
 LIB_VERSION = "5.21.3"
 PROTOCOL_VERSION = "3.0.0"
 SWITCH_CONNECTION = 4015
+# Reconnect backoff for recoverable socket drops. Attempts continue for as long
+# as the session stays authenticated: an in-flight generation survives a network
+# blip, a sleeping laptop, or a socket deploy, and the server hands it back on
+# reconnect.
+WS_RECONNECT_BASE_DELAY = 1.0
+WS_RECONNECT_MAX_DELAY = 15.0
 
 
 class RestClient:
@@ -427,7 +434,7 @@ class ApiClient(EventEmitter):
         )
         self.socket_enabled = not disable_socket
         self._disposed = False
-        self._reconnect_attempts = 5
+        self._reconnect_attempt = 0
         self._reconnect_task: asyncio.Task[None] | None = None
         self.auth.on("updated", self._on_auth_updated)
         self.socket.on("connected", self._on_socket_connected)
@@ -481,36 +488,62 @@ class ApiClient(EventEmitter):
             asyncio.create_task(self.socket.disconnect())
 
     def _on_socket_connected(self, data: Any) -> None:
-        self._reconnect_attempts = 5
+        self._reconnect_attempt = 0
+        self._clear_reconnect()
         self.emit("connected", data)
 
     def _on_socket_disconnected(self, data: Any) -> None:
         code = int(data.get("code") or 0) if isinstance(data, dict) else 0
         if self._disposed or not self.auth.is_authenticated or code == 1000:
+            self._clear_reconnect()
             self.emit("disconnected", data)
             return
         if code == SWITCH_CONNECTION:
+            self._clear_reconnect()
             self.emit("disconnected", data)
             return
         if code == 0 or 4000 <= code < 5000:
+            self._clear_reconnect()
             self.auth.clear()
             self.emit("disconnected", data)
             return
-        if self._reconnect_attempts <= 0:
-            self._reconnect_attempts = 5
-            self.emit("disconnected", data)
-            return
-        self._reconnect_attempts -= 1
-        self.emit("connecting", {"network": self.socket.supernet_type})
-        self._reconnect_task = asyncio.create_task(self._reconnect())
+        # Recoverable drop: keep trying with capped exponential backoff while the
+        # session is authenticated. Generation keeps running on the Supernet while
+        # the socket is down, and the server hands the project back on reconnect,
+        # so consumers see `connecting` here; `disconnected` is reserved for
+        # terminal outcomes.
+        self._schedule_reconnect()
 
-    async def _reconnect(self) -> None:
-        await asyncio.sleep(1)
-        if not self._disposed and self.auth.is_authenticated and self.socket_enabled:
-            try:
-                await self.socket.connect()
-            except Exception:
-                self._on_socket_disconnected({"code": 1006, "reason": "Reconnect failed"})
+    def _clear_reconnect(self) -> None:
+        task, self._reconnect_task = self._reconnect_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _schedule_reconnect(self) -> None:
+        self._clear_reconnect()
+        attempt = self._reconnect_attempt
+        self._reconnect_attempt += 1
+        base = min(WS_RECONNECT_BASE_DELAY * 2**attempt, WS_RECONNECT_MAX_DELAY)
+        delay = base * (0.8 + random.random() * 0.4)
+        self.emit("connecting", {"network": self.socket.supernet_type})
+        self._reconnect_task = asyncio.create_task(self._reconnect(delay))
+
+    async def _reconnect(self, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
+        if self._disposed or not self.auth.is_authenticated or not self.socket_enabled:
+            return
+        try:
+            await self.socket.connect()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("sogni_client").warning(
+                "WebSocket reconnect attempt failed", exc_info=True
+            )
+            self._schedule_reconnect()
 
     async def set_socket_event_subscriptions(self, update: dict[str, Any]) -> None:
         await self.socket.set_socket_event_subscriptions(update)
@@ -519,9 +552,10 @@ class ApiClient(EventEmitter):
 
     async def aclose(self) -> None:
         self._disposed = True
-        if self._reconnect_task is not None:
-            self._reconnect_task.cancel()
-            await asyncio.gather(self._reconnect_task, return_exceptions=True)
+        task, self._reconnect_task = self._reconnect_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await self.socket.aclose()
         await self.rest.aclose()
         self.auth.clear()

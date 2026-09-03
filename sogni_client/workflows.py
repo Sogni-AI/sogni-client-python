@@ -19,6 +19,25 @@ from .utils import new_id, parse_sse_chunk
 _MISSING = object()
 _TERMINAL_WORKFLOW_STATUSES = {"completed", "failed", "cancelled"}
 
+#: Why a ``waiting_for_user`` workflow is paused, as reported on a workflow
+#: record's ``waitingReason`` field. A record also carries
+#: ``awaitingCostApproval``, true only when the workflow's confirm-cost endpoint
+#: is the valid resolution -- which distinguishes cost approval from every other
+#: user pause without having to pattern-match the reason string.
+CREATIVE_WORKFLOW_WAITING_REASONS = frozenset(
+    {
+        "ask_clarifying_question",
+        "select_media_required",
+        "cost_approval_required",
+        "cost_reauthorization_required",
+        "safety_review_required",
+        "workflow_user_input_required",
+        "insufficient_credit",
+        "permission_required",
+        "other",
+    }
+)
+
 
 def _attribution_headers(
     client: Any, app_source: str | None, override: Any, operation_id: str
@@ -477,6 +496,7 @@ WorkflowTemplatesApi = CreativeWorkflowTemplatesApi
 
 
 __all__ = [
+    "CREATIVE_WORKFLOW_WAITING_REASONS",
     "CreativeWorkflowTemplatesApi",
     "CreativeWorkflowsApi",
     "WorkflowTemplatesApi",

@@ -40,6 +40,14 @@ from .projects import (
     ProjectsApi,
     create_job_request_message,
 )
+from .recovery import (
+    PROJECT_LOST_ERROR,
+    PROJECT_LOST_ORIGINAL_CODE,
+    is_project_lost_error,
+    isProjectLostError,
+    project_params_from_recovered_project,
+    projectParamsFromRecoveredProject,
+)
 from .replay import ReplayApi
 from .stats import StatsApi
 from .utils import (
@@ -47,11 +55,18 @@ from .utils import (
     parse_creative_workflow_sse_chunk,
     parseCreativeWorkflowSseChunk,
 )
-from .workflows import CreativeWorkflowsApi, CreativeWorkflowTemplatesApi
+from .workflows import (
+    CREATIVE_WORKFLOW_WAITING_REASONS,
+    CreativeWorkflowsApi,
+    CreativeWorkflowTemplatesApi,
+)
 
-__version__ = "5.21.3"
+__version__ = "5.27.1"
 
 __all__ = [
+    "CREATIVE_WORKFLOW_WAITING_REASONS",
+    "PROJECT_LOST_ERROR",
+    "PROJECT_LOST_ORIGINAL_CODE",
     "SUBSCRIPTION_ERROR_CODES",
     "VIDEO_WORKFLOW_ASSETS",
     "AccountApi",
@@ -82,8 +97,10 @@ __all__ = [
     "build_sogni_attribution_headers",
     "buildSogniAttributionHeaders",
     "create_job_request_message",
+    "is_project_lost_error",
     "is_sogni_tool_call",
     "is_subscription_limit_error",
+    "isProjectLostError",
     "isSogniToolCall",
     "isSubscriptionLimitError",
     "normalize_connection_attribution",
@@ -92,6 +109,8 @@ __all__ = [
     "parse_tool_call_arguments",
     "parseCreativeWorkflowSseChunk",
     "parseToolCallArguments",
+    "project_params_from_recovered_project",
+    "projectParamsFromRecoveredProject",
     "resolve_workload_attribution",
     "resolveWorkloadAttribution",
     "workload_attribution_to_wire_fields",

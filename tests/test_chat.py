@@ -199,6 +199,41 @@ def test_sogni_tools_expose_all_canonical_names_and_helpers() -> None:
 def test_direct_video_to_video_does_not_route_wan3_as_an_edit_model() -> None:
     assert ChatToolsApi._resolve_model("video_to_video", {"videoModel": "wan3"}) is None
     assert ChatToolsApi._resolve_model("video_to_video", {"videoModel": "wan3.0-video"}) is None
+    # Wan 3.0 Enhanced is the same family and is equally not a v2v edit model.
+    assert (
+        ChatToolsApi._resolve_model("video_to_video", {"videoModel": "wan3.0-spicy-video"}) is None
+    )
+
+
+def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -> None:
+    def t2v(selector: str) -> str | None:
+        return ChatToolsApi._resolve_model("generate_video", {"videoModel": selector})
+
+    def i2v(selector: str) -> str | None:
+        return ChatToolsApi._resolve_model(
+            "generate_video", {"videoModel": selector, "referenceImageIndices": [0]}
+        )
+
+    # Existing Turbo aliases must stay on LightX2V for compatibility.
+    assert t2v("minimax-h3-turbo") == "minimax-h3-fl2va-fp8_t2v_turbo"
+    assert i2v("minimax-h3-turbo") == "minimax-h3-fl2va-fp8_i2v_turbo"
+    assert i2v("minimax-h3-flf2v-turbo") == "minimax-h3-fl2va-fp8_flf2v_turbo"
+
+    # FastH3 is the separate FastVideo VSA four-step engine.
+    assert t2v("minimax-h3-fasth3-turbo") == "minimax-h3-fastvideo-int8_t2v_turbo"
+    assert t2v("minimax-h3-fasth3-t2v-turbo") == "minimax-h3-fastvideo-int8_t2v_turbo"
+    assert i2v("minimax-h3-fasth3-turbo") == "minimax-h3-fastvideo-int8_i2v_turbo"
+    assert i2v("minimax-h3-fasth3-flf2v-turbo") == "minimax-h3-fastvideo-int8_flf2v_turbo"
+
+    # Balanced is the 8-step tier.
+    assert t2v("minimax-h3-balanced") == "minimax-h3-fl2va-fp8_t2v_balanced"
+    assert i2v("minimax-h3-balanced") == "minimax-h3-fl2va-fp8_i2v_balanced"
+    assert i2v("minimax-h3-flf2v-balanced") == "minimax-h3-fl2va-fp8_flf2v_balanced"
+    assert t2v("minimax-h3-r2v-balanced") == "minimax-h3-ref2va-fp8_r2v_balanced"
+
+    # FastH3 has no r2v mode, and t2v-only aliases must not leak into the
+    # image-conditioned table.
+    assert i2v("minimax-h3-t2v-turbo") == "minimax-h3-t2v-turbo"
 
 
 def test_direct_hosted_tool_schemas_match_standalone_golden_fingerprints() -> None:
