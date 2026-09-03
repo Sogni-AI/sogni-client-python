@@ -1,0 +1,68 @@
+# Publishes to PyPI when a v* tag is pushed.
+#
+# Uses PyPI Trusted Publishing (OpenID Connect): there is no API token stored
+# anywhere. GitHub proves the workflow's identity to PyPI directly, so nothing
+# can be leaked from repo secrets and nothing needs rotating.
+#
+# This file does nothing until BOTH are true:
+#   1. A trusted publisher for this repo exists on PyPI (owner Sogni-AI,
+#      repository sogni-client-python, workflow publish.yml, environment pypi).
+#   2. A tag matching v* is pushed.
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Verify the tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          packaged="$(ls dist/*.tar.gz | sed -E 's/.*-([0-9][^-]*)\.tar\.gz/\1/')"
+          if [ "$tag" != "$packaged" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match packaged version $packaged." >&2
+            echo "Update version in pyproject.toml and sogni_client/__init__.py first." >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # The environment name must match the one registered with the trusted
+    # publisher on PyPI. Add required reviewers to it in GitHub repo settings
+    # if you want a manual approval gate before anything is published.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sogni-client
+    permissions:
+      # Mandatory for Trusted Publishing; this is what mints the OIDC token.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
