@@ -42,7 +42,7 @@ async def main() -> None:
     async with await SogniClient.create(api_key=os.environ["SOGNI_API_KEY"]) as sogni:
         project = await sogni.projects.create(
             type="image",
-            model_id="z_image_turbo_bf16",
+            model_id="krea2_turbo_fp8_scaled",
             positive_prompt="A tiny observatory above a sea of clouds",
             negative_prompt="text, watermark",
             number_of_media=1,
@@ -59,6 +59,11 @@ asyncio.run(main())
 `SogniClient.create()` generates a unique application ID when one is not
 provided. Pass `app_id="..."` when you deliberately need a stable socket
 identity.
+
+The example uses **Krea 2 Turbo** (`krea2_turbo_fp8_scaled`) because it is the
+only model an account's free monthly render credits can be spent on over the
+API — every other model needs paid credits, so a brand-new key would otherwise
+fail on its first call. It is an 8-step model, hence `steps=8`.
 
 ## Edit an image with Krea 2 Identity Edit
 
@@ -188,6 +193,32 @@ seconds.
 Recovery is per app instance: the server hands projects back to the `appId` that
 created them, so persist your `appId` and reuse it across restarts.
 
+## Announcements
+
+Admin-authored in-app announcements — maintenance notices, launches — arrive on
+the `appAlert` socket event. It is opt-in, so an integration that does not ask
+for it is unaffected:
+
+```python
+sogni = await SogniClient.create(
+    api_key=os.environ["SOGNI_API_KEY"],
+    socket_event_subscriptions={"appAlert": True},
+)
+
+sogni.api_client.on("appAlert", lambda announcement: print(announcement["title"]))
+
+# What is live right now, for a client that just started up.
+for announcement in await sogni.announcements.active("my-app"):
+    print(announcement["title"], announcement["bodyMarkdown"])
+
+# Dismissal is stored per ACCOUNT, so it sticks across the user's devices.
+await sogni.announcements.dismiss(announcement["id"])
+```
+
+`appAlert` is **not** at-most-once: a live pinned announcement is re-sent on
+every reconnect, so a user who was offline when it published still receives it.
+Deduplicate on `id`.
+
 ## Sensitive content
 
 `job.is_nsfw` means the server **withheld** the media: the render ran with the
@@ -201,7 +232,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.27.1`. The
+This release tracks the current TypeScript source at `5.28.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 25 hosted-tool
@@ -212,7 +243,8 @@ tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, LoRA catalog discovery, queue start estimates,
 live-benchmarked render/total time on cost quotes, in-flight project recovery
-across reconnects, confirmed cancellation, and connection/workload attribution.
+across reconnects, confirmed cancellation, connection/workload attribution, and
+admin announcements (`appAlert` plus the announcements read/dismiss pair).
 
 The Python API is async-first; `AsyncSogniClient` is an alias of
 `SogniClient`, not a synchronous wrapper. Browser-only cookie coordination and

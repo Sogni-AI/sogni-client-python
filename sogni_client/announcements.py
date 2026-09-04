@@ -4,9 +4,9 @@ Port of `src/Announcements/index.ts` in the TypeScript client.
 
 Live delivery is the ``appAlert`` socket event. Opt in when constructing the
 client (``socket_event_subscriptions={"appAlert": True}``) and listen with
-``client.on("appAlert", handler)``; without the opt-in the server sends the same
-announcement as a plain ``toastMessage`` instead, so no existing integration
-breaks. A client never receives both renderings of one announcement.
+``client.api_client.on("appAlert", handler)``; without the opt-in the server
+sends the same announcement as a plain ``toastMessage`` instead, so no existing
+integration breaks. A client never receives both renderings of one announcement.
 
 ``appAlert`` is NOT at-most-once: a live pinned announcement is re-sent on every
 reconnect while its window is open, so a user who was offline when it published

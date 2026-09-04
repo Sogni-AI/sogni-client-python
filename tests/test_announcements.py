@@ -80,3 +80,25 @@ async def test_dismiss_posts_to_the_escaped_id() -> None:
 
     assert rest.calls[0]["method"] == "POST"
     assert rest.calls[0]["path"] == "/v1/announcements/a%2F1/dismiss"
+
+
+def test_api_client_exposes_the_documented_appalert_listener_surface() -> None:
+    """The README tells integrators to listen on `client.api_client.on(...)`.
+
+    ApiClient re-emits every socket frame by its `type` (transport.py), so what
+    this pins is that `api_client` really is an emitter and dispatches the event
+    name by string — the one line of that contract a refactor could quietly break.
+    """
+    from sogni_client.events import EventEmitter
+    from sogni_client.transport import ApiClient
+
+    assert issubclass(ApiClient, EventEmitter)
+
+    emitter = EventEmitter()
+    seen: list[dict[str, Any]] = []
+    emitter.on("appAlert", seen.append)
+    emitter.emit("appAlert", {"id": "a1", "kind": "banner", "title": "Maintenance"})
+    # A listener for a different event must not receive it.
+    emitter.emit("toastMessage", {"id": "other"})
+
+    assert [item["id"] for item in seen] == ["a1"]

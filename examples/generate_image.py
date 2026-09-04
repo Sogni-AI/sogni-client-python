@@ -1,4 +1,8 @@
-"""Generate one image with an API key from the environment."""
+"""Generate one image with an API key from the environment.
+
+Uses Krea 2 Turbo: it is the only model free monthly render credits can be spent
+on over the API, so this runs on a brand-new key without paid credits.
+"""
 
 import asyncio
 import os
@@ -11,7 +15,7 @@ async def main() -> None:
     async with await SogniClient.create(api_key=api_key) as sogni:
         project = await sogni.projects.create(
             type="image",
-            model_id="z_image_turbo_bf16",
+            model_id="krea2_turbo_fp8_scaled",
             positive_prompt="A glass greenhouse drifting above Singapore at dawn",
             negative_prompt="text, watermark",
             number_of_media=1,
