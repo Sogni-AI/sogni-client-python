@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from .account import AccountApi
+from .announcements import AnnouncementsApi
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
 from .chat import ChatApi
 from .projects import ProjectsApi
@@ -37,6 +38,7 @@ class SogniClient:
         self.chat = ChatApi(api_client, self.projects)
         self.workflows = CreativeWorkflowsApi(api_client)
         self.replay = ReplayApi(api_client)
+        self.announcements = AnnouncementsApi(api_client)
         self._closed = False
 
     @classmethod

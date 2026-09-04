@@ -1,6 +1,7 @@
 """Async Python SDK for the Sogni Supernet."""
 
 from .account import AccountApi, CurrentAccount
+from .announcements import AnnouncementsApi
 from .attribution import (
     build_sogni_attribution_headers,
     buildSogniAttributionHeaders,
@@ -70,6 +71,7 @@ __all__ = [
     "SUBSCRIPTION_ERROR_CODES",
     "VIDEO_WORKFLOW_ASSETS",
     "AccountApi",
+    "AnnouncementsApi",
     "ApiError",
     "ApiKeyAuthManager",
     "AsyncSogniClient",
