@@ -12,7 +12,11 @@ from sogni_client import SogniClient
 
 async def main() -> None:
     api_key = os.environ["SOGNI_API_KEY"]
-    async with await SogniClient.create(api_key=api_key) as sogni:
+    async with await SogniClient.create(
+        api_key=api_key,
+        app_id="sogni-python-image-example",
+        app_source="sogni-python-examples",
+    ) as sogni:
         project = await sogni.projects.create(
             type="image",
             model_id="krea2_turbo_fp8_scaled",

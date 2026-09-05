@@ -35,7 +35,11 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main(args: argparse.Namespace) -> None:
-    async with await SogniClient.create(api_key=os.environ["SOGNI_API_KEY"]) as sogni:
+    async with await SogniClient.create(
+        api_key=os.environ["SOGNI_API_KEY"],
+        app_id="sogni-python-krea-edit-example",
+        app_source="sogni-python-examples",
+    ) as sogni:
         project = await sogni.projects.create(
             type="image",
             model_id="krea2_identity_edit_v1_2",

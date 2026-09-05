@@ -4,7 +4,6 @@ import asyncio
 import base64
 import json
 import time
-import uuid
 from typing import Any
 
 import pytest
@@ -155,7 +154,7 @@ async def test_create_maps_javascript_config_and_wires_all_public_api_groups() -
 
 
 @pytest.mark.asyncio
-async def test_create_generates_uuid_accepts_camel_keywords_and_forwards_socket_factory() -> None:
+async def test_rest_only_create_uses_inert_app_id_and_accepts_camel_keywords() -> None:
     async def socket_factory(*_args: Any, **_kwargs: Any) -> None:
         return None
 
@@ -167,7 +166,7 @@ async def test_create_generates_uuid_accepts_camel_keywords_and_forwards_socket_
     )
 
     transport = FakeApiClient.instances[0]
-    assert uuid.UUID(transport.kwargs["app_id"])
+    assert transport.kwargs["app_id"] == "rest-only"
     assert transport.kwargs["app_source"] == "cli"
     assert transport.kwargs["auth_type"] == "cookies"
     assert transport.kwargs["disable_socket"] is True
@@ -175,6 +174,14 @@ async def test_create_generates_uuid_accepts_camel_keywords_and_forwards_socket_
     assert isinstance(transport.auth, CookieAuthManager)
 
     await sdk.dispose()
+
+
+@pytest.mark.asyncio
+async def test_socket_create_requires_stable_app_id() -> None:
+    with pytest.raises(ValueError, match="app_id is required"):
+        await SogniClient.create()
+
+    assert FakeApiClient.instances == []
 
 
 @pytest.mark.asyncio

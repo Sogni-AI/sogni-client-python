@@ -39,7 +39,11 @@ from sogni_client import SogniClient
 
 
 async def main() -> None:
-    async with await SogniClient.create(api_key=os.environ["SOGNI_API_KEY"]) as sogni:
+    async with await SogniClient.create(
+        api_key=os.environ["SOGNI_API_KEY"],
+        app_id="my-image-app",
+        app_source="my-app",
+    ) as sogni:
         project = await sogni.projects.create(
             type="image",
             model_id="krea2_turbo_fp8_scaled",
@@ -56,9 +60,10 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`SogniClient.create()` generates a unique application ID when one is not
-provided. Pass `app_id="..."` when you deliberately need a stable socket
-identity.
+Socket clients require a stable `app_id`. Generate it once per application
+installation and persist it across process restarts; do not generate a fresh
+UUID each time the application starts. REST-only clients can omit it by passing
+`disable_socket=True`.
 
 The example uses **Krea 2 Turbo** (`krea2_turbo_fp8_scaled`) because it is the
 only model an account's free monthly render credits can be spent on over the
@@ -202,6 +207,8 @@ for it is unaffected:
 ```python
 sogni = await SogniClient.create(
     api_key=os.environ["SOGNI_API_KEY"],
+    app_id="my-announcements-app",
+    app_source="my-app",
     socket_event_subscriptions={"appAlert": True},
 )
 
@@ -232,7 +239,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.28.0`. The
+This release tracks the current TypeScript source at `5.29.2`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 25 hosted-tool
@@ -259,7 +266,7 @@ default test suite.
 ## Token authentication
 
 ```python
-sogni = await SogniClient.create(auth_type="token")
+sogni = await SogniClient.create(app_id="my-token-app", auth_type="token")
 await sogni.set_tokens(token=access_token, refresh_token=refresh_token)
 ```
 

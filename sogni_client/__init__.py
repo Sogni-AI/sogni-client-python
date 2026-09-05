@@ -62,7 +62,7 @@ from .workflows import (
     CreativeWorkflowTemplatesApi,
 )
 
-__version__ = "5.29.1"
+__version__ = "5.29.2"
 
 __all__ = [
     "CREATIVE_WORKFLOW_WAITING_REASONS",

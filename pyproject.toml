@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sogni-client"
-version = "5.29.1"
+version = "5.29.2"
 description = "Async Python SDK for image, video, audio, and LLM inference on the Sogni Supernet"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -65,8 +64,8 @@ class SogniClient:
         """Create and authenticate a client.
 
         Both Python names (``api_key``) and JavaScript SDK names
-        (``apiKey``) are accepted. If ``app_id`` is omitted, a UUID is created;
-        callers that need a stable server identity should pass one explicitly.
+        (``apiKey``) are accepted. Socket clients require an ``app_id`` that is
+        persisted across restarts. REST-only clients may omit it.
         """
 
         values = dict(config or {})
@@ -78,7 +77,7 @@ class SogniClient:
                     return values[name]
             return current
 
-        app_id = pick(app_id, "app_id", "appId") or str(uuid.uuid4())
+        app_id = pick(app_id, "app_id", "appId")
         app_source = pick(app_source, "app_source", "appSource")
         attribution = pick(attribution, "attribution")
         network = pick(network, "network")
@@ -101,6 +100,12 @@ class SogniClient:
             auth_type = "cookies"
         if auth_type not in {"token", "cookies", "apiKey"}:
             raise ValueError("auth_type must be 'token', 'cookies', or 'apiKey'")
+        app_id = app_id.strip() if isinstance(app_id, str) else ""
+        if not app_id:
+            if disable_socket:
+                app_id = "rest-only"
+            else:
+                raise ValueError("app_id is required when WebSocket connections are enabled")
 
         transport_kwargs: dict[str, Any] = {
             "base_url": rest_endpoint,
