@@ -1588,10 +1588,18 @@ class Project(DataEntity):
 
         if self.status == "completed":
             return self.result_urls
-        if self.status == "failed":
+        if self.status in {"failed", "canceled"}:
             if self._completion.done():
                 return await self._completion
-            raise ProjectError(self.error or {})
+            raise ProjectError(
+                self.error
+                or {
+                    "code": 0,
+                    "message": "Project canceled"
+                    if self.status == "canceled"
+                    else "Project failed",
+                }
+            )
         if timeout is None:
             return await self._completion
         return await asyncio.wait_for(asyncio.shield(self._completion), timeout)
@@ -1636,11 +1644,15 @@ class Project(DataEntity):
                 if not self._completion.done():
                     self._completion.set_result(self.result_urls)
                 self.emit("completed", self.result_urls)
-        if "status" in keys and self.status == "failed":
-            error = self.error or {"code": 0, "message": "Project failed"}
+        if "status" in keys and self.status in {"failed", "canceled"}:
+            error = self.error or {
+                "code": 0,
+                "message": "Project canceled" if self.status == "canceled" else "Project failed",
+            }
             if not self._completion.done():
                 self._completion.set_exception(ProjectError(error))
-            self.emit("failed", error)
+            if self.status == "failed":
+                self.emit("failed", error)
 
     def _update(self, delta: dict[str, Any]) -> None:
         self._keep_alive()
@@ -1789,6 +1801,18 @@ class Project(DataEntity):
         status = _PROJECT_STATUS_MAP.get(data.get("status"))
         if status:
             delta["status"] = status
+        if status in {"failed", "canceled"}:
+            reason = data.get("reason")
+            reason = reason.strip() if isinstance(reason, str) else ""
+            code = int(reason) if reason.isascii() and reason.isdigit() and len(reason) <= 16 else 0
+            delta["error"] = self.error or {
+                "code": code if code <= 9007199254740991 else 0,
+                "message": reason
+                or ("Project canceled" if status == "canceled" else "Project failed"),
+            }
+            for job in self._jobs:
+                if not job.finished:
+                    job._update({"status": status, "error": delta["error"]})
         self._update(delta)
 
     def to_dict(self) -> dict[str, Any]:

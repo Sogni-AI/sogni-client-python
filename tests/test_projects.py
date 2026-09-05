@@ -890,6 +890,38 @@ async def test_project_failure_preserves_structured_subscription_error() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,reason", [("cancelled", "artistCanceled"), ("errored", "Generation failed")]
+)
+async def test_project_rest_terminal_status_settles_completion(status: str, reason: str) -> None:
+    api = ProjectsApi(FakeClient())
+    project = Project({"type": "image", "numberOfMedia": 1, "steps": 4}, api)
+    api.get = AsyncMock(
+        return_value={"status": status, "reason": reason, "completedWorkerJobs": []}
+    )
+    waiting = asyncio.create_task(project.wait_for_completion())
+    await project._sync_to_server()
+    with pytest.raises(ProjectError, match=reason):
+        await waiting
+    with pytest.raises(ProjectError, match=reason):
+        await project.wait_for_completion()
+    assert project.finished
+    assert project._timeout_handle is None
+
+
+@pytest.mark.asyncio
+async def test_live_cancellation_settles_completion_without_a_failed_event() -> None:
+    project = Project({"type": "image", "numberOfMedia": 1}, ProjectsApi(FakeClient()))
+    failed = []
+    project.on("failed", failed.append)
+    waiting = asyncio.create_task(project.wait_for_completion())
+    project._update({"status": "canceled"})
+    with pytest.raises(ProjectError, match="Project canceled"):
+        await waiting
+    assert failed == []
+
+
+@pytest.mark.asyncio
 async def test_project_rest_sync_recovers_completed_jobs_and_direct_result_aliases() -> None:
     client = FakeClient()
     api = ProjectsApi(client)
