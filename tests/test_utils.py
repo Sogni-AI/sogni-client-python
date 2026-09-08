@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
+from pathlib import Path
 
 import pytest
+import tomllib
 
 from sogni_client.utils import (
     PIXAL3D_IMAGE_TO_3D_MODEL_ID,
@@ -282,4 +284,9 @@ def test_capability_surface_is_exported_from_the_package_root() -> None:
         assert name in sogni_client.__all__, f"{name} is not exported from the package root"
         assert getattr(sogni_client, name) is not None
 
-    assert sogni_client.__version__ == "5.34.0"
+    # Pin the invariant, not the literal: `__version__` and pyproject must agree,
+    # because .github/workflows/publish.yml verifies the tag against the packaged
+    # version and a mismatch fails the PyPI release. Asserting a hard-coded
+    # number here instead would break on every routine bump.
+    pyproject = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+    assert sogni_client.__version__ == pyproject["project"]["version"]
