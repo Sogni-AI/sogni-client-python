@@ -49,6 +49,7 @@ from .utils import (
     is_model_artifact_model,
     is_seedance25_model,
     is_seedance_model,
+    is_segmentation_model,
     is_video_model,
     is_wan3_enhanced_model,
     is_wan3_model,
@@ -1231,7 +1232,10 @@ def create_job_request_message(
                 keyframe["hasReferenceVideo"] = True
         if params.get("referenceAudioIdentity"):
             keyframe["hasReferenceAudioIdentity"] = True
-        if params.get("referenceMask") and params.get("controlNet", {}).get("name") == "inpaint":
+        if (
+            params.get("referenceMask")
+            and (params.get("controlNet") or {}).get("name") == "inpaint"
+        ):
             keyframe["hasReferenceMask"] = True
         for source, target in (
             ("referenceImageUrls", "referenceImageURLs"),
@@ -1364,8 +1368,10 @@ def create_job_request_message(
     template["keyFrames"] = [keyframe]
     template.update(
         {
+            # Neither utility workflow has intermediate images to preview: SAM 3
+            # returns one mask and Pixal3D a 3D reconstruction.
             "previews": 0
-            if params["modelId"] == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID
+            if params["modelId"] in (_SAM3_IMAGE_SEGMENT_WORKFLOW_ID, _PIXAL3D_WORKFLOW_ID)
             else params.get("numberOfPreviews", 0)
             if project_type == "image"
             else 0,
@@ -1632,23 +1638,31 @@ class Job(DataEntity):
             "png": "image/png",
         }.get(self._project.params.get("outputFormat"))
 
-    async def get_result_url(self) -> str:
-        if self.result_url:
-            return self.result_url
-        if self.status != "completed":
-            raise RuntimeError("Job is not completed yet")
+    async def _mint_result_url(self) -> str:
+        """Ask the server for a download URL without recording it on the job.
+
+        Split out of :meth:`get_result_url` so a caller that is already building
+        a delta can put the URL in the *same* update as the status change.
+        """
+
         if self.type in {"video", "audio", "model"}:
             params: dict[str, Any] = {"jobId": self.project_id, "id": self.id, "type": "complete"}
             if self.type == "audio":
                 params["contentType"] = self._audio_content_type
             if self.type == "model":
                 params["contentType"] = "model/gltf-binary"
-            url = await self._api.media_download_url(params)
-        else:
-            params = {"jobId": self.project_id, "imageId": self.id, "type": "complete"}
-            if self._image_content_type:
-                params["contentType"] = self._image_content_type
-            url = await self._api.download_url(params)
+            return await self._api.media_download_url(params)
+        params = {"jobId": self.project_id, "imageId": self.id, "type": "complete"}
+        if self._image_content_type:
+            params["contentType"] = self._image_content_type
+        return await self._api.download_url(params)
+
+    async def get_result_url(self) -> str:
+        if self.result_url:
+            return self.result_url
+        if self.status != "completed":
+            raise RuntimeError("Job is not completed yet")
+        url = await self._mint_result_url()
         self._update({"resultUrl": url})
         return url
 
@@ -1669,6 +1683,13 @@ class Job(DataEntity):
     ) -> str | None:
         if self._project.params.get("type") != "image" or self.type != "image":
             raise RuntimeError("Enhancement is only available for images")
+        # A segmentation result reports ``type == "image"`` and would otherwise
+        # sail through the guard above, then be submitted as the starting image
+        # of a paid Flux render. A mask PNG (or its cut-out) has no
+        # prompt-to-pixels relationship to enhance, so this spends real Spark on
+        # a nonsense render.
+        if is_segmentation_model(self._project.params.get("modelId", "")):
+            raise RuntimeError("Enhancement is not available for segmentation masks")
         if self.status != "completed":
             raise RuntimeError("Job is not completed yet")
         # Only withheld media is unusable here. Media the artist rendered with the
@@ -1730,16 +1751,24 @@ class Job(DataEntity):
         direct_url = _raw_result_url(data)
         if not self.result_url and direct_url:
             delta["resultUrl"] = direct_url
-        self._update(delta)
+        # Mint into the same delta that carries the status change. `_handle_updated`
+        # emits `completed` with `result_url` the moment status flips, and a later
+        # update carrying only `resultUrl` has no `status` key, so it never emits
+        # again: minting after `_update` hands every listener a `None` payload.
+        #
         # Withheld media has nothing to mint. Labelled-but-delivered media does.
         # A record claiming both resolves to withheld, the safe reading.
         if (
             not self.result_url
+            and not delta.get("resultUrl")
             and status == "completed"
             and not (bool(data.get("triggeredNSFWFilter")) and data.get("nsfwDetected") is not True)
         ):
-            with contextlib.suppress(Exception):
-                await self.get_result_url()
+            try:
+                delta["resultUrl"] = await self._mint_result_url()
+            except Exception:
+                _LOGGER.exception("Failed to mint result URL for job %s", self.id)
+        self._update(delta)
 
     def _update(self, delta: dict[str, Any]) -> None:
         if "eta" in delta and isinstance(delta.get("eta"), datetime):
@@ -2242,15 +2271,25 @@ class ProjectsApi(EventEmitter):
     def is_model_artifact_model_id(self, model_id: str) -> bool:
         """Check whether a model returns a 3D artifact through the media endpoint.
 
-        Prefers the server's ``media`` field and falls back to the ``pixal3d_``
-        id prefix, so a worker serving the model before the catalog advertises
-        it still downloads correctly.
+        The ``pixal3d_`` prefix is a positive override here, not merely a
+        fallback for an unloaded catalog. That prefix is structural rather than
+        curated: every Pixal3D workflow reconstructs a binary glTF, and the
+        image download endpoint cannot serve one. A catalog that mislabels such
+        a model as ``image`` therefore breaks every artifact download with no
+        client-side recovery, so the SDK's own knowledge wins wherever it has
+        any.
+
+        The catalog stays authoritative for every model the SDK has no prefix
+        knowledge of, so a future ``media: "model"`` family needs no SDK
+        release.
         """
 
+        if is_model_artifact_model(model_id):
+            return True
         model = next(
             (item for item in self._supported_models or [] if item.get("id") == model_id), None
         )
-        return model.get("media") == "model" if model else is_model_artifact_model(model_id)
+        return model.get("media") == "model" if model else False
 
     isModelArtifactModelId = is_model_artifact_model_id
 
@@ -2307,6 +2346,11 @@ class ProjectsApi(EventEmitter):
         # same values as the serialized request.
         if data.get("type") == "image" and data.get("modelId") == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID:
             data = {**data, "numberOfMedia": 1, "numberOfPreviews": 0, "outputFormat": "png"}
+        # Pixal3D reconstructs a 3D artifact, so there are no intermediate images
+        # to preview. Normalize here as well as on the wire so the Project's own
+        # params agree with the request that was actually sent.
+        if data.get("type") == "image" and is_model_artifact_model(data.get("modelId", "")):
+            data = {**data, "numberOfPreviews": 0}
         project = Project(data, self)
         options = await self.get_model_options(data["modelId"])
         request_params = dict(data)
@@ -2327,7 +2371,7 @@ class ProjectsApi(EventEmitter):
         if data["type"] == "image":
             assets: list[tuple[str, Any, bool]] = [
                 ("startingImage", data.get("startingImage"), False),
-                ("cnImage", data.get("controlNet", {}).get("image"), False),
+                ("cnImage", (data.get("controlNet") or {}).get("image"), False),
             ]
             contexts = data.get("contextImages") or []
             max_context = (
@@ -2380,7 +2424,10 @@ class ProjectsApi(EventEmitter):
                 if h3_reference and role in {"referenceAudio", "referenceVideo"}:
                     continue
                 value = data.get(role)
-                if role == "referenceMask" and data.get("controlNet", {}).get("name") != "inpaint":
+                if (
+                    role == "referenceMask"
+                    and (data.get("controlNet") or {}).get("name") != "inpaint"
+                ):
                     continue
                 if value and value is not True:
                     content_type = await self._upload_asset(

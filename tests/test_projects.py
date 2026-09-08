@@ -1950,13 +1950,250 @@ async def test_pixal3d_job_downloads_a_gltf_artifact_and_refuses_enhancement() -
 
 
 @pytest.mark.asyncio
-async def test_model_artifact_predicate_prefers_the_server_media_field() -> None:
+async def test_model_artifact_predicate_survives_a_catalog_that_says_image() -> None:
     api = ProjectsApi(FakeClient())
     assert api.is_model_artifact_model_id("pixal3d_int8_i23d") is True
     assert api.is_model_artifact_model_id("flux1-schnell-fp8") is False
+    # The live /models/list route regressed to media 'image' for Pixal3D, which
+    # routed every GLB to the image download endpoint. The pixal3d_ prefix is a
+    # positive override precisely so that cannot happen: the prefix is
+    # structural, and the image endpoint cannot serve a binary glTF.
     api._supported_models = [
         {"id": "future_i23d", "media": "model"},
         {"id": "pixal3d_int8_i23d", "media": "image"},
     ]
+    assert api.is_model_artifact_model_id("pixal3d_int8_i23d") is True
+    # The catalog stays authoritative for ids the SDK has no prefix knowledge of.
     assert api.is_model_artifact_model_id("future_i23d") is True
-    assert api.is_model_artifact_model_id("pixal3d_int8_i23d") is False
+    assert api.is_model_artifact_model_id("flux1-schnell-fp8") is False
+
+
+def _pixal3d_params(**overrides: Any) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "type": "image",
+        "modelId": "pixal3d_int8_i23d",
+        "positivePrompt": "the red ceramic teapot",
+        "numberOfMedia": 1,
+        "startingImage": True,
+        "steps": 56,
+    }
+    params.update(overrides)
+    return params
+
+
+def test_pixal3d_never_requests_image_previews() -> None:
+    # A 3D reconstruction has no intermediate images to preview.
+    message = create_job_request_message(
+        "pixal3d-previews", _pixal3d_params(numberOfPreviews=6), model_options("image")
+    )
+    assert message["previews"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pixal3d_create_pins_previews_in_params_and_on_the_wire() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+
+    project = await api.create(_pixal3d_params(numberOfPreviews=6))
+
+    assert project.params["numberOfPreviews"] == 0
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    assert request["previews"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pixal3d_job_found_only_by_rest_sync_still_gets_a_result_url() -> None:
+    # Parity with the TS SDK: a job learned about for the first time through the
+    # REST snapshot must have its download URL minted. A GLB carries none of the
+    # legacy *Url aliases the raw record can inline, so nothing else would.
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.media_download_url = AsyncMock(return_value="https://cdn.example/rest-synced.glb")
+    api.download_url = AsyncMock(
+        side_effect=AssertionError("Pixal3D must not use the image endpoint")
+    )
+    project = Project(_pixal3d_params(), api)
+    api._projects.append(project)
+    api.get = AsyncMock(
+        return_value={
+            "status": "completed",
+            "imageCount": 1,
+            "stepCount": 56,
+            "previewCount": 0,
+            "completedWorkerJobs": [
+                {
+                    "imgID": "rest-only-1",
+                    "status": "jobCompleted",
+                    "performedSteps": 56,
+                    "worker": {"name": "pixal3d-test-worker"},
+                    "seedUsed": 42,
+                    "triggeredNSFWFilter": False,
+                }
+            ],
+        }
+    )
+
+    waiting = asyncio.create_task(project.wait_for_completion())
+    await project._sync_to_server()
+
+    assert await waiting == ["https://cdn.example/rest-synced.glb"]
+    job = project.job("rest-only-1")
+    assert job is not None
+    assert job.type == "model"
+    assert job.result_url == "https://cdn.example/rest-synced.glb"
+    api.media_download_url.assert_awaited_once_with(
+        {
+            "jobId": project.id,
+            "id": "rest-only-1",
+            "type": "complete",
+            "contentType": "model/gltf-binary",
+        }
+    )
+
+
+def _tracked_job(api: ProjectsApi, **overrides: Any) -> tuple[Project, Any]:
+    project = Project(
+        {
+            "type": "image",
+            "modelId": "flux1-schnell-fp8",
+            "positivePrompt": "a glass bird",
+            "numberOfMedia": 1,
+            "steps": 4,
+        },
+        api,
+    )
+    data: dict[str, Any] = {
+        "id": "job-1",
+        "projectId": project.id,
+        "status": "processing",
+        "step": 0,
+        "stepCount": 4,
+    }
+    data.update(overrides)
+    return project, project._add_job(data)
+
+
+_REST_COMPLETION = {
+    "imgID": "job-1",
+    "status": "jobCompleted",
+    "performedSteps": 4,
+    "worker": {"name": "worker-one"},
+    "seedUsed": 7,
+    "triggeredNSFWFilter": False,
+}
+
+
+@pytest.mark.asyncio
+async def test_rest_sync_emits_completed_once_carrying_the_minted_url() -> None:
+    # The URL must be minted into the same delta as the status change. Minting
+    # after `_update` emitted `completed` with None, and the follow-up update
+    # carried no `status` key so it never emitted again.
+    api = ProjectsApi(FakeClient())
+    api.download_url = AsyncMock(return_value="https://cdn.example/minted.png")
+    _project, job = _tracked_job(api)
+    seen: list[Any] = []
+    job.on("completed", seen.append)
+
+    await job._sync_with_rest_data(dict(_REST_COMPLETION))
+
+    assert seen == ["https://cdn.example/minted.png"]
+    assert job.result_url == "https://cdn.example/minted.png"
+
+
+@pytest.mark.asyncio
+async def test_rest_sync_logs_a_failed_result_url_mint(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    api = ProjectsApi(FakeClient())
+    api.download_url = AsyncMock(side_effect=RuntimeError("signing service down"))
+    _project, job = _tracked_job(api)
+
+    with caplog.at_level("ERROR", logger="sogni_client"):
+        await job._sync_with_rest_data(dict(_REST_COMPLETION))
+
+    # The job still settles; the failure is reported rather than swallowed.
+    assert job.status == "completed"
+    assert job.result_url is None
+    assert any("Failed to mint result URL" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_sam3_mask_is_not_enhanceable_and_spends_nothing() -> None:
+    # A segmentation job reports type 'image' on an image project, so the media
+    # guard alone lets it through: enhance() would download the mask PNG and
+    # submit it as the starting image of a paid Flux render.
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.create = AsyncMock(
+        side_effect=AssertionError("a rejected enhancement must not create a project")
+    )
+    project = Project(
+        {
+            "type": "image",
+            "modelId": "sam3_image_segment_bf16",
+            "positivePrompt": "",
+            "numberOfMedia": 1,
+            "steps": 1,
+        },
+        api,
+    )
+    job = project._add_job(
+        {
+            "id": "mask-result-1",
+            "projectId": project.id,
+            "status": "completed",
+            "step": 1,
+            "stepCount": 1,
+            "resultUrl": "https://cdn.example/mask.png",
+        }
+    )
+    assert job.type == "image"
+
+    with pytest.raises(RuntimeError, match="Enhancement is not available for segmentation masks"):
+        await job.enhance("medium")
+
+    api.create.assert_not_awaited()
+    assert client.socket.sent == []
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_an_explicit_control_net_of_none() -> None:
+    # The `{}` default only applies when the key is absent, so an explicit None
+    # used to raise AttributeError out of create().
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+
+    project = await api.create(
+        {
+            "type": "image",
+            "modelId": "flux1-schnell-fp8",
+            "positivePrompt": "a glass bird",
+            "numberOfMedia": 1,
+            "controlNet": None,
+        }
+    )
+
+    assert project.params["controlNet"] is None
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    assert "cnImage" not in request["keyFrames"][0]
+
+
+def test_video_request_accepts_an_explicit_control_net_of_none() -> None:
+    message = create_job_request_message(
+        "video-control-net-none",
+        {
+            "type": "video",
+            "modelId": "ltx23-22b-fp8_v2v_distilled",
+            "positivePrompt": "a kite over the sea",
+            "numberOfMedia": 1,
+            "controlNet": None,
+            "referenceVideo": True,
+            "referenceMask": True,
+        },
+        model_options("video"),
+    )
+    assert "hasReferenceMask" not in message["keyFrames"][0]
