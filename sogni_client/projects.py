@@ -24,6 +24,7 @@ from .recovery import (
 )
 from .transport import ApiClient
 from .utils import (
+    BIREFNET_BACKGROUND_REMOVAL_MODEL_ID,
     MINIMAX_H3_BASE_FRAMES,
     MINIMAX_H3_DIMENSION_STEP,
     MINIMAX_H3_FRAME_STEP,
@@ -758,6 +759,7 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
 # --- SAM 3 segmentation, Pixal3D image-to-3D, and world receipts ------------
 
 _SAM3_IMAGE_SEGMENT_WORKFLOW_ID = SAM3_IMAGE_SEGMENT_MODEL_ID
+_BIREFNET_BACKGROUND_REMOVAL_WORKFLOW_ID = BIREFNET_BACKGROUND_REMOVAL_MODEL_ID
 _PIXAL3D_WORKFLOW_ID = PIXAL3D_IMAGE_TO_3D_MODEL_ID
 _WORLD_TARGET_STILL_MODEL_ID = "krea2_identity_edit_sogni_v0_3_alpha"
 _WORLD_TRANSITION_MODEL_ID = "minimax-h3-fastvideo-int8_flf2v_turbo"
@@ -1039,6 +1041,22 @@ def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, A
         keyframe["sam3Prompt"] = _normalize_sam3_prompt(params["sam3Prompt"])
     elif params.get("sam3Prompt") is not None:
         raise ValueError(f"sam3Prompt is only supported by {_SAM3_IMAGE_SEGMENT_WORKFLOW_ID}")
+    # BiRefNet background removal. One source image, no prompt, and one option:
+    # the bare foreground matte, or that matte carried as the source image's
+    # alpha channel. SAM 3's applyMask is a different field on a different
+    # model, nested inside sam3Prompt, and the two are never read from the same
+    # place.
+    if params["modelId"] == _BIREFNET_BACKGROUND_REMOVAL_WORKFLOW_ID:
+        if not params.get("startingImage"):
+            raise ValueError("BiRefNet background removal requires startingImage")
+        apply_mask = params.get("applyMask")
+        if apply_mask is not None and not isinstance(apply_mask, bool):
+            raise ValueError("applyMask must be a boolean")
+        keyframe["applyMask"] = apply_mask is True
+    elif params.get("applyMask") is not None:
+        raise ValueError(
+            f"applyMask is only supported by {_BIREFNET_BACKGROUND_REMOVAL_WORKFLOW_ID}"
+        )
     if params["modelId"] == _PIXAL3D_WORKFLOW_ID and not params.get("startingImage"):
         raise ValueError("Pixal3D reconstruction requires startingImage")
     for key, (minimum, maximum) in _PIXAL3D_REDUCE_ONLY_LIMITS.items():
@@ -1368,27 +1386,30 @@ def create_job_request_message(
     template["keyFrames"] = [keyframe]
     template.update(
         {
-            # Neither utility workflow has intermediate images to preview: SAM 3
-            # returns one mask and Pixal3D a 3D reconstruction.
+            # No utility workflow has intermediate images to preview:
+            # segmentation returns one mask and Pixal3D a 3D reconstruction.
             "previews": 0
-            if params["modelId"] in (_SAM3_IMAGE_SEGMENT_WORKFLOW_ID, _PIXAL3D_WORKFLOW_ID)
+            if is_segmentation_model(params["modelId"]) or params["modelId"] == _PIXAL3D_WORKFLOW_ID
             else params.get("numberOfPreviews", 0)
             if project_type == "image"
             else 0,
+            # Segmentation is deterministic: it takes no seed, so N copies of
+            # one source are N identical masks at N times the price.
             "numberOfImages": 1
-            if params["modelId"] == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID
+            if is_segmentation_model(params["modelId"])
             else params.get("numberOfMedia") or 1,
             "jobID": project_id,
             "disableSafety": bool(params.get("disableNSFWFilter")),
             "tokenType": params.get("tokenType"),
             "billingMode": params.get("billingMode"),
-            # Pixal3D returns a binary glTF and SAM 3 a lossless mask PNG, so
-            # neither format may be overridden into something the worker will
-            # not produce.
+            # Pixal3D returns a binary glTF and segmentation a lossless mask
+            # PNG, so neither format may be overridden into something the worker
+            # will not produce. jpg would quantize a soft matte and flatten a
+            # cutout's alpha away.
             "outputFormat": "glb"
             if params["modelId"] == _PIXAL3D_WORKFLOW_ID
             else "png"
-            if params["modelId"] == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID
+            if is_segmentation_model(params["modelId"])
             else params.get("outputFormat")
             or ("mp3" if project_type == "audio" else "mp4" if project_type == "video" else "png"),
             **workload_attribution_to_wire_fields(params.get("attribution")),
@@ -2341,10 +2362,11 @@ class ProjectsApi(EventEmitter):
         for required in ("type", "modelId", "positivePrompt", "numberOfMedia"):
             if required not in data:
                 raise ValueError(f"{required} is required")
-        # SAM 3 is a one-source/one-mask utility workflow. Normalize before
-        # Project construction so lifecycle completion and result MIME use the
-        # same values as the serialized request.
-        if data.get("type") == "image" and data.get("modelId") == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID:
+        # Segmentation is a one-source/one-mask utility workflow, SAM 3 and
+        # BiRefNet alike. Normalize before Project construction so lifecycle
+        # completion and result MIME use the same values as the serialized
+        # request.
+        if data.get("type") == "image" and is_segmentation_model(data.get("modelId", "")):
             data = {**data, "numberOfMedia": 1, "numberOfPreviews": 0, "outputFormat": "png"}
         # Pixal3D reconstructs a 3D artifact, so there are no intermediate images
         # to preview. Normalize here as well as on the wire so the Project's own

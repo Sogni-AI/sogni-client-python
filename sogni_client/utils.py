@@ -217,6 +217,9 @@ PIXAL3D_IMAGE_TO_3D_MODEL_ID = "pixal3d_int8_i23d"
 #: Canonical id of the SAM 3 interactive image-segmentation workflow.
 SAM3_IMAGE_SEGMENT_MODEL_ID = "sam3_image_segment_bf16"
 
+#: Canonical id of the standalone BiRefNet background-removal workflow.
+BIREFNET_BACKGROUND_REMOVAL_MODEL_ID = "birefnet_image_background_removal_fp16"
+
 
 def is_model_artifact_model(model_id: str) -> bool:
     """Check if a model returns a downloadable 3D model artifact."""
@@ -230,9 +233,14 @@ def is_segmentation_model(model_id: str) -> bool:
     Segmentation returns a lossless mask PNG the same size as the source, not a
     new image, so callers must not treat it as a generated result: it has no
     meaningful prompt-to-pixels relationship and is not enhanceable.
+
+    BiRefNet counts. It reaches the same artifact with no prompt at all, and its
+    cutout branch is that mask carried as an alpha channel, so every consumer
+    that hides a mask from a gallery, refuses to enhance one, or requires a
+    source image has to treat it exactly as it treats SAM 3.
     """
 
-    return model_id == SAM3_IMAGE_SEGMENT_MODEL_ID
+    return model_id in (SAM3_IMAGE_SEGMENT_MODEL_ID, BIREFNET_BACKGROUND_REMOVAL_MODEL_ID)
 
 
 def requires_starting_image(model_id: str) -> bool:

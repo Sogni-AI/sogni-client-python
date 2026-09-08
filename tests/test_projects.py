@@ -1680,6 +1680,98 @@ def test_pixal3d_pins_the_glb_output_and_reduce_only_options() -> None:
         )
 
 
+def birefnet_params(**overrides: Any) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "type": "image",
+        "modelId": "birefnet_image_background_removal_fp16",
+        # BiRefNet takes no prompt: it finds the salient foreground on its own.
+        "positivePrompt": "",
+        "numberOfMedia": 4,
+        "numberOfPreviews": 5,
+        "outputFormat": "jpg",
+        "startingImage": True,
+    }
+    params.update(overrides)
+    return params
+
+
+def test_birefnet_pins_its_single_matte_request_shape() -> None:
+    message = create_job_request_message("birefnet-wire", birefnet_params(), model_options("image"))
+
+    # The graph is deterministic and takes no seed, so four copies of one source
+    # are four identical mattes at four times the price.
+    assert message["numberOfImages"] == 1
+    # There is no diffusion to preview.
+    assert message["previews"] == 0
+    # A soft matte, and a cutout whose alpha IS that matte: jpg would quantize
+    # the first and flatten the second away.
+    assert message["outputFormat"] == "png"
+    keyframe = message["keyFrames"][0]
+    assert keyframe["hasStartingImage"] is True
+    # Omitting applyMask serializes as an explicit false, not absence: which
+    # artifact the job returns is decided by the request, not by whichever
+    # worker build picked it up.
+    assert keyframe["applyMask"] is False
+
+
+def test_birefnet_apply_mask_selects_the_cutout_branch() -> None:
+    cutout = create_job_request_message(
+        "birefnet-apply-mask", birefnet_params(applyMask=True), model_options("image")
+    )
+    assert cutout["keyFrames"][0]["applyMask"] is True
+
+    explicit = create_job_request_message(
+        "birefnet-explicit-false", birefnet_params(applyMask=False), model_options("image")
+    )
+    assert explicit["keyFrames"][0]["applyMask"] is False
+
+    with pytest.raises(ValueError, match="applyMask must be a boolean"):
+        create_job_request_message(
+            "birefnet-non-boolean", birefnet_params(applyMask="yes"), model_options("image")
+        )
+    with pytest.raises(ValueError, match="BiRefNet background removal requires startingImage"):
+        create_job_request_message(
+            "birefnet-missing-source",
+            birefnet_params(startingImage=None),
+            model_options("image"),
+        )
+
+
+def test_birefnet_apply_mask_belongs_to_exactly_one_model() -> None:
+    """SAM 3 has its own applyMask, nested inside sam3Prompt.
+
+    They are different fields on different models with different graphs, and the
+    top-level one must not silently do nothing anywhere else. Each case below is
+    otherwise a valid request for its model, so the rejection is the applyMask
+    gate rather than some earlier requirement.
+    """
+
+    wrong_model_cases = [
+        {"modelId": "flux1-schnell-fp8", "positivePrompt": "a teapot"},
+        {"modelId": "sam3_image_segment_bf16", "sam3Prompt": {"text": "the teapot"}},
+        {"modelId": "pixal3d_int8_i23d", "positivePrompt": "the red ceramic teapot"},
+    ]
+    for overrides in wrong_model_cases:
+        with pytest.raises(
+            ValueError,
+            match="applyMask is only supported by birefnet_image_background_removal_fp16",
+        ):
+            create_job_request_message(
+                "birefnet-wrong-model",
+                birefnet_params(applyMask=True, **overrides),
+                model_options("image"),
+            )
+
+    # And a SAM 3 request still carries its own nested applyMask untouched.
+    sam3 = create_job_request_message(
+        "sam3-nested-apply-mask",
+        sam3_params(sam3Prompt={"text": "the teapot", "applyMask": True}),
+        model_options("image"),
+    )
+    assert sam3["keyFrames"][0]["sam3Prompt"]["applyMask"] is True
+    assert "applyMask" not in sam3["keyFrames"][0]
+
+
 def test_world_generation_receipt_binds_its_stage_model_and_hashes() -> None:
     source = "a" * 64
     selection = "b" * 64
@@ -2156,6 +2248,49 @@ async def test_sam3_mask_is_not_enhanceable_and_spends_nothing() -> None:
 
     api.create.assert_not_awaited()
     assert client.socket.sent == []
+
+
+@pytest.mark.asyncio
+async def test_birefnet_create_normalizes_the_project_and_refuses_enhancement() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+
+    project = await api.create(birefnet_params(applyMask=True))
+
+    # The Project's own params must agree with the request that was sent.
+    assert project.params["numberOfMedia"] == 1
+    assert project.params["numberOfPreviews"] == 0
+    assert project.params["outputFormat"] == "png"
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    assert request["numberOfImages"] == 1
+    assert request["previews"] == 0
+    assert request["outputFormat"] == "png"
+    assert request["keyFrames"][0]["applyMask"] is True
+
+    api.create = AsyncMock(
+        side_effect=AssertionError("a rejected enhancement must not create a project")
+    )
+    job = project._add_job(
+        {
+            "id": "birefnet-result-1",
+            "projectId": project.id,
+            "status": "completed",
+            "step": 1,
+            "stepCount": 1,
+            "resultUrl": "https://cdn.example/cutout.png",
+        }
+    )
+    assert job.type == "image"
+    # A matte reports type 'image' on an image project, so the media guard alone
+    # lets it through: enhance() would download it and submit it as the starting
+    # image of a paid render.
+    sent_before = len(client.socket.sent)
+    with pytest.raises(RuntimeError, match="Enhancement is not available for segmentation masks"):
+        await job.enhance("medium")
+    api.create.assert_not_awaited()
+    assert len(client.socket.sent) == sent_before
 
 
 @pytest.mark.asyncio
