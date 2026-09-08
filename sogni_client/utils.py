@@ -211,6 +211,45 @@ def is_audio_model(model_id: str) -> bool:
     return model_id.startswith("ace_step") or model_id == "minimax_music3"
 
 
+#: Canonical id of the prompt-guided image-to-3D reconstruction workflow.
+PIXAL3D_IMAGE_TO_3D_MODEL_ID = "pixal3d_int8_i23d"
+
+#: Canonical id of the SAM 3 interactive image-segmentation workflow.
+SAM3_IMAGE_SEGMENT_MODEL_ID = "sam3_image_segment_bf16"
+
+
+def is_model_artifact_model(model_id: str) -> bool:
+    """Check if a model returns a downloadable 3D model artifact."""
+
+    return model_id.startswith("pixal3d_")
+
+
+def is_segmentation_model(model_id: str) -> bool:
+    """Check if a model performs image segmentation rather than generation.
+
+    Segmentation returns a lossless mask PNG the same size as the source, not a
+    new image, so callers must not treat it as a generated result: it has no
+    meaningful prompt-to-pixels relationship and is not enhanceable.
+    """
+
+    return model_id == SAM3_IMAGE_SEGMENT_MODEL_ID
+
+
+def requires_starting_image(model_id: str) -> bool:
+    """Models that need a starting image because they transform one rather than
+    generating from a prompt alone.
+    """
+
+    return is_segmentation_model(model_id) or is_model_artifact_model(model_id)
+
+
+isVideoModel = is_video_model
+isAudioModel = is_audio_model
+isModelArtifactModel = is_model_artifact_model
+isSegmentationModel = is_segmentation_model
+requiresStartingImage = requires_starting_image
+
+
 def calculate_video_frames(
     model_id: str,
     duration: float,

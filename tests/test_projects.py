@@ -376,6 +376,9 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
     assert wan3["ratio"] == "9:16"
     assert wan3["watermark"] is False
     assert "wan3TaskType" not in wan3
+    # 30 seconds is the maximum smartDuration used to reach implicitly, and the
+    # retired field never reaches the wire.
+    assert "smartDuration" not in wan3
 
     with pytest.raises(ApiError, match="promptExtend must be a boolean"):
         create_job_request_message(
@@ -401,6 +404,21 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
                 "positivePrompt": "Let the model pick.",
                 "numberOfMedia": 1,
                 "smartDuration": True,
+            },
+            model_options("video"),
+        )
+
+    # The retirement rejects the field's presence, not its value, so an explicit
+    # false must fail the same way instead of quietly reading as "off".
+    with pytest.raises(ApiError, match="smartDuration has been retired"):
+        create_job_request_message(
+            "wan3-smart-duration-false",
+            {
+                "type": "video",
+                "modelId": "wan3.0-video",
+                "positivePrompt": "Explicitly off.",
+                "numberOfMedia": 1,
+                "smartDuration": False,
             },
             model_options("video"),
         )
@@ -1344,3 +1362,601 @@ async def test_labelled_sensitive_media_is_delivered_while_withheld_media_is_not
     assert withheld.result_url is None
     with pytest.raises(RuntimeError, match="did not pass NSFW filter"):
         await withheld.enhance("light")
+
+
+def sam3_params(**overrides: Any) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "type": "image",
+        "modelId": "sam3_image_segment_bf16",
+        "positivePrompt": "",
+        "numberOfMedia": 4,
+        "numberOfPreviews": 5,
+        "outputFormat": "jpg",
+        "startingImage": True,
+        "sam3Prompt": {"points": [{"x": 0.42, "y": 0.61, "label": "positive"}]},
+    }
+    params.update(overrides)
+    return params
+
+
+def pixal3d_params(**overrides: Any) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "type": "image",
+        "modelId": "pixal3d_int8_i23d",
+        "positivePrompt": "the red ceramic teapot",
+        "numberOfMedia": 1,
+        "startingImage": True,
+    }
+    params.update(overrides)
+    return params
+
+
+def test_sam3_segmentation_pins_its_single_mask_request_shape() -> None:
+    message = create_job_request_message("sam3-wire", sam3_params(), model_options("image"))
+
+    # One source image produces exactly one lossless mask PNG, whatever the
+    # caller asked for.
+    assert message["numberOfImages"] == 1
+    assert message["previews"] == 0
+    assert message["outputFormat"] == "png"
+    keyframe = message["keyFrames"][0]
+    assert keyframe["hasStartingImage"] is True
+    assert keyframe["sam3Prompt"] == {
+        "points": [{"x": 0.42, "y": 0.61, "label": "positive"}],
+        "boxes": [],
+        "threshold": 0.5,
+        "multimask": True,
+        # An omitted applyMask must serialize as an explicit false, not absence.
+        "applyMask": False,
+    }
+    # An omitted cap stays off the wire entirely rather than being defaulted.
+    assert "maxInstances" not in keyframe["sam3Prompt"]
+
+
+def test_sam3_prompt_accepts_apply_mask_and_max_instances() -> None:
+    """The JS SDK's root-level key gate rejected both names in 5.32.0 and 5.33.0.
+
+    They were validated and serialized a hundred lines further down, so the
+    whole feature was unreachable. This pins the fixed end state.
+    """
+
+    cutout = create_job_request_message(
+        "sam3-apply-mask",
+        sam3_params(sam3Prompt={"text": "the teapot", "applyMask": True}),
+        model_options("image"),
+    )
+    assert cutout["keyFrames"][0]["sam3Prompt"] == {
+        "points": [],
+        "boxes": [],
+        "text": "the teapot",
+        "threshold": 0.5,
+        "applyMask": True,
+    }
+
+    capped = create_job_request_message(
+        "sam3-max-instances",
+        sam3_params(sam3Prompt={"text": "the teapots", "maxInstances": 4}),
+        model_options("image"),
+    )
+    assert capped["keyFrames"][0]["sam3Prompt"]["maxInstances"] == 4
+    assert capped["keyFrames"][0]["sam3Prompt"]["applyMask"] is False
+
+    for max_instances in (0, 17):
+        with pytest.raises(
+            ValueError, match="sam3Prompt.maxInstances must be an integer from 1 to 16"
+        ):
+            create_job_request_message(
+                "sam3-max-instances-range",
+                sam3_params(sam3Prompt={"text": "the teapots", "maxInstances": max_instances}),
+                model_options("image"),
+            )
+    # A boolean is not an integer on the wire even though bool subclasses int.
+    with pytest.raises(ValueError, match="sam3Prompt.maxInstances must be an integer from 1 to 16"):
+        create_job_request_message(
+            "sam3-max-instances-bool",
+            sam3_params(sam3Prompt={"text": "the teapots", "maxInstances": True}),
+            model_options("image"),
+        )
+    with pytest.raises(ValueError, match="sam3Prompt.applyMask must be a boolean"):
+        create_job_request_message(
+            "sam3-apply-mask-type",
+            sam3_params(sam3Prompt={"text": "the teapot", "applyMask": "yes"}),
+            model_options("image"),
+        )
+
+
+def test_sam3_prompt_still_rejects_a_name_the_contract_has_no_field_for() -> None:
+    with pytest.raises(ValueError, match="sam3Prompt contains unsupported fields: bogus"):
+        create_job_request_message(
+            "sam3-unknown-root-key",
+            sam3_params(sam3Prompt={"text": "the teapot", "bogus": 1}),
+            model_options("image"),
+        )
+
+
+def test_sam3_negative_box_excludes_one_instance_of_a_text_concept() -> None:
+    excluded = create_job_request_message(
+        "sam3-negative-box",
+        sam3_params(
+            sam3Prompt={
+                "text": "the teapots",
+                "boxes": [{"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4, "label": "negative"}],
+            }
+        ),
+        model_options("image"),
+    )
+    assert excluded["keyFrames"][0]["sam3Prompt"]["boxes"] == [
+        {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4, "label": "negative"}
+    ]
+
+    # An absent label leaves every existing caller on its current behavior.
+    positive = create_job_request_message(
+        "sam3-default-box-label",
+        sam3_params(
+            sam3Prompt={
+                "text": "the teapots",
+                "boxes": [{"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4}],
+            }
+        ),
+        model_options("image"),
+    )
+    assert positive["keyFrames"][0]["sam3Prompt"]["boxes"][0]["label"] == "positive"
+
+    with pytest.raises(ValueError, match="sam3Prompt negative boxes require a text prompt"):
+        create_job_request_message(
+            "sam3-negative-box-without-text",
+            sam3_params(
+                sam3Prompt={
+                    "points": [{"x": 0.4, "y": 0.4, "label": "positive"}],
+                    "boxes": [{"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4, "label": "negative"}],
+                }
+            ),
+            model_options("image"),
+        )
+
+
+def test_sam3_multimask_is_a_point_only_control() -> None:
+    """multimask picks among SAM's whole/part/subpart candidates for one click.
+
+    It never meant anything for a text prompt. The socket drops it silently
+    because older SDKs sent it unconditionally, so the SDK boundary is the only
+    place that can tell a caller they asked for something meaningless.
+    """
+
+    with pytest.raises(ValueError, match="sam3Prompt.multimask requires point prompts"):
+        create_job_request_message(
+            "sam3-multimask-with-text",
+            sam3_params(sam3Prompt={"text": "the teapot", "multimask": True}),
+            model_options("image"),
+        )
+    with pytest.raises(ValueError, match="sam3Prompt.multimask must be a boolean"):
+        create_job_request_message(
+            "sam3-multimask-type",
+            sam3_params(
+                sam3Prompt={"points": [{"x": 0.4, "y": 0.4, "label": "positive"}], "multimask": 1}
+            ),
+            model_options("image"),
+        )
+    explicit = create_job_request_message(
+        "sam3-multimask-off",
+        sam3_params(
+            sam3Prompt={
+                "points": [{"x": 0.4, "y": 0.4, "label": "positive"}],
+                "multimask": False,
+            }
+        ),
+        model_options("image"),
+    )
+    assert explicit["keyFrames"][0]["sam3Prompt"]["multimask"] is False
+
+
+def test_sam3_prompt_validates_points_boxes_text_and_threshold() -> None:
+    cases = [
+        (
+            {"points": [{"x": 0.4, "y": 0.4, "label": "maybe"}]},
+            'sam3Prompt.points\\[0\\].label must be "positive" or "negative"',
+        ),
+        (
+            {"points": [{"x": 1.4, "y": 0.4, "label": "positive"}]},
+            "sam3Prompt.points\\[0\\].x must be a finite normalized coordinate from 0 to 1",
+        ),
+        (
+            {"points": [{"x": 0.4, "y": 0.4, "label": "positive", "z": 1}]},
+            "sam3Prompt.points\\[0\\] contains unsupported fields",
+        ),
+        ({"points": ["nope"]}, "sam3Prompt.points\\[0\\] must be an object"),
+        (
+            {"points": [{"x": 0.4, "y": 0.4, "label": "positive"}] * 33},
+            "sam3Prompt.points must contain at most 32 entries",
+        ),
+        (
+            {"boxes": [{"x0": 0.5, "y0": 0.2, "x1": 0.3, "y1": 0.4}]},
+            "sam3Prompt.boxes\\[0\\] must have x0 < x1 and y0 < y1",
+        ),
+        (
+            {"boxes": [{"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4, "nope": 1}]},
+            "sam3Prompt.boxes\\[0\\] contains unsupported fields",
+        ),
+        (
+            {"boxes": [{"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4, "label": "sideways"}]},
+            'sam3Prompt.boxes\\[0\\].label must be "positive" or "negative"',
+        ),
+        (
+            {"boxes": [{"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4}] * 17},
+            "sam3Prompt.boxes must contain at most 16 entries",
+        ),
+        ({"text": 7}, "sam3Prompt.text must be a string"),
+        ({"text": "   "}, "sam3Prompt.text must contain 1 to 240 characters"),
+        ({"text": "a" * 241}, "sam3Prompt.text must contain 1 to 240 characters"),
+        ({}, "sam3Prompt requires at least one point, box, or text prompt"),
+        (
+            {"text": "the teapot", "points": [{"x": 0.4, "y": 0.4, "label": "positive"}]},
+            "sam3Prompt cannot combine text and point prompts",
+        ),
+        (
+            {
+                "points": [{"x": 0.4, "y": 0.4, "label": "positive"}],
+                "boxes": [
+                    {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4},
+                    {"x0": 0.5, "y0": 0.6, "x1": 0.7, "y1": 0.8},
+                ],
+            },
+            "sam3Prompt supports at most one box when point prompts are present",
+        ),
+        (
+            {"text": "the teapot", "threshold": 1.5},
+            "sam3Prompt.threshold must be a finite number from 0 to 1",
+        ),
+    ]
+    for prompt, message in cases:
+        with pytest.raises(ValueError, match=message):
+            create_job_request_message(
+                "sam3-invalid", sam3_params(sam3Prompt=prompt), model_options("image")
+            )
+
+    with pytest.raises(ValueError, match="sam3Prompt must be an object"):
+        create_job_request_message(
+            "sam3-not-an-object", sam3_params(sam3Prompt=["nope"]), model_options("image")
+        )
+    with pytest.raises(ValueError, match="SAM3 image segmentation requires startingImage"):
+        create_job_request_message(
+            "sam3-missing-source", sam3_params(startingImage=None), model_options("image")
+        )
+    with pytest.raises(ValueError, match="SAM3 image segmentation requires sam3Prompt"):
+        create_job_request_message(
+            "sam3-missing-prompt", sam3_params(sam3Prompt=None), model_options("image")
+        )
+    with pytest.raises(ValueError, match="sam3Prompt is only supported by sam3_image_segment_bf16"):
+        create_job_request_message(
+            "sam3-wrong-model",
+            sam3_params(modelId="krea2_turbo_fp8_scaled"),
+            model_options("image"),
+        )
+
+
+def test_pixal3d_pins_the_glb_output_and_reduce_only_options() -> None:
+    message = create_job_request_message("pixal3d-wire", pixal3d_params(), model_options("image"))
+    assert message["outputFormat"] == "glb"
+    keyframe = message["keyFrames"][0]
+    assert keyframe["hasStartingImage"] is True
+    assert keyframe["positivePrompt"] == "the red ceramic teapot"
+
+    # Every option may only reduce work: each maximum is the shipped default,
+    # so the flat price stays an upper bound.
+    reduced = create_job_request_message(
+        "pixal3d-options",
+        pixal3d_params(
+            textureSize=2048,
+            meshTargetFaces=60000,
+            normalMapSize=1024,
+            ambientOcclusionSize=512,
+            shapeResolution=1024,
+        ),
+        model_options("image"),
+    )["keyFrames"][0]
+    assert reduced["textureSize"] == 2048
+    assert reduced["meshTargetFaces"] == 60000
+    assert reduced["normalMapSize"] == 1024
+    assert reduced["ambientOcclusionSize"] == 512
+    assert reduced["shapeResolution"] == 1024
+
+    with pytest.raises(ValueError, match="Pixal3D reconstruction requires startingImage"):
+        create_job_request_message(
+            "pixal3d-missing-source",
+            pixal3d_params(startingImage=None),
+            model_options("image"),
+        )
+    with pytest.raises(ValueError, match="meshTargetFaces must be an integer from 5000 to 700000"):
+        create_job_request_message(
+            "pixal3d-out-of-range",
+            pixal3d_params(meshTargetFaces=700001),
+            model_options("image"),
+        )
+    with pytest.raises(ValueError, match="textureSize is only supported by pixal3d_int8_i23d"):
+        create_job_request_message(
+            "pixal3d-wrong-model",
+            pixal3d_params(modelId="flux1-schnell-fp8", textureSize=2048),
+            model_options("image"),
+        )
+
+
+def test_world_generation_receipt_binds_its_stage_model_and_hashes() -> None:
+    source = "a" * 64
+    selection = "b" * 64
+    target = create_job_request_message(
+        "world-target-still",
+        {
+            "type": "image",
+            "modelId": "krea2_identity_edit_sogni_v0_3_alpha",
+            "positivePrompt": "swap the sky",
+            "numberOfMedia": 1,
+            "appSource": "sogni-world",
+            "worldGenerationReceipt": {
+                "stage": "target_still",
+                "sourceImageSha256": source.upper(),
+                "selectionHash": selection,
+            },
+        },
+        model_options("image"),
+    )
+    assert target["keyFrames"][0]["worldGenerationReceipt"] == {
+        "stage": "target_still",
+        "sourceImageSha256": source,
+        "selectionHash": selection,
+    }
+
+    transition = create_job_request_message(
+        "world-transition",
+        {
+            "type": "video",
+            "modelId": "minimax-h3-fastvideo-int8_flf2v_turbo",
+            "positivePrompt": "walk through the doorway",
+            "numberOfMedia": 1,
+            "appSource": "sogni-world",
+            "referenceImage": True,
+            "referenceImageEnd": True,
+            "worldGenerationReceipt": {
+                "stage": "transition",
+                "firstFrameSha256": source,
+                "lastFrameSha256": selection,
+            },
+        },
+        model_options("video"),
+    )
+    assert transition["keyFrames"][0]["worldGenerationReceipt"] == {
+        "stage": "transition",
+        "firstFrameSha256": source,
+        "lastFrameSha256": selection,
+    }
+
+    with pytest.raises(ApiError, match='worldGenerationReceipt requires appSource "sogni-world".'):
+        create_job_request_message(
+            "world-wrong-app-source",
+            {
+                "type": "image",
+                "modelId": "krea2_identity_edit_sogni_v0_3_alpha",
+                "positivePrompt": "swap the sky",
+                "numberOfMedia": 1,
+                "worldGenerationReceipt": {
+                    "stage": "target_still",
+                    "sourceImageSha256": source,
+                    "selectionHash": selection,
+                },
+            },
+            model_options("image"),
+        )
+    with pytest.raises(
+        ApiError,
+        match="The target_still receipt requires krea2_identity_edit_sogni_v0_3_alpha.",
+    ):
+        create_job_request_message(
+            "world-wrong-model",
+            {
+                "type": "image",
+                "modelId": "flux1-schnell-fp8",
+                "positivePrompt": "swap the sky",
+                "numberOfMedia": 1,
+                "appSource": "sogni-world",
+                "worldGenerationReceipt": {
+                    "stage": "target_still",
+                    "sourceImageSha256": source,
+                    "selectionHash": selection,
+                },
+            },
+            model_options("image"),
+        )
+    with pytest.raises(
+        ApiError, match="worldGenerationReceipt.selectionHash must be a SHA-256 hex digest."
+    ):
+        create_job_request_message(
+            "world-bad-hash",
+            {
+                "type": "image",
+                "modelId": "krea2_identity_edit_sogni_v0_3_alpha",
+                "positivePrompt": "swap the sky",
+                "numberOfMedia": 1,
+                "appSource": "sogni-world",
+                "worldGenerationReceipt": {
+                    "stage": "target_still",
+                    "sourceImageSha256": source,
+                    "selectionHash": "nope",
+                },
+            },
+            model_options("image"),
+        )
+    with pytest.raises(
+        ApiError, match="worldGenerationReceipt.stage must be target_still or transition."
+    ):
+        create_job_request_message(
+            "world-bad-stage",
+            {
+                "type": "image",
+                "modelId": "krea2_identity_edit_sogni_v0_3_alpha",
+                "positivePrompt": "swap the sky",
+                "numberOfMedia": 1,
+                "appSource": "sogni-world",
+                "worldGenerationReceipt": {"stage": "teleport"},
+            },
+            model_options("image"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_sam3_create_normalizes_the_project_and_surfaces_worker_provenance() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+
+    project = await api.create(
+        type="image",
+        model_id="sam3_image_segment_bf16",
+        positive_prompt="",
+        number_of_media=4,
+        number_of_previews=5,
+        output_format="jpg",
+        starting_image=True,
+        sam3_prompt={"text": "the teapot", "apply_mask": True, "max_instances": 2},
+    )
+
+    assert project.params["numberOfMedia"] == 1
+    assert project.params["numberOfPreviews"] == 0
+    assert project.params["outputFormat"] == "png"
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    assert request["numberOfImages"] == 1
+    assert request["outputFormat"] == "png"
+    # Python names normalize to the camelCase wire spellings the socket expects.
+    assert request["keyFrames"][0]["sam3Prompt"] == {
+        "points": [],
+        "boxes": [],
+        "text": "the teapot",
+        "threshold": 0.5,
+        "applyMask": True,
+        "maxInstances": 2,
+    }
+
+    api._handle_job_state(
+        {
+            "type": "jobStarted",
+            "jobID": project.id,
+            "imgID": "mask-result-1",
+            "workerName": "receipt-test-worker",
+        }
+    )
+    await api._apply_job_result(
+        {
+            "jobID": project.id,
+            "imgID": "mask-result-1",
+            "resultUrl": "https://cdn.example/mask.png",
+            "performedStepCount": 1,
+            "lastSeed": "42",
+            "triggeredNSFWFilter": False,
+            "userCanceled": False,
+            "sha256": "c" * 64,
+            "sourceImageSha256": "A" * 64,
+            "samPromptSha256": "d" * 64,
+            "maskRleSha256": "b" * 64,
+            "maskWidth": 1024,
+            "maskHeight": 576,
+            "maskBox": [0.1, 0.2, 0.6, 0.7],
+            "maskCoverage": 0.25,
+            "maskDetectedCount": 3,
+            "maskReturnedCount": 1,
+            "maskSelections": [
+                {"score": 0.9, "box": [0.1, 0.2, 0.6, 0.7], "coverage": 0.25, "included": True},
+                {"score": None, "box": None, "coverage": 0.05, "included": False},
+                # Malformed entries are dropped rather than surfaced half-valid.
+                {"score": 0.4, "coverage": "lots", "included": True},
+                "not-a-selection",
+            ],
+            # Rejected by their own format checks, so they never reach a caller.
+            "selectionHash": "too-short",
+            "samVersion": "not a version!",
+        }
+    )
+
+    job = project.job("mask-result-1")
+    assert job is not None
+    assert job.provenance == {
+        "sha256": "c" * 64,
+        "sourceImageSha256": "a" * 64,
+        "samPromptSha256": "d" * 64,
+        "maskRleSha256": "b" * 64,
+        "maskWidth": 1024,
+        "maskHeight": 576,
+        "maskBox": [0.1, 0.2, 0.6, 0.7],
+        "maskCoverage": 0.25,
+        "maskDetectedCount": 3,
+        "maskReturnedCount": 1,
+        "maskSelections": [
+            {"score": 0.9, "box": [0.1, 0.2, 0.6, 0.7], "coverage": 0.25, "included": True},
+            {"score": None, "box": None, "coverage": 0.05, "included": False},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_pixal3d_job_downloads_a_gltf_artifact_and_refuses_enhancement() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+    api.media_download_url = AsyncMock(return_value="https://cdn.example/object.glb")
+    api.download_url = AsyncMock(side_effect=AssertionError("Pixal3D must not use /v1/image"))
+
+    project = await api.create(
+        type="image",
+        model_id="pixal3d_int8_i23d",
+        positive_prompt="the red ceramic teapot",
+        number_of_media=1,
+        starting_image=True,
+        # Python names normalize to the camelCase spellings the worker reads.
+        texture_size=2048,
+        mesh_target_faces=60000,
+    )
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    assert request["outputFormat"] == "glb"
+    assert request["keyFrames"][0]["textureSize"] == 2048
+    assert request["keyFrames"][0]["meshTargetFaces"] == 60000
+
+    api._handle_job_state({"type": "jobStarted", "jobID": project.id, "imgID": "model-result-1"})
+    await api._apply_job_result(
+        {
+            "jobID": project.id,
+            "imgID": "model-result-1",
+            "performedStepCount": 56,
+            "lastSeed": "42",
+            "triggeredNSFWFilter": False,
+            "userCanceled": False,
+        }
+    )
+
+    job = project.job("model-result-1")
+    assert job is not None
+    assert job.type == "model"
+    assert job.result_url == "https://cdn.example/object.glb"
+    api.media_download_url.assert_awaited_once_with(
+        {
+            "jobId": project.id,
+            "id": "model-result-1",
+            "type": "complete",
+            "contentType": "model/gltf-binary",
+        }
+    )
+    # A Pixal3D project's params say type 'image', so the params check alone
+    # would have let a GLB job be sent for image enhancement.
+    with pytest.raises(RuntimeError, match="Enhancement is only available for images"):
+        await job.enhance("subtle")
+
+
+@pytest.mark.asyncio
+async def test_model_artifact_predicate_prefers_the_server_media_field() -> None:
+    api = ProjectsApi(FakeClient())
+    assert api.is_model_artifact_model_id("pixal3d_int8_i23d") is True
+    assert api.is_model_artifact_model_id("flux1-schnell-fp8") is False
+    api._supported_models = [
+        {"id": "future_i23d", "media": "model"},
+        {"id": "pixal3d_int8_i23d", "media": "image"},
+    ]
+    assert api.is_model_artifact_model_id("future_i23d") is True
+    assert api.is_model_artifact_model_id("pixal3d_int8_i23d") is False

@@ -226,6 +226,50 @@ await sogni.announcements.dismiss(announcement["id"])
 every reconnect, so a user who was offline when it published still receives it.
 Deduplicate on `id`.
 
+## Segmentation and 3D models
+
+Two workflows transform a source image instead of generating from a prompt, so
+each needs a `starting_image`. Ask the SDK rather than hardcoding model ids:
+`requires_starting_image()`, `is_segmentation_model()`, and
+`is_model_artifact_model()`, alongside the `SAM3_IMAGE_SEGMENT_MODEL_ID` and
+`PIXAL3D_IMAGE_TO_3D_MODEL_ID` constants.
+
+SAM 3 returns one lossless mask PNG the same size as the source. The request
+carries a bounded `sam3_prompt`: `points` (`label` `positive`/`negative`),
+`boxes` (a `negative` box excludes one instance of a text-prompted concept and
+requires `text`), `text`, `threshold`, `multimask` (point prompts only),
+`apply_mask` (return the selection cut out as RGBA instead of the bare mask),
+and `max_instances` (1 to 16). Coordinates are normalized from 0 to 1.
+
+```python
+from sogni_client import SAM3_IMAGE_SEGMENT_MODEL_ID
+
+project = await sogni.projects.create(
+    type="image",
+    model_id=SAM3_IMAGE_SEGMENT_MODEL_ID,
+    positive_prompt="",
+    number_of_media=1,
+    starting_image="room.png",
+    sam3_prompt={"text": "the teapot", "apply_mask": True, "max_instances": 1},
+)
+```
+
+Pixal3D returns a binary glTF, so `job.type` is `"model"` and the artifact
+downloads as `model/gltf-binary`. Its five reduce-only options —
+`texture_size`, `mesh_target_faces`, `normal_map_size`,
+`ambient_occlusion_size`, `shape_resolution` — each default to their maximum,
+so they can only ask for less work than the flat price already covers.
+`mesh_target_faces` is the one worth setting: the 700,000-triangle default is
+far heavier than a real-time engine wants.
+
+When a workflow attests its inputs and outputs, `job.provenance` carries the
+worker-signed receipt. Like `job.error` and `project.params`, it is the wire
+record, so its keys stay camelCase: lowercase SHA-256 digests (`sha256`,
+`sourceImageSha256`, `samPromptSha256`, `maskRleSha256`) plus, for SAM 3,
+`maskBox`, `maskCoverage`, and the per-selection report (`maskDetectedCount`,
+`maskReturnedCount`, `maskSelections`) that tells a confident selection from a
+marginal one. Malformed entries are dropped rather than surfaced half-valid.
+
 ## Sensitive content
 
 `job.is_nsfw` means the server **withheld** the media: the render ran with the
@@ -239,7 +283,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.29.2`. The
+This release tracks the current TypeScript source at `5.34.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 25 hosted-tool
@@ -248,7 +292,8 @@ schemas.
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
-RTX VSR, MiniMax Music 3, LoRA catalog discovery, queue start estimates,
+RTX VSR, MiniMax Music 3, SAM 3 image segmentation, Pixal3D image-to-3D,
+LoRA catalog discovery, queue start estimates,
 live-benchmarked render/total time on cost quotes, in-flight project recovery
 across reconnects, confirmed cancellation, connection/workload attribution, and
 admin announcements (`appAlert` plus the announcements read/dismiss pair).

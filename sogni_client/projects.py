@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import math
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -32,6 +33,8 @@ from .utils import (
     MINIMAX_H3_MAX_PIXELS,
     MINIMAX_H3_MIN_DURATION,
     MINIMAX_H3_MIN_FRAMES,
+    PIXAL3D_IMAGE_TO_3D_MODEL_ID,
+    SAM3_IMAGE_SEGMENT_MODEL_ID,
     calculate_video_frames,
     detect_content_type,
     get_video_workflow_type,
@@ -43,6 +46,7 @@ from .utils import (
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
     is_minimax_h3_turbo_model,
+    is_model_artifact_model,
     is_seedance25_model,
     is_seedance_model,
     is_video_model,
@@ -750,6 +754,303 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
             )
 
 
+# --- SAM 3 segmentation, Pixal3D image-to-3D, and world receipts ------------
+
+_SAM3_IMAGE_SEGMENT_WORKFLOW_ID = SAM3_IMAGE_SEGMENT_MODEL_ID
+_PIXAL3D_WORKFLOW_ID = PIXAL3D_IMAGE_TO_3D_MODEL_ID
+_WORLD_TARGET_STILL_MODEL_ID = "krea2_identity_edit_sogni_v0_3_alpha"
+_WORLD_TRANSITION_MODEL_ID = "minimax-h3-fastvideo-int8_flf2v_turbo"
+_MAX_SAM3_POINTS = 32
+_MAX_SAM3_BOXES = 16
+_MAX_SAM3_TEXT_LENGTH = 240
+_MAX_SAM3_INSTANCES = 16
+# Wire contract mirror of sogni-socket `helpers/sam3Prompt.js`.
+_SAM3_ROOT_KEYS = frozenset(
+    {"points", "boxes", "text", "threshold", "multimask", "applyMask", "maxInstances"}
+)
+_SAM3_POINT_KEYS = frozenset({"x", "y", "label"})
+_SAM3_BOX_KEYS = frozenset({"x0", "y0", "x1", "y1", "label"})
+# Pixal3D reduce-only options. Each max is the shipped default, so a request
+# can only ever ask for less work than the flat price already covers; the
+# socket and the worker both clamp again.
+_PIXAL3D_REDUCE_ONLY_LIMITS: dict[str, tuple[int, int]] = {
+    "textureSize": (1024, 4096),
+    "meshTargetFaces": (5000, 700000),
+    "normalMapSize": (512, 2048),
+    "ambientOcclusionSize": (256, 1024),
+    "shapeResolution": (1024, 1536),
+}
+_SHA256_HEX_PATTERN = re.compile(r"^[a-f0-9]{64}$", re.IGNORECASE)
+_SAM_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$")
+_JS_MAX_SAFE_INTEGER = 9007199254740991
+_JOB_PROVENANCE_HASH_FIELDS = (
+    "sha256",
+    "sourceImageSha256",
+    "samPromptSha256",
+    "maskRleSha256",
+    "selectionHash",
+    "firstFrameSha256",
+    "lastFrameSha256",
+)
+
+
+def _is_finite_number(value: Any) -> bool:
+    """JavaScript ``typeof value === 'number' && Number.isFinite(value)``.
+
+    Booleans are excluded because ``bool`` subclasses ``int`` in Python while
+    ``typeof true`` is ``'boolean'`` in JavaScript.
+    """
+
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _is_safe_integer(value: Any) -> bool:
+    """JavaScript ``Number.isSafeInteger``."""
+
+    if not _is_finite_number(value):
+        return False
+    if isinstance(value, float) and not value.is_integer():
+        return False
+    return abs(value) <= _JS_MAX_SAFE_INTEGER
+
+
+def _is_unit_interval(value: Any) -> bool:
+    return _is_finite_number(value) and 0 <= value <= 1
+
+
+def _normalized_bounds(value: Any) -> list[float] | None:
+    """Accept normalized [x0, y0, x1, y1] bounds, rejecting inverted or empty ones."""
+
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    if not all(_is_unit_interval(item) for item in value):
+        return None
+    x0, y0, x1, y1 = value
+    return [x0, y0, x1, y1] if x0 < x1 and y0 < y1 else None
+
+
+def _job_provenance_from_result(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate the worker-attested receipt a completed job may carry."""
+
+    result: dict[str, Any] = {}
+    for field in _JOB_PROVENANCE_HASH_FIELDS:
+        value = data.get(field)
+        if isinstance(value, str) and _SHA256_HEX_PATTERN.match(value):
+            result[field] = value.lower()
+    for field in ("maskWidth", "maskHeight"):
+        value = data.get(field)
+        if _is_safe_integer(value) and value > 0:
+            result[field] = int(value)
+    sam_version = data.get("samVersion")
+    if isinstance(sam_version, str) and _SAM_VERSION_PATTERN.match(sam_version):
+        result["samVersion"] = sam_version
+    bounds = _normalized_bounds(data.get("maskBox"))
+    if bounds is not None:
+        result["maskBox"] = bounds
+    if _is_unit_interval(data.get("maskCoverage")):
+        result["maskCoverage"] = data["maskCoverage"]
+    for field in ("maskDetectedCount", "maskReturnedCount"):
+        value = data.get(field)
+        if _is_safe_integer(value) and value >= 0:
+            result[field] = int(value)
+    if isinstance(data.get("maskSelections"), list):
+        # Drop anything malformed rather than surfacing a half-valid selection:
+        # a caller reading `score` should never get None from a typed field it
+        # believes is populated.
+        selections = [
+            {
+                "score": None if entry.get("score") is None else entry["score"],
+                "box": _normalized_bounds(entry.get("box")),
+                "coverage": entry["coverage"],
+                "included": entry["included"],
+            }
+            for entry in data["maskSelections"]
+            if isinstance(entry, dict)
+            and isinstance(entry.get("included"), bool)
+            and _is_unit_interval(entry.get("coverage"))
+            and (entry.get("score") is None or _is_unit_interval(entry.get("score")))
+        ]
+        if selections:
+            result["maskSelections"] = selections
+    return result or None
+
+
+def _normalize_world_generation_receipt(params: dict[str, Any]) -> dict[str, Any] | None:
+    """Bind a Sogni World job to the exact bytes it was rendered from."""
+
+    receipt = params.get("worldGenerationReceipt")
+    if receipt is None:
+        return None
+    if params.get("appSource") != "sogni-world":
+        raise _api_error('worldGenerationReceipt requires appSource "sogni-world".')
+
+    def _hash(value: Any, field: str) -> str:
+        if not isinstance(value, str) or not _SHA256_HEX_PATTERN.match(value):
+            raise _api_error(f"worldGenerationReceipt.{field} must be a SHA-256 hex digest.")
+        return value.lower()
+
+    stage = receipt.get("stage") if isinstance(receipt, dict) else None
+    if stage == "target_still":
+        if params.get("modelId") != _WORLD_TARGET_STILL_MODEL_ID:
+            raise _api_error(f"The target_still receipt requires {_WORLD_TARGET_STILL_MODEL_ID}.")
+        return {
+            "stage": stage,
+            "sourceImageSha256": _hash(receipt.get("sourceImageSha256"), "sourceImageSha256"),
+            "selectionHash": _hash(receipt.get("selectionHash"), "selectionHash"),
+        }
+    if stage == "transition":
+        if params.get("modelId") != _WORLD_TRANSITION_MODEL_ID:
+            raise _api_error(f"The transition receipt requires {_WORLD_TRANSITION_MODEL_ID}.")
+        return {
+            "stage": stage,
+            "firstFrameSha256": _hash(receipt.get("firstFrameSha256"), "firstFrameSha256"),
+            "lastFrameSha256": _hash(receipt.get("lastFrameSha256"), "lastFrameSha256"),
+        }
+    raise _api_error("worldGenerationReceipt.stage must be target_still or transition.")
+
+
+def _normalize_sam3_prompt(prompt: Any) -> dict[str, Any]:
+    """Validate the bounded SAM 3 selection prompt before it reaches the wire.
+
+    Mirrors ``normalizeSam3Prompt`` in the JS SDK and ``ROOT_KEYS`` /
+    ``POINT_KEYS`` / ``BOX_KEYS`` in sogni-socket ``helpers/sam3Prompt.js``,
+    message for message, so both clients fail identically.
+    """
+
+    if not isinstance(prompt, dict):
+        raise ValueError("sam3Prompt must be an object")
+    unknown_root = [key for key in prompt if key not in _SAM3_ROOT_KEYS]
+    if unknown_root:
+        raise ValueError(f"sam3Prompt contains unsupported fields: {', '.join(unknown_root)}")
+
+    def coordinate(value: Any, field: str) -> float:
+        if not _is_unit_interval(value):
+            raise ValueError(f"{field} must be a finite normalized coordinate from 0 to 1")
+        return value
+
+    points = prompt.get("points") or []
+    if not isinstance(points, list) or len(points) > _MAX_SAM3_POINTS:
+        raise ValueError(f"sam3Prompt.points must contain at most {_MAX_SAM3_POINTS} entries")
+    normalized_points: list[dict[str, Any]] = []
+    for index, point in enumerate(points):
+        if not isinstance(point, dict):
+            raise ValueError(f"sam3Prompt.points[{index}] must be an object")
+        if any(key not in _SAM3_POINT_KEYS for key in point):
+            raise ValueError(f"sam3Prompt.points[{index}] contains unsupported fields")
+        label = point.get("label")
+        if label not in {"positive", "negative"}:
+            raise ValueError(f'sam3Prompt.points[{index}].label must be "positive" or "negative"')
+        normalized_points.append(
+            {
+                "x": coordinate(point.get("x"), f"sam3Prompt.points[{index}].x"),
+                "y": coordinate(point.get("y"), f"sam3Prompt.points[{index}].y"),
+                "label": label,
+            }
+        )
+
+    boxes = prompt.get("boxes") or []
+    if not isinstance(boxes, list) or len(boxes) > _MAX_SAM3_BOXES:
+        raise ValueError(f"sam3Prompt.boxes must contain at most {_MAX_SAM3_BOXES} entries")
+    normalized_boxes: list[dict[str, Any]] = []
+    for index, box in enumerate(boxes):
+        if not isinstance(box, dict):
+            raise ValueError(f"sam3Prompt.boxes[{index}] must be an object")
+        if any(key not in _SAM3_BOX_KEYS for key in box):
+            raise ValueError(f"sam3Prompt.boxes[{index}] contains unsupported fields")
+        label = box.get("label")
+        if label is not None and label not in {"positive", "negative"}:
+            raise ValueError(f'sam3Prompt.boxes[{index}].label must be "positive" or "negative"')
+        normalized = {
+            "x0": coordinate(box.get("x0"), f"sam3Prompt.boxes[{index}].x0"),
+            "y0": coordinate(box.get("y0"), f"sam3Prompt.boxes[{index}].y0"),
+            "x1": coordinate(box.get("x1"), f"sam3Prompt.boxes[{index}].x1"),
+            "y1": coordinate(box.get("y1"), f"sam3Prompt.boxes[{index}].y1"),
+            # Boxes have always been positive exemplars, so an absent label
+            # leaves every existing caller on exactly its current behavior.
+            "label": "positive" if label is None else label,
+        }
+        if normalized["x0"] >= normalized["x1"] or normalized["y0"] >= normalized["y1"]:
+            raise ValueError(f"sam3Prompt.boxes[{index}] must have x0 < x1 and y0 < y1")
+        normalized_boxes.append(normalized)
+
+    text: str | None = None
+    if prompt.get("text") is not None:
+        if not isinstance(prompt["text"], str):
+            raise ValueError("sam3Prompt.text must be a string")
+        text = prompt["text"].strip()
+        if not text or len(text) > _MAX_SAM3_TEXT_LENGTH:
+            raise ValueError(
+                f"sam3Prompt.text must contain 1 to {_MAX_SAM3_TEXT_LENGTH} characters"
+            )
+    if not normalized_points and not normalized_boxes and not text:
+        raise ValueError("sam3Prompt requires at least one point, box, or text prompt")
+    if text and normalized_points:
+        raise ValueError("sam3Prompt cannot combine text and point prompts")
+    if normalized_points and len(normalized_boxes) > 1:
+        raise ValueError("sam3Prompt supports at most one box when point prompts are present")
+    # SAM 3 takes an exclusion exemplar only alongside a text prompt; the
+    # interactive point path has no way to express one.
+    if normalized_points and any(box["label"] == "negative" for box in normalized_boxes):
+        raise ValueError("sam3Prompt negative boxes require a text prompt")
+    threshold = prompt.get("threshold")
+    if threshold is not None and not _is_unit_interval(threshold):
+        raise ValueError("sam3Prompt.threshold must be a finite number from 0 to 1")
+    multimask = prompt.get("multimask")
+    if multimask is not None and not isinstance(multimask, bool):
+        raise ValueError("sam3Prompt.multimask must be a boolean")
+    # multimask chooses among SAM's whole/part/subpart candidates for one
+    # ambiguous click, so it only means anything on the point path.
+    if multimask is not None and not normalized_points:
+        raise ValueError("sam3Prompt.multimask requires point prompts")
+    apply_mask = prompt.get("applyMask")
+    if apply_mask is not None and not isinstance(apply_mask, bool):
+        raise ValueError("sam3Prompt.applyMask must be a boolean")
+    max_instances = prompt.get("maxInstances")
+    if max_instances is not None and (
+        not _is_safe_integer(max_instances)
+        or max_instances < 1
+        or max_instances > _MAX_SAM3_INSTANCES
+    ):
+        raise ValueError(
+            f"sam3Prompt.maxInstances must be an integer from 1 to {_MAX_SAM3_INSTANCES}"
+        )
+
+    normalized_prompt: dict[str, Any] = {"points": normalized_points, "boxes": normalized_boxes}
+    if text:
+        normalized_prompt["text"] = text
+    normalized_prompt["threshold"] = 0.5 if threshold is None else threshold
+    if normalized_points:
+        normalized_prompt["multimask"] = True if multimask is None else multimask
+    normalized_prompt["applyMask"] = apply_mask is True
+    if max_instances is not None:
+        normalized_prompt["maxInstances"] = max_instances
+    return normalized_prompt
+
+
+def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, Any]) -> None:
+    """Gate the SAM 3 and Pixal3D image workflows and serialize their options."""
+
+    if params["modelId"] == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID:
+        if not params.get("startingImage"):
+            raise ValueError("SAM3 image segmentation requires startingImage")
+        if params.get("sam3Prompt") is None:
+            raise ValueError("SAM3 image segmentation requires sam3Prompt")
+        keyframe["sam3Prompt"] = _normalize_sam3_prompt(params["sam3Prompt"])
+    elif params.get("sam3Prompt") is not None:
+        raise ValueError(f"sam3Prompt is only supported by {_SAM3_IMAGE_SEGMENT_WORKFLOW_ID}")
+    if params["modelId"] == _PIXAL3D_WORKFLOW_ID and not params.get("startingImage"):
+        raise ValueError("Pixal3D reconstruction requires startingImage")
+    for key, (minimum, maximum) in _PIXAL3D_REDUCE_ONLY_LIMITS.items():
+        requested = params.get(key)
+        if requested is None:
+            continue
+        if params["modelId"] != _PIXAL3D_WORKFLOW_ID:
+            raise ValueError(f"{key} is only supported by {_PIXAL3D_WORKFLOW_ID}")
+        if not _is_safe_integer(requested) or requested < minimum or requested > maximum:
+            raise ValueError(f"{key} must be an integer from {minimum} to {maximum}")
+        keyframe[key] = requested
+
+
 def create_job_request_message(
     project_id: str, params: dict[str, Any], options: dict[str, Any]
 ) -> dict[str, Any]:
@@ -763,6 +1064,7 @@ def create_job_request_message(
             f"Invalid model type. Model does not support {project_type} generation. Please use a different model."
         )
     template = _template()
+    world_generation_receipt = _normalize_world_generation_receipt(params)
     keyframe = dict(template["keyFrames"][0])
     keyframe.update(
         {
@@ -794,6 +1096,8 @@ def create_job_request_message(
         keyframe["loras"] = params["loras"]
     if params.get("loraStrengths"):
         keyframe["loraStrengths"] = params["loraStrengths"]
+    if world_generation_receipt:
+        keyframe["worldGenerationReceipt"] = world_generation_receipt
 
     if project_type == "image":
         keyframe["sizePreset"] = params.get("sizePreset")
@@ -836,6 +1140,7 @@ def create_job_request_message(
                     "strength": 1 - (float(params.get("startingImageStrength") or 0.5)),
                 }
             )
+        _apply_sam3_and_pixal3d_params(keyframe, params)
         control = params.get("controlNet")
         if control:
             raw: dict[str, Any] = {
@@ -1059,13 +1364,26 @@ def create_job_request_message(
     template["keyFrames"] = [keyframe]
     template.update(
         {
-            "previews": params.get("numberOfPreviews", 0) if project_type == "image" else 0,
-            "numberOfImages": params.get("numberOfMedia") or 1,
+            "previews": 0
+            if params["modelId"] == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID
+            else params.get("numberOfPreviews", 0)
+            if project_type == "image"
+            else 0,
+            "numberOfImages": 1
+            if params["modelId"] == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID
+            else params.get("numberOfMedia") or 1,
             "jobID": project_id,
             "disableSafety": bool(params.get("disableNSFWFilter")),
             "tokenType": params.get("tokenType"),
             "billingMode": params.get("billingMode"),
-            "outputFormat": params.get("outputFormat")
+            # Pixal3D returns a binary glTF and SAM 3 a lossless mask PNG, so
+            # neither format may be overridden into something the worker will
+            # not produce.
+            "outputFormat": "glb"
+            if params["modelId"] == _PIXAL3D_WORKFLOW_ID
+            else "png"
+            if params["modelId"] == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID
+            else params.get("outputFormat")
             or ("mp3" if project_type == "audio" else "mp4" if project_type == "video" else "png"),
             **workload_attribution_to_wire_fields(params.get("attribution")),
         }
@@ -1154,6 +1472,16 @@ class Job(DataEntity):
     resultUrl = result_url
 
     @property
+    def provenance(self) -> dict[str, Any] | None:
+        """Worker-attested input/output hashes for this result, when available.
+
+        Every field is optional: ordinary projects and older workers emit no
+        receipt at all. Hashes are lowercase SHA-256 hex digests when present.
+        """
+
+        return self._data.get("provenance")
+
+    @property
     def image_url(self) -> str | None:
         return self.result_url or self.preview_url
 
@@ -1235,7 +1563,16 @@ class Job(DataEntity):
 
     @property
     def type(self) -> str:
-        return self._project.type
+        """Media type produced by this job's model: image, video, audio, or model."""
+
+        model_id = self._project.params.get("modelId", "")
+        if self._api.is_video_model_id(model_id):
+            return "video"
+        if self._api.is_audio_model_id(model_id):
+            return "audio"
+        if self._api.is_model_artifact_model_id(model_id):
+            return "model"
+        return "image"
 
     @property
     def worker_name(self) -> str | None:
@@ -1300,10 +1637,12 @@ class Job(DataEntity):
             return self.result_url
         if self.status != "completed":
             raise RuntimeError("Job is not completed yet")
-        if self.type in {"video", "audio"}:
+        if self.type in {"video", "audio", "model"}:
             params: dict[str, Any] = {"jobId": self.project_id, "id": self.id, "type": "complete"}
             if self.type == "audio":
                 params["contentType"] = self._audio_content_type
+            if self.type == "model":
+                params["contentType"] = "model/gltf-binary"
             url = await self._api.media_download_url(params)
         else:
             params = {"jobId": self.project_id, "imageId": self.id, "type": "complete"}
@@ -1328,7 +1667,7 @@ class Job(DataEntity):
         overrides: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str | None:
-        if self._project.params.get("type") != "image":
+        if self._project.params.get("type") != "image" or self.type != "image":
             raise RuntimeError("Enhancement is only available for images")
         if self.status != "completed":
             raise RuntimeError("Job is not completed yet")
@@ -1383,6 +1722,8 @@ class Job(DataEntity):
         }
         if data.get("nsfwSources") is not None:
             delta["nsfwSources"] = list(data.get("nsfwSources") or [])
+        if data.get("result"):
+            delta["provenance"] = data["result"]
         status = _JOB_STATUS_MAP.get(data.get("status"))
         if status:
             delta["status"] = status
@@ -1786,6 +2127,7 @@ class Project(DataEntity):
                     "nsfwDetected": raw.get("nsfwDetected") is True,
                     "nsfwSources": list(raw.get("nsfwSources") or []),
                     "resultUrl": _raw_result_url(raw),
+                    "provenance": raw.get("result"),
                 }
             )
             await job._sync_with_rest_data(raw)
@@ -1897,6 +2239,21 @@ class ProjectsApi(EventEmitter):
 
     isAudioModelId = is_audio_model_id
 
+    def is_model_artifact_model_id(self, model_id: str) -> bool:
+        """Check whether a model returns a 3D artifact through the media endpoint.
+
+        Prefers the server's ``media`` field and falls back to the ``pixal3d_``
+        id prefix, so a worker serving the model before the catalog advertises
+        it still downloads correctly.
+        """
+
+        model = next(
+            (item for item in self._supported_models or [] if item.get("id") == model_id), None
+        )
+        return model.get("media") == "model" if model else is_model_artifact_model(model_id)
+
+    isModelArtifactModelId = is_model_artifact_model_id
+
     def _set_available_models(self, models: list[dict[str, Any]]) -> None:
         self._available_models = models
         self.emit("availableModels", self.available_models)
@@ -1945,6 +2302,11 @@ class ProjectsApi(EventEmitter):
         for required in ("type", "modelId", "positivePrompt", "numberOfMedia"):
             if required not in data:
                 raise ValueError(f"{required} is required")
+        # SAM 3 is a one-source/one-mask utility workflow. Normalize before
+        # Project construction so lifecycle completion and result MIME use the
+        # same values as the serialized request.
+        if data.get("type") == "image" and data.get("modelId") == _SAM3_IMAGE_SEGMENT_WORKFLOW_ID:
+            data = {**data, "numberOfMedia": 1, "numberOfPreviews": 0, "outputFormat": "png"}
         project = Project(data, self)
         options = await self.get_model_options(data["modelId"])
         request_params = dict(data)
@@ -2368,6 +2730,8 @@ class ProjectsApi(EventEmitter):
                     frame["nsfwDetected"] = job["nsfwDetected"]
                 if isinstance(job.get("nsfwSources"), list):
                     frame["nsfwSources"] = job["nsfwSources"]
+                if isinstance(job.get("result"), dict):
+                    frame.update(_job_provenance_from_result(job["result"]) or {})
                 await self._apply_job_result(frame)
                 continue
 
@@ -3128,9 +3492,14 @@ class ProjectsApi(EventEmitter):
         canceled = bool(data.get("userCanceled"))
         # Withheld media has nothing to mint. Labelled-but-delivered media does.
         withheld = nsfw and not detected
+        is_model_artifact = project is not None and self.is_model_artifact_model_id(
+            project.params.get("modelId", "")
+        )
         if not url and not withheld and not canceled:
             with contextlib.suppress(Exception):
-                if project is not None and project.type in {"video", "audio"}:
+                if project is not None and (
+                    project.type in {"video", "audio"} or is_model_artifact
+                ):
                     download: dict[str, Any] = {
                         "jobId": project.id,
                         "id": data.get("imgID"),
@@ -3140,6 +3509,8 @@ class ProjectsApi(EventEmitter):
                         download["contentType"] = (
                             job._audio_content_type if job is not None else "audio/mpeg"
                         )
+                    if is_model_artifact:
+                        download["contentType"] = "model/gltf-binary"
                     url = await self.media_download_url(download)
                 else:
                     download = {
@@ -3156,6 +3527,7 @@ class ProjectsApi(EventEmitter):
         seed: int | None = None
         with contextlib.suppress(KeyError, TypeError, ValueError):
             seed = int(data["lastSeed"])
+        provenance = _job_provenance_from_result(data)
         if job is not None:
             delta: dict[str, Any] = {
                 "status": "canceled" if canceled else "completed",
@@ -3166,6 +3538,8 @@ class ProjectsApi(EventEmitter):
                 "nsfwSources": sources,
                 "userCanceled": canceled,
             }
+            if provenance:
+                delta["provenance"] = provenance
             if isinstance(steps, (int, float)):
                 delta["step"] = steps
             job._update(delta)
@@ -3179,6 +3553,8 @@ class ProjectsApi(EventEmitter):
             "nsfwSources": sources,
             "userCanceled": canceled,
         }
+        if provenance:
+            event["provenance"] = provenance
         if isinstance(steps, (int, float)):
             event["steps"] = steps
         if seed is not None:

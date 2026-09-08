@@ -52,9 +52,21 @@ from .recovery import (
 from .replay import ReplayApi
 from .stats import StatsApi
 from .utils import (
+    PIXAL3D_IMAGE_TO_3D_MODEL_ID,
+    SAM3_IMAGE_SEGMENT_MODEL_ID,
     calculate_video_frames,
+    is_audio_model,
+    is_model_artifact_model,
+    is_segmentation_model,
+    is_video_model,
+    isAudioModel,
+    isModelArtifactModel,
+    isSegmentationModel,
+    isVideoModel,
     parse_creative_workflow_sse_chunk,
     parseCreativeWorkflowSseChunk,
+    requires_starting_image,
+    requiresStartingImage,
 )
 from .workflows import (
     CREATIVE_WORKFLOW_WAITING_REASONS,
@@ -62,12 +74,14 @@ from .workflows import (
     CreativeWorkflowTemplatesApi,
 )
 
-__version__ = "5.29.2"
+__version__ = "5.34.0"
 
 __all__ = [
     "CREATIVE_WORKFLOW_WAITING_REASONS",
+    "PIXAL3D_IMAGE_TO_3D_MODEL_ID",
     "PROJECT_LOST_ERROR",
     "PROJECT_LOST_ORIGINAL_CODE",
+    "SAM3_IMAGE_SEGMENT_MODEL_ID",
     "SUBSCRIPTION_ERROR_CODES",
     "VIDEO_WORKFLOW_ASSETS",
     "AccountApi",
@@ -99,12 +113,20 @@ __all__ = [
     "build_sogni_attribution_headers",
     "buildSogniAttributionHeaders",
     "create_job_request_message",
+    "is_audio_model",
+    "is_model_artifact_model",
     "is_project_lost_error",
+    "is_segmentation_model",
     "is_sogni_tool_call",
     "is_subscription_limit_error",
+    "is_video_model",
+    "isAudioModel",
+    "isModelArtifactModel",
     "isProjectLostError",
+    "isSegmentationModel",
     "isSogniToolCall",
     "isSubscriptionLimitError",
+    "isVideoModel",
     "normalize_connection_attribution",
     "normalizeConnectionAttribution",
     "parse_creative_workflow_sse_chunk",
@@ -113,6 +135,8 @@ __all__ = [
     "parseToolCallArguments",
     "project_params_from_recovered_project",
     "projectParamsFromRecoveredProject",
+    "requires_starting_image",
+    "requiresStartingImage",
     "resolve_workload_attribution",
     "resolveWorkloadAttribution",
     "workload_attribution_to_wire_fields",

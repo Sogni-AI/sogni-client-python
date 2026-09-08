@@ -6,6 +6,8 @@ from io import BytesIO
 import pytest
 
 from sogni_client.utils import (
+    PIXAL3D_IMAGE_TO_3D_MODEL_ID,
+    SAM3_IMAGE_SEGMENT_MODEL_ID,
     b64_json_decode,
     b64_json_encode,
     calculate_video_frames,
@@ -17,13 +19,16 @@ from sogni_client.utils import (
     is_external_video_model,
     is_happyhorse_model,
     is_ltx_model,
+    is_model_artifact_model,
     is_seedance_model,
+    is_segmentation_model,
     is_video_model,
     is_wan_model,
     new_id,
     normalize_params,
     parse_sse_chunk,
     read_media,
+    requires_starting_image,
     snake_to_camel,
 )
 
@@ -229,3 +234,52 @@ def test_parse_sse_chunk_preserves_empty_data_and_ignores_unknown_fields() -> No
     assert parse_sse_chunk("retry: 1000\ndata:\n\n") == [
         {"event": "message", "data": "", "raw": "retry: 1000\ndata:"}
     ]
+
+
+def test_capability_predicates_describe_the_3d_and_segmentation_models() -> None:
+    """The four consuming surfaces must be able to ask the SDK what a model does.
+
+    Hardcoding ``pixal3d_int8_i23d`` and ``sam3_image_segment_bf16`` in
+    sogni-api, sogni-chat, sogni-web and the creative-agent skill is four places
+    to miss a rename.
+    """
+
+    assert PIXAL3D_IMAGE_TO_3D_MODEL_ID == "pixal3d_int8_i23d"
+    assert SAM3_IMAGE_SEGMENT_MODEL_ID == "sam3_image_segment_bf16"
+
+    assert is_model_artifact_model(PIXAL3D_IMAGE_TO_3D_MODEL_ID) is True
+    assert is_model_artifact_model(SAM3_IMAGE_SEGMENT_MODEL_ID) is False
+    assert is_segmentation_model(SAM3_IMAGE_SEGMENT_MODEL_ID) is True
+    assert is_segmentation_model(PIXAL3D_IMAGE_TO_3D_MODEL_ID) is False
+
+    # Both transform a source image, so neither can run from a prompt alone.
+    assert requires_starting_image(PIXAL3D_IMAGE_TO_3D_MODEL_ID) is True
+    assert requires_starting_image(SAM3_IMAGE_SEGMENT_MODEL_ID) is True
+    assert requires_starting_image("z_image_turbo_bf16") is False
+
+    # Segmentation is not a generated image and must not be classified as one.
+    assert is_video_model(SAM3_IMAGE_SEGMENT_MODEL_ID) is False
+    assert is_audio_model(SAM3_IMAGE_SEGMENT_MODEL_ID) is False
+
+
+def test_capability_surface_is_exported_from_the_package_root() -> None:
+    import sogni_client
+
+    for name in (
+        "PIXAL3D_IMAGE_TO_3D_MODEL_ID",
+        "SAM3_IMAGE_SEGMENT_MODEL_ID",
+        "is_model_artifact_model",
+        "is_segmentation_model",
+        "requires_starting_image",
+        "is_video_model",
+        "is_audio_model",
+        "isModelArtifactModel",
+        "isSegmentationModel",
+        "requiresStartingImage",
+        "isVideoModel",
+        "isAudioModel",
+    ):
+        assert name in sogni_client.__all__, f"{name} is not exported from the package root"
+        assert getattr(sogni_client, name) is not None
+
+    assert sogni_client.__version__ == "5.34.0"
