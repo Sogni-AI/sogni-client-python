@@ -283,7 +283,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.34.1`. The
+This release tracks the current TypeScript source at `5.35.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 25 hosted-tool
