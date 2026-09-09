@@ -788,9 +788,7 @@ _PIXAL3D_REDUCE_ONLY_LIMITS: dict[str, tuple[int, int]] = {
 # `templateVariant` is the worker's generic template selector, so
 # an open one would let a caller aim a paid job at any graph a worker carries.
 _PIXAL3D_DEFAULT_TEMPLATE_VARIANT = "i23d-birefnet"
-_PIXAL3D_TEMPLATE_VARIANTS = (
-    _PIXAL3D_DEFAULT_TEMPLATE_VARIANT,
-)
+_PIXAL3D_TEMPLATE_VARIANTS = (_PIXAL3D_DEFAULT_TEMPLATE_VARIANT,)
 _SHA256_HEX_PATTERN = re.compile(r"^[a-f0-9]{64}$", re.IGNORECASE)
 _SAM_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$")
 _JS_MAX_SAFE_INTEGER = 9007199254740991
