@@ -5,7 +5,11 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 from sogni_client.utils import (
     PIXAL3D_IMAGE_TO_3D_MODEL_ID,
