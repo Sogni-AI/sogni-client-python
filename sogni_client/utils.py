@@ -208,10 +208,14 @@ def is_video_model(model_id: str) -> bool:
 
 
 def is_audio_model(model_id: str) -> bool:
-    return model_id.startswith("ace_step") or model_id == "minimax_music3"
+    return (
+        model_id.startswith("ace_step")
+        or model_id.startswith("qwen3_tts_")
+        or model_id == "minimax_music3"
+    )
 
 
-#: Canonical id of the prompt-guided image-to-3D reconstruction workflow.
+#: Canonical id of the prompt-free image-to-3D reconstruction workflow.
 PIXAL3D_IMAGE_TO_3D_MODEL_ID = "pixal3d_int8_i23d"
 
 #: Canonical id of the SAM 3 interactive image-segmentation workflow.

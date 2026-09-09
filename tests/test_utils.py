@@ -136,6 +136,16 @@ def test_video_workflow_detection_rejects_family_invalid_suffixes() -> None:
         ("seedance-2-0-mini", False, False, True, False, True, True, False),
         ("happyhorse-1.1-r2v", False, False, False, True, True, True, False),
         ("ace_step_1.5_xl_turbo", False, False, False, False, False, False, True),
+        (
+            "qwen3_tts_1.7b_voice_clone_bf16",
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            True,
+        ),
         ("flux1-schnell-fp8", False, False, False, False, False, False, False),
     ],
 )

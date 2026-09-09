@@ -315,6 +315,77 @@ def test_audio_request_keeps_audio_fields_and_omits_negative_prompt() -> None:
     assert message["outputFormat"] == "mp3"
 
 
+def test_speech_request_keeps_voice_controls_and_clone_reference() -> None:
+    message = create_job_request_message(
+        "speech-1",
+        {
+            "type": "audio",
+            "modelId": "qwen3_tts_1.7b_voice_clone_bf16",
+            "positivePrompt": "The compute is borrowed. The voice is yours.",
+            "numberOfMedia": 1,
+            "language": "Auto",
+            "creativity": 0.9,
+            "speaker": "ryan",
+            "instruct": "warm and unhurried",
+            "referenceText": "These are the exact words in the clip.",
+            "referenceAudio": True,
+            "outputFormat": "wav",
+        },
+        model_options("audio"),
+    )
+
+    keyframe = message["keyFrames"][0]
+    assert keyframe["speaker"] == "ryan"
+    assert keyframe["instruct"] == "warm and unhurried"
+    assert keyframe["referenceText"] == "These are the exact words in the clip."
+    assert keyframe["hasReferenceAudio"] is True
+    assert keyframe["language"] == "Auto"
+    assert keyframe["creativity"] == 0.9
+    assert keyframe["comfySampler"] is None
+    assert keyframe["comfyScheduler"] is None
+    assert message["outputFormat"] == "wav"
+
+
+@pytest.mark.asyncio
+async def test_speech_model_options_expose_voice_controls_without_music_controls() -> None:
+    api = ProjectsApi(FakeClient())
+    api.get_supported_models = AsyncMock(
+        return_value=[
+            {
+                "id": "qwen3_tts_1.7b_voice_clone_bf16",
+                "tier": "qwen3-tts-clone",
+            }
+        ]
+    )
+    api._get_model_tiers = AsyncMock(
+        return_value={
+            "qwen3-tts-clone": {
+                "type": "audio",
+                "steps": {"min": 1, "max": 1, "default": 1},
+                "language": {"allowed": ["Auto", "English"], "default": "Auto"},
+                "creativity": {"min": 0.1, "max": 2, "decimals": 1, "default": 0.9},
+                "speaker": {"allowed": ["serena", "ryan"], "default": "serena"},
+                "instruct": {"maxLength": 512, "required": False},
+                "referenceText": {"maxLength": 1024},
+                "acceptInputAudio": True,
+                "requiresReferenceAudio": True,
+            }
+        }
+    )
+
+    options = await api.get_model_options("qwen3_tts_1.7b_voice_clone_bf16")
+
+    assert options["type"] == "audio"
+    assert options["speaker"] == {"allowed": ["serena", "ryan"], "default": "serena"}
+    assert options["instruct"] == {"maxLength": 512, "required": False}
+    assert options["referenceText"] == {"maxLength": 1024}
+    assert options["acceptsReferenceAudio"] is True
+    assert options["requiresReferenceAudio"] is True
+    assert "duration" not in options
+    assert "sampler" not in options
+    assert "scheduler" not in options
+
+
 def test_minimax_h3_reference_request_uses_numbered_assets_and_frame_grid() -> None:
     message = create_job_request_message(
         "h3-reference",
@@ -650,6 +721,45 @@ async def test_create_normalizes_python_names_uploads_assets_and_annotates_conte
     ]
     puts = [call for call in client.rest.calls if call["method"] == "PUT"]
     assert [call["content_type"] for call in puts] == ["image/png", "audio/mpeg"]
+
+
+@pytest.mark.asyncio
+async def test_voice_clone_uploads_reference_audio_and_annotates_its_type() -> None:
+    client = FakeClient([{"data": {"uploadUrl": "https://upload.example/voice"}}])
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("audio"))
+
+    project = await api.create(
+        type="audio",
+        model_id="qwen3_tts_1.7b_voice_clone_bf16",
+        positive_prompt="The compute is borrowed. The voice is yours.",
+        number_of_media=1,
+        reference_audio=MP3,
+        reference_text="These are the exact words in the clip.",
+        output_format="wav",
+    )
+
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    keyframe = request["keyFrames"][0]
+    assert keyframe["hasReferenceAudio"] is True
+    assert keyframe["referenceAudioContentType"] == "audio/mpeg"
+    assert keyframe["referenceText"] == "These are the exact words in the clip."
+    assert [
+        (call["path"], call["params"]) for call in client.rest.calls if call["method"] == "GET"
+    ] == [
+        (
+            "/v1/media/uploadUrl",
+            {
+                "jobId": project.id,
+                "type": "referenceAudio",
+                "contentType": "audio/mpeg",
+            },
+        )
+    ]
+    put = next(call for call in client.rest.calls if call["method"] == "PUT")
+    assert put["data"] == MP3
+    assert put["content_type"] == "audio/mpeg"
 
 
 @pytest.mark.asyncio
@@ -1548,6 +1658,13 @@ def test_sam3_multimask_is_a_point_only_control() -> None:
         model_options("image"),
     )
     assert explicit["keyFrames"][0]["sam3Prompt"]["multimask"] is False
+
+    declined_for_text = create_job_request_message(
+        "sam3-text-with-multimask-off",
+        sam3_params(sam3Prompt={"text": "the teapot", "multimask": False}),
+        model_options("image"),
+    )
+    assert "multimask" not in declined_for_text["keyFrames"][0]["sam3Prompt"]
 
 
 def test_sam3_prompt_validates_points_boxes_text_and_threshold() -> None:

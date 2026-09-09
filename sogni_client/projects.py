@@ -773,10 +773,10 @@ _SAM3_ROOT_KEYS = frozenset(
 )
 _SAM3_POINT_KEYS = frozenset({"x", "y", "label"})
 _SAM3_BOX_KEYS = frozenset({"x0", "y0", "x1", "y1", "label"})
-# Pixal3D reduce-only options. Each max is the shipped default, so a request
-# can only ever ask for less work than the flat price already covers; the
-# socket and the worker both clamp again.
-_PIXAL3D_REDUCE_ONLY_LIMITS: dict[str, tuple[int, int]] = {
+# Pixal3D generation options. Four are reduce-only because their maximum is the
+# shipped default. `shapeResolution` is the exception: 1024 is the default and
+# 1536 is the priced maximum-detail step. The socket and worker clamp again.
+_PIXAL3D_OPTION_LIMITS: dict[str, tuple[int, int]] = {
     "textureSize": (1024, 4096),
     "meshTargetFaces": (5000, 700000),
     "normalMapSize": (512, 2048),
@@ -1008,8 +1008,9 @@ def _normalize_sam3_prompt(prompt: Any) -> dict[str, Any]:
     if multimask is not None and not isinstance(multimask, bool):
         raise ValueError("sam3Prompt.multimask must be a boolean")
     # multimask chooses among SAM's whole/part/subpart candidates for one
-    # ambiguous click, so it only means anything on the point path.
-    if multimask is not None and not normalized_points:
+    # ambiguous click, so enabling it only means anything on the point path.
+    # Explicitly declining it is a harmless no-op on text and box requests.
+    if multimask is True and not normalized_points:
         raise ValueError("sam3Prompt.multimask requires point prompts")
     apply_mask = prompt.get("applyMask")
     if apply_mask is not None and not isinstance(apply_mask, bool):
@@ -1078,7 +1079,7 @@ def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, A
                 f"templateVariant must be one of: {', '.join(_PIXAL3D_TEMPLATE_VARIANTS)}"
             )
         keyframe["templateVariant"] = template_variant
-    for key, (minimum, maximum) in _PIXAL3D_REDUCE_ONLY_LIMITS.items():
+    for key, (minimum, maximum) in _PIXAL3D_OPTION_LIMITS.items():
         requested = params.get(key)
         if requested is None:
             continue
@@ -1396,9 +1397,14 @@ def create_job_request_message(
             "promptStrength",
             "creativity",
             "shift",
+            "speaker",
+            "instruct",
+            "referenceText",
         ):
             if params.get(field) is not None:
                 keyframe[field] = params[field]
+        if params.get("referenceAudio"):
+            keyframe["hasReferenceAudio"] = True
         keyframe["comfySampler"] = _validate_option(params.get("sampler"), options, "sampler")
         keyframe["comfyScheduler"] = _validate_option(params.get("scheduler"), options, "scheduler")
 
@@ -2483,6 +2489,13 @@ class ProjectsApi(EventEmitter):
                             request["keyFrames"][0].setdefault(
                                 "referenceAudioContentType", content_type
                             )
+        elif data["type"] == "audio":
+            reference_audio = data.get("referenceAudio")
+            if reference_audio and reference_audio is not True:
+                content_type = await self._upload_asset(
+                    project.id, "referenceAudio", reference_audio, media=True
+                )
+                request["keyFrames"][0]["referenceAudioContentType"] = content_type
 
     async def _upload_asset(self, job_id: str, role: str, value: Any, *, media: bool) -> str | None:
         content_type = detect_content_type(value)
@@ -3080,15 +3093,17 @@ class ProjectsApi(EventEmitter):
                 f'Unable to find model tier "{model.get("tier")}" please contact support'
             )
         kind = tier.get("type") or "image"
-        options: dict[str, Any] = {
-            "type": kind,
-            "sampler": self._map_options(
-                tier.get("comfySampler") or tier.get("sampler"), _SAMPLER_ALIASES
-            ),
-            "scheduler": self._map_options(
-                tier.get("comfyScheduler") or tier.get("scheduler"), _SCHEDULER_ALIASES
-            ),
-        }
+        options: dict[str, Any] = {"type": kind}
+        sampler = tier.get("comfySampler") or tier.get("sampler")
+        scheduler = tier.get("comfyScheduler") or tier.get("scheduler")
+        if sampler:
+            options["sampler"] = self._map_options(sampler, _SAMPLER_ALIASES)
+        elif kind != "audio":
+            options["sampler"] = self._map_options(None)
+        if scheduler:
+            options["scheduler"] = self._map_options(scheduler, _SCHEDULER_ALIASES)
+        elif kind != "audio":
+            options["scheduler"] = self._map_options(None)
         for field in (
             "steps",
             "guidance",
@@ -3105,6 +3120,20 @@ class ProjectsApi(EventEmitter):
         for field in ("fps", "timesignature", "language", "keyscale", "vae"):
             if tier.get(field):
                 options[field] = self._map_options(tier[field])
+        if tier.get("speaker"):
+            options["speaker"] = self._map_options(tier["speaker"])
+        if tier.get("instruct"):
+            options["instruct"] = {
+                "maxLength": tier["instruct"]["maxLength"],
+                "required": tier["instruct"].get("required") is True,
+            }
+        if tier.get("referenceText"):
+            options["referenceText"] = {"maxLength": tier["referenceText"]["maxLength"]}
+        if tier.get("acceptInputAudio"):
+            options["acceptsReferenceAudio"] = True
+        if tier.get("requiresReferenceAudio"):
+            options["acceptsReferenceAudio"] = True
+            options["requiresReferenceAudio"] = True
         if tier.get("composerMode"):
             options["composerMode"] = {"default": tier["composerMode"]["default"]}
         if tier.get("maxPixels") is not None:

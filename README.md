@@ -105,6 +105,31 @@ python examples/krea_identity_edit.py scene.png identity.png \
   --count 4
 ```
 
+## Generate speech with Qwen3-TTS
+
+Qwen3-TTS exposes three audio model IDs: studio voices, voice cloning, and
+voice design. The prompt is the script to read aloud.
+
+```python
+project = await sogni.projects.create(
+    type="audio",
+    model_id="qwen3_tts_1.7b_custom_voice_bf16",
+    positive_prompt="Every render on the Supernet runs on somebody else's GPU.",
+    number_of_media=1,
+    speaker="serena",
+    instruct="warm and unhurried, close to the mic",
+    output_format="mp3",
+)
+print(await project.wait_for_completion())
+```
+
+Voice Clone uses `qwen3_tts_1.7b_voice_clone_bf16` and requires a 3–30 second
+`reference_audio` clip. Supply `reference_text` with the exact words spoken in
+that clip whenever possible; the transcript is the strongest control on how
+closely the clone preserves the source voice and accent. Voice Design uses
+`qwen3_tts_1.7b_voice_design_bf16` and requires `instruct` to describe the
+speaker to invent.
+
 ## Chat
 
 Socket-backed completion:
@@ -255,10 +280,10 @@ project = await sogni.projects.create(
 ```
 
 Pixal3D returns a binary glTF, so `job.type` is `"model"` and the artifact
-downloads as `model/gltf-binary`. Its five reduce-only options —
-`texture_size`, `mesh_target_faces`, `normal_map_size`,
-`ambient_occlusion_size`, `shape_resolution` — each default to their maximum,
-so they can only ask for less work than the flat price already covers.
+downloads as `model/gltf-binary`. Four options — `texture_size`,
+`mesh_target_faces`, `normal_map_size`, and `ambient_occlusion_size` — are
+reduce-only and default to their maximum. `shape_resolution` defaults to 1024
+and can be raised to the priced 1536 maximum-detail step.
 `mesh_target_faces` is the one worth setting: the 700,000-triangle default is
 far heavier than a real-time engine wants.
 
@@ -292,7 +317,8 @@ schemas.
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
-RTX VSR, MiniMax Music 3, SAM 3 image segmentation, Pixal3D image-to-3D,
+RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
+segmentation, Pixal3D image-to-3D,
 LoRA catalog discovery, queue start estimates,
 live-benchmarked render/total time on cost quotes, in-flight project recovery
 across reconnects, confirmed cancellation, connection/workload attribution, and
