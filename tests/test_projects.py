@@ -1773,13 +1773,7 @@ def test_birefnet_apply_mask_belongs_to_exactly_one_model() -> None:
 
 
 def test_pixal3d_template_variant_selects_the_reconstruction_graph() -> None:
-    """ComfyUI registers two graphs under the one Pixal3D workflow id.
-
-    `i23d-birefnet` is the default and takes no prompt; `i23d` is the prompted
-    path that used to be the default. The worker picks between them from
-    clientParams.templateVariant, which the socket forwards only when the
-    request names one, so without this field the prompted graph is unreachable.
-    """
+    """ComfyUI registers one prompt-free BiRefNet Pixal3D graph."""
 
     unnamed = create_job_request_message(
         "pixal3d-default-variant", pixal3d_params(), model_options("image")
@@ -1788,13 +1782,12 @@ def test_pixal3d_template_variant_selects_the_reconstruction_graph() -> None:
     # worker resolves only the variants its own manifest declares.
     assert "templateVariant" not in unnamed["keyFrames"][0]
 
-    for variant in ("i23d-birefnet", "i23d"):
-        named = create_job_request_message(
-            f"pixal3d-variant-{variant}",
-            pixal3d_params(templateVariant=variant),
-            model_options("image"),
-        )
-        assert named["keyFrames"][0]["templateVariant"] == variant
+    named = create_job_request_message(
+        "pixal3d-variant-i23d-birefnet",
+        pixal3d_params(templateVariant="i23d-birefnet"),
+        model_options("image"),
+    )
+    assert named["keyFrames"][0]["templateVariant"] == "i23d-birefnet"
 
     # The prompt-free graph does not need one.
     birefnet = create_job_request_message(
@@ -1804,16 +1797,15 @@ def test_pixal3d_template_variant_selects_the_reconstruction_graph() -> None:
     )
     assert birefnet["keyFrames"][0]["templateVariant"] == "i23d-birefnet"
 
-    # The prompted graph names the object to reconstruct, so an empty prompt is
-    # a full-price reconstruction of whatever the empty string picks out.
-    with pytest.raises(ValueError, match='templateVariant "i23d" requires positivePrompt'):
+    # The retired prompted graph is no longer accepted.
+    with pytest.raises(ValueError, match="templateVariant must be one of: i23d-birefnet"):
         create_job_request_message(
-            "pixal3d-prompted-no-prompt",
-            pixal3d_params(templateVariant="i23d", positivePrompt="   "),
+            "pixal3d-retired-variant",
+            pixal3d_params(templateVariant="i23d", positivePrompt="the subject"),
             model_options("image"),
         )
     # A closed list, not a passthrough.
-    with pytest.raises(ValueError, match="templateVariant must be one of: i23d-birefnet, i23d"):
+    with pytest.raises(ValueError, match="templateVariant must be one of: i23d-birefnet"):
         create_job_request_message(
             "pixal3d-unknown-variant",
             pixal3d_params(templateVariant="i23d-experimental"),
@@ -1822,7 +1814,7 @@ def test_pixal3d_template_variant_selects_the_reconstruction_graph() -> None:
     with pytest.raises(ValueError, match="templateVariant is only supported by pixal3d_int8_i23d"):
         create_job_request_message(
             "pixal3d-variant-wrong-model",
-            pixal3d_params(modelId="flux1-schnell-fp8", templateVariant="i23d"),
+            pixal3d_params(modelId="flux1-schnell-fp8", templateVariant="i23d-birefnet"),
             model_options("image"),
         )
 

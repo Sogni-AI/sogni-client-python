@@ -783,15 +783,13 @@ _PIXAL3D_REDUCE_ONLY_LIMITS: dict[str, tuple[int, int]] = {
     "ambientOcclusionSize": (256, 1024),
     "shapeResolution": (1024, 1536),
 }
-# The two graphs ComfyUI's workflows/image/manifest.json registers under the
-# Pixal3D workflow id, by their manifest `variant` names. A closed list, not a
-# passthrough: `templateVariant` is the worker's generic template selector, so
+# The sole graph ComfyUI's workflows/image/manifest.json registers under the
+# Pixal3D workflow id. This is a closed list, not a passthrough:
+# `templateVariant` is the worker's generic template selector, so
 # an open one would let a caller aim a paid job at any graph a worker carries.
 _PIXAL3D_DEFAULT_TEMPLATE_VARIANT = "i23d-birefnet"
-_PIXAL3D_PROMPTED_TEMPLATE_VARIANT = "i23d"
 _PIXAL3D_TEMPLATE_VARIANTS = (
     _PIXAL3D_DEFAULT_TEMPLATE_VARIANT,
-    _PIXAL3D_PROMPTED_TEMPLATE_VARIANT,
 )
 _SHA256_HEX_PATTERN = re.compile(r"^[a-f0-9]{64}$", re.IGNORECASE)
 _SAM_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$")
@@ -1069,10 +1067,10 @@ def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, A
         )
     if params["modelId"] == _PIXAL3D_WORKFLOW_ID and not params.get("startingImage"):
         raise ValueError("Pixal3D reconstruction requires startingImage")
-    # Which of the two Pixal3D graphs to run. Unset is not the same as naming
+    # Which Pixal3D graph to run. Unset is not the same as naming
     # the default: a worker resolves only the variants its own manifest
     # declares, so an unset field lets each worker run its own shipped default,
-    # while naming one pins the graph for callers that need the other path.
+    # while naming it preserves compatibility with explicit callers.
     template_variant = params.get("templateVariant")
     if template_variant is not None:
         if params["modelId"] != _PIXAL3D_WORKFLOW_ID:
@@ -1080,15 +1078,6 @@ def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, A
         if template_variant not in _PIXAL3D_TEMPLATE_VARIANTS:
             raise ValueError(
                 f"templateVariant must be one of: {', '.join(_PIXAL3D_TEMPLATE_VARIANTS)}"
-            )
-        # The prompted graph selects the object to reconstruct. With no prompt
-        # it reconstructs whatever the empty string picks out, at the same price.
-        if (
-            template_variant == _PIXAL3D_PROMPTED_TEMPLATE_VARIANT
-            and not str(params.get("positivePrompt") or "").strip()
-        ):
-            raise ValueError(
-                f'templateVariant "{_PIXAL3D_PROMPTED_TEMPLATE_VARIANT}" requires positivePrompt'
             )
         keyframe["templateVariant"] = template_variant
     for key, (minimum, maximum) in _PIXAL3D_REDUCE_ONLY_LIMITS.items():
