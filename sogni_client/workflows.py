@@ -309,6 +309,9 @@ class CreativeWorkflowsApi:
             default=_MISSING,
         )
         confirm_cost = _pick(values, "confirm_cost", "confirmCost", default=_MISSING)
+        safe_content_filter = values.get("safeContentFilter")
+        if safe_content_filter is None:
+            safe_content_filter = values.get("safe_content_filter", _MISSING)
         if token_type:
             body["token_type"] = token_type
         if billing_mode:
@@ -319,6 +322,8 @@ class CreativeWorkflowsApi:
             body["max_estimated_capacity_units"] = max_units
         if confirm_cost is not _MISSING and confirm_cost is not None:
             body["confirm_cost"] = confirm_cost
+        if safe_content_filter is not _MISSING:
+            body["safe_content_filter"] = safe_content_filter
         if media_references is not _MISSING and media_references is not None:
             body["media_references"] = media_references
 

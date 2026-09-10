@@ -184,6 +184,62 @@ async def test_workflow_start_combines_idempotency_and_attribution_headers() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("saved_template", [True, False])
+@pytest.mark.parametrize(
+    ("preference", "expected"),
+    [
+        ({}, None),
+        ({"safe_content_filter": True}, True),
+        ({"safe_content_filter": False}, False),
+        ({"safeContentFilter": False}, False),
+        ({"safeContentFilter": True, "safe_content_filter": False}, True),
+        ({"safeContentFilter": False, "safe_content_filter": True}, False),
+        ({"safeContentFilter": None, "safe_content_filter": False}, False),
+    ],
+)
+async def test_workflow_start_preserves_content_filter_preference(
+    saved_template: bool, preference: dict[str, Any], expected: bool | None
+) -> None:
+    workflow = {"workflowId": "wf-filter", "safeContentFilter": False}
+    rest = FakeRest([{"data": {"workflow": workflow}}])
+    api = CreativeWorkflowsApi(fake_client(rest))
+    authored = {"safe_content_filter": False, "safeContentFilter": False}
+    source = (
+        {"workflow_id": "template-1", "inputs": authored}
+        if saved_template
+        else {"input": {"steps": [], **authored}}
+    )
+
+    result = await api.start({**source, **preference})
+
+    assert result["safeContentFilter"] is False
+    body = rest.calls[0]["body"]
+    assert body.get("safe_content_filter") is expected
+    assert ("safe_content_filter" in body) is (expected is not None)
+    assert "safeContentFilter" not in body
+    assert (
+        body["inputs" if saved_template else "input"]
+        == source["inputs" if saved_template else "input"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["resume", "reseed"])
+async def test_workflow_continuation_does_not_replace_content_filter(method: str) -> None:
+    workflow = {"workflowId": "wf-filter", "safeContentFilter": False}
+    rest = FakeRest([{"data": {"workflow": workflow, "resumed": True}}])
+    api = CreativeWorkflowsApi(fake_client(rest))
+
+    await getattr(api, method)(
+        "wf-filter", {"safeContentFilter": True, "safe_content_filter": True}
+    )
+
+    body = rest.calls[0]["body"] or {}
+    assert "safe_content_filter" not in body
+    assert "safeContentFilter" not in body
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("params", "message"),
     [
