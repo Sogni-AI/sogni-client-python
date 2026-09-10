@@ -318,7 +318,7 @@ Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
-segmentation, Pixal3D image-to-3D,
+segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,
 live-benchmarked render/total time on cost quotes, in-flight project recovery
 across reconnects, confirmed cancellation, connection/workload attribution, and

@@ -193,6 +193,13 @@ def is_external_video_model(model_id: str) -> bool:
     return is_seedance_model(model_id) or is_happyhorse_model(model_id) or is_wan3_model(model_id)
 
 
+FLASHVSR_VIDEO_UPSCALE_MODEL_ID = "flashvsr_v1.1_tiny_long_bf16"
+
+
+def is_video_upscale_model(model_id: str) -> bool:
+    return model_id == FLASHVSR_VIDEO_UPSCALE_MODEL_ID
+
+
 def is_video_model(model_id: str) -> bool:
     return any(
         predicate(model_id)
@@ -203,6 +210,7 @@ def is_video_model(model_id: str) -> bool:
             is_happyhorse_model,
             is_wan3_model,
             is_minimax_h3_model,
+            is_video_upscale_model,
         )
     )
 
@@ -256,6 +264,7 @@ def requires_starting_image(model_id: str) -> bool:
 
 
 isVideoModel = is_video_model
+isVideoUpscaleModel = is_video_upscale_model
 isAudioModel = is_audio_model
 isModelArtifactModel = is_model_artifact_model
 isSegmentationModel = is_segmentation_model
@@ -277,7 +286,9 @@ def calculate_video_frames(
     def js_round(value: float) -> int:
         return math.floor(value + 0.5)
 
-    if is_wan_model(model_id):
+    if is_video_upscale_model(model_id):
+        frames = js_round(duration * fps)
+    elif is_wan_model(model_id):
         frames = js_round(duration * 16) + 1
     elif is_minimax_h3_model(model_id):
         requested_frames = js_round(duration * MINIMAX_H3_FPS)
@@ -306,6 +317,8 @@ def calculate_video_frames(
 
 
 def get_video_workflow_type(model_id: str) -> str | None:
+    if is_video_upscale_model(model_id):
+        return "upscale"
     if is_wan3_model(model_id):
         return "t2v"
     if is_happyhorse_model(model_id):

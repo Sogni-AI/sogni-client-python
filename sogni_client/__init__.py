@@ -53,6 +53,7 @@ from .replay import ReplayApi
 from .stats import StatsApi
 from .utils import (
     BIREFNET_BACKGROUND_REMOVAL_MODEL_ID,
+    FLASHVSR_VIDEO_UPSCALE_MODEL_ID,
     PIXAL3D_IMAGE_TO_3D_MODEL_ID,
     SAM3_IMAGE_SEGMENT_MODEL_ID,
     calculate_video_frames,
@@ -60,10 +61,12 @@ from .utils import (
     is_model_artifact_model,
     is_segmentation_model,
     is_video_model,
+    is_video_upscale_model,
     isAudioModel,
     isModelArtifactModel,
     isSegmentationModel,
     isVideoModel,
+    isVideoUpscaleModel,
     parse_creative_workflow_sse_chunk,
     parseCreativeWorkflowSseChunk,
     requires_starting_image,
@@ -79,6 +82,7 @@ __version__ = "5.36.3"
 
 __all__ = [
     "BIREFNET_BACKGROUND_REMOVAL_MODEL_ID",
+    "FLASHVSR_VIDEO_UPSCALE_MODEL_ID",
     "CREATIVE_WORKFLOW_WAITING_REASONS",
     "PIXAL3D_IMAGE_TO_3D_MODEL_ID",
     "PROJECT_LOST_ERROR",
@@ -122,6 +126,7 @@ __all__ = [
     "is_sogni_tool_call",
     "is_subscription_limit_error",
     "is_video_model",
+    "is_video_upscale_model",
     "isAudioModel",
     "isModelArtifactModel",
     "isProjectLostError",
@@ -129,6 +134,7 @@ __all__ = [
     "isSogniToolCall",
     "isSubscriptionLimitError",
     "isVideoModel",
+    "isVideoUpscaleModel",
     "normalize_connection_attribution",
     "normalizeConnectionAttribution",
     "parse_creative_workflow_sse_chunk",

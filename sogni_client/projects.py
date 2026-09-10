@@ -52,6 +52,7 @@ from .utils import (
     is_seedance_model,
     is_segmentation_model,
     is_video_model,
+    is_video_upscale_model,
     is_wan3_enhanced_model,
     is_wan3_model,
     new_id,
@@ -62,6 +63,14 @@ from .utils import (
 _LOGGER = logging.getLogger("sogni_client")
 
 VIDEO_WORKFLOW_ASSETS: dict[str, dict[str, str]] = {
+    "upscale": {
+        "referenceImage": "forbidden",
+        "referenceImageEnd": "forbidden",
+        "referenceAudio": "forbidden",
+        "referenceAudioIdentity": "forbidden",
+        "referenceVideo": "required",
+        "referenceMask": "forbidden",
+    },
     "t2v": {
         "referenceImage": "forbidden",
         "referenceImageEnd": "forbidden",
@@ -314,10 +323,80 @@ def _validate_number(
     if not math.isfinite(number):
         raise ValueError(f"{property_name} must be a number, got {value}")
     if minimum is not None and number < minimum:
-        raise ValueError(f"{property_name} must greater or equal {minimum:g}, got {number:g}")
+        raise ValueError(
+            f"{property_name} must greater or equal {_js_number_string(minimum)}, "
+            f"got {_js_number_string(number)}"
+        )
     if maximum is not None and number > maximum:
-        raise ValueError(f"{property_name} must be less or equal {maximum:g}, got {number:g}")
+        raise ValueError(
+            f"{property_name} must be less or equal {_js_number_string(maximum)}, "
+            f"got {_js_number_string(number)}"
+        )
     return int(number) if number.is_integer() else number
+
+
+def _js_number_string(number: float) -> str:
+    """JavaScript ``String(number)`` for finite values between 1e-4 and 1e21.
+
+    Both languages print the shortest round-trip digits; JavaScript drops the
+    ``.0`` of an integral value. Outside that range the exponent formats differ.
+    """
+
+    return str(int(number)) if float(number).is_integer() else repr(float(number))
+
+
+def _query_number(value: Any) -> Any:
+    """A query value as JavaScript's ``String(value)`` sends it (1920.0 as "1920")."""
+
+    if isinstance(value, float) and math.isfinite(value):
+        return _js_number_string(value)
+    return value
+
+
+# ECMAScript WhiteSpace and LineTerminator code points, as String.prototype.trim
+# strips them. Python's bare str.strip() also removes U+001C-U+001F and U+0085
+# but keeps U+FEFF.
+_JS_WHITESPACE = (
+    "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
+    "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+_JS_NUMERIC_STRING = re.compile(r"[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|Infinity)", re.ASCII)
+
+
+def _js_number(value: Any) -> float:
+    """JavaScript ``Number(value)`` for the primitives request params carry.
+
+    ``None`` stands in for both ``undefined`` (NaN) and ``null`` (0); it maps to
+    NaN, and every caller rejects either result the same way.
+    """
+
+    if isinstance(value, (bool, int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip(_JS_WHITESPACE)
+        if not text:
+            return 0.0
+        if _JS_NUMERIC_STRING.fullmatch(text):
+            return float(text.replace("Infinity", "inf"))
+    return math.nan
+
+
+def _js_truthy(value: Any) -> bool:
+    """JavaScript truthiness: every list, dict, and object is truthy, NaN is not."""
+
+    if value is None or value is False:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0 and not math.isnan(value)
+    if isinstance(value, str):
+        return value != ""
+    return True
+
+
+def _js_length(value: Any) -> int:
+    """JavaScript ``value?.length`` for strings and arrays, else 0."""
+
+    return len(value) if isinstance(value, (str, list, tuple)) else 0
 
 
 def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
@@ -498,6 +577,71 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
             raise _api_error(
                 "MiniMax H3 dimensions must use a 32px grid, stay at or below 1344px per axis, and fit within 1,032,192 pixels."
             )
+
+
+_VIDEO_UPSCALE_RESOLUTIONS = (1080, 1440)
+_VIDEO_UPSCALE_MAX_FRAMES = 362
+_VIDEO_UPSCALE_MAX_DURATION = _VIDEO_UPSCALE_MAX_FRAMES / 24
+
+
+def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int]:
+    """FlashVSR request checks, in the JS SDK's order and with its messages.
+
+    Returns the delivery resolution on the shorter edge and the source frame
+    count. The JS SDK throws a plain ``Error`` here, which this port raises as
+    ``ValueError``.
+    """
+
+    resolution: Any = params.get("upscaleResolution")
+    if resolution is None:
+        width, height = _js_number(params.get("width")), _js_number(params.get("height"))
+        resolution = math.nan if math.isnan(width) or math.isnan(height) else min(width, height)
+    if resolution not in _VIDEO_UPSCALE_RESOLUTIONS:
+        raise ValueError("Choose 1080p or 1440p for video upscaling.")
+    if not params.get("referenceVideo"):
+        raise ValueError("FlashVSR requires an uploaded referenceVideo.")
+    frames: Any = params.get("frames")
+    if frames is None:
+        product = _js_number(params.get("duration")) * _js_number(params.get("fps"))
+        frames = math.floor(product + 0.5) if math.isfinite(product) else math.nan
+    fps = params.get("fps")
+    if (
+        not _is_finite_number(frames)
+        or not float(frames).is_integer()
+        or not 1 <= frames <= _VIDEO_UPSCALE_MAX_FRAMES
+        or not _is_finite_number(fps)
+        or not 1 <= fps <= 60
+        or frames / fps > _VIDEO_UPSCALE_MAX_DURATION + 0.001
+    ):
+        raise ValueError(
+            "Supply the source video’s exact frame count and frame rate "
+            "(up to 362 frames and 15 seconds)."
+        )
+    if any(
+        prompt is not None and str(prompt).strip(_JS_WHITESPACE)
+        for prompt in (params.get("positivePrompt"), params.get("negativePrompt"))
+    ):
+        raise ValueError("FlashVSR is promptless.")
+    if (
+        params.get("teacacheThreshold") is not None
+        or _js_truthy(params.get("trimEndFrame"))
+        or _js_truthy(params.get("controlNet"))
+        or params.get("videoStart") is not None
+        or _js_length(params.get("referenceVideoUrls"))
+        or _js_length(params.get("referenceImageUrls"))
+        or _js_length(params.get("referenceAudioUrls"))
+        or _js_truthy(params.get("referenceFileUrl"))
+        or _js_truthy(params.get("referenceLinkUrl"))
+        or params.get("generateAudio") is False
+    ):
+        raise ValueError(
+            "Video upscaling preserves the complete source video and its audio; "
+            "generation controls are unsupported."
+        )
+    number_of_media = params.get("numberOfMedia")
+    if not (_is_finite_number(number_of_media) and number_of_media == 1):
+        raise ValueError("Upscale one source video per project.")
+    return int(resolution), int(frames)
 
 
 def _validate_h3_references(params: dict[str, Any]) -> None:
@@ -725,9 +869,11 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
     if is_minimax_h3_reference_model(model_id):
         _validate_h3_references(params)
     elif (
-        images
-        or videos
-        or audios
+        # Any supplied array counts, an empty one included: `[]` is truthy in JS.
+        any(
+            params.get(field) is not None
+            for field in ("referenceImageUrls", "referenceVideoUrls", "referenceAudioUrls")
+        )
         or params.get("referenceFileUrl")
         or params.get("referenceLinkUrl")
     ):
@@ -1155,6 +1301,7 @@ def create_job_request_message(
                 "wan_",
                 "ace_step",
                 "rtx_vsr_",
+                "flashvsr_",
                 "minimax_music3",
             )
         )
@@ -1242,6 +1389,9 @@ def create_job_request_message(
         if not is_video_model(params["modelId"]):
             raise _api_error("Video generation is only supported for video models.")
         _validate_video_assets(params)
+        is_upscale = is_video_upscale_model(params["modelId"])
+        if is_upscale:
+            upscale_resolution, upscale_frames = _validate_video_upscale_params(params)
         _validate_h3_params(params)
         if params.get("referenceImage"):
             keyframe["hasReferenceImage"] = True
@@ -1323,32 +1473,44 @@ def create_job_request_message(
             keyframe["fps"] = 30
         elif is_external_video_model(params["modelId"]) or is_minimax_h3_model(params["modelId"]):
             keyframe["fps"] = 24
-        if params.get("duration") is not None:
-            duration = float(params["duration"])
-            minimum = (
-                MINIMAX_H3_MIN_DURATION
-                if is_minimax_h3_model(params["modelId"])
-                else 2
-                if is_wan3_model(params["modelId"])
-                else 3
-                if is_happyhorse_model(params["modelId"])
-                else 4
-                if is_seedance_model(params["modelId"])
-                else 1
-            )
-            maximum = (
-                MINIMAX_H3_MAX_DURATION
-                if is_minimax_h3_model(params["modelId"])
-                else 30
-                if is_seedance25_model(params["modelId"]) or is_wan3_model(params["modelId"])
-                else 15
-                if is_external_video_model(params["modelId"])
-                else 20
-                if is_ltx_model(params["modelId"]) or "_animate-" in params["modelId"]
-                else 10
-            )
-            if not minimum <= duration <= maximum:
-                raise ValueError(f"Video duration must be between {minimum} and {maximum}")
+        # An explicit source frame count wins over duration for an upscale.
+        if params.get("duration") is not None and not (
+            is_upscale and params.get("frames") is not None
+        ):
+            if is_upscale:
+                # fps is already validated; the shortest upscale is one frame.
+                duration = _validate_number(
+                    params["duration"],
+                    minimum=1 / params["fps"],
+                    maximum=_VIDEO_UPSCALE_MAX_DURATION,
+                    property_name="Video duration",
+                )
+            else:
+                duration = float(params["duration"])
+                minimum = (
+                    MINIMAX_H3_MIN_DURATION
+                    if is_minimax_h3_model(params["modelId"])
+                    else 2
+                    if is_wan3_model(params["modelId"])
+                    else 3
+                    if is_happyhorse_model(params["modelId"])
+                    else 4
+                    if is_seedance_model(params["modelId"])
+                    else 1
+                )
+                maximum = (
+                    MINIMAX_H3_MAX_DURATION
+                    if is_minimax_h3_model(params["modelId"])
+                    else 30
+                    if is_seedance25_model(params["modelId"]) or is_wan3_model(params["modelId"])
+                    else 15
+                    if is_external_video_model(params["modelId"])
+                    else 20
+                    if is_ltx_model(params["modelId"]) or "_animate-" in params["modelId"]
+                    else 10
+                )
+                if not minimum <= duration <= maximum:
+                    raise ValueError(f"Video duration must be between {minimum} and {maximum}")
             keyframe["frames"] = calculate_video_frames(
                 params["modelId"],
                 duration,
@@ -1384,6 +1546,16 @@ def create_job_request_message(
                 )
         keyframe["comfySampler"] = _validate_option(params.get("sampler"), options, "sampler")
         keyframe["comfyScheduler"] = _validate_option(params.get("scheduler"), options, "scheduler")
+        if is_upscale:
+            keyframe.update(
+                upscaleResolution=upscale_resolution,
+                # The validated source count, as an int (158.0 is sent as 158).
+                frames=upscale_frames,
+                steps=1,
+                seed=0,
+                generateAudio=True,
+                interpolation="none",
+            )
 
     else:
         for field in (
@@ -3094,6 +3266,17 @@ class ProjectsApi(EventEmitter):
             )
         kind = tier.get("type") or "image"
         options: dict[str, Any] = {"type": kind}
+        if kind == "video":
+            # FlashVSR catalog fields, carried through as the tier states them.
+            for field in (
+                "task",
+                "outputResolutions",
+                "preservesSourceTiming",
+                "requiresReferenceVideo",
+            ):
+                if field in tier:
+                    value = tier[field]
+                    options[field] = list(value) if isinstance(value, list) else value
         sampler = tier.get("comfySampler") or tier.get("sampler")
         scheduler = tier.get("comfyScheduler") or tier.get("scheduler")
         if sampler:
@@ -3117,7 +3300,15 @@ class ProjectsApi(EventEmitter):
         ):
             if tier.get(field):
                 options[field] = self._map_range(tier[field])
-        for field in ("fps", "timesignature", "language", "keyscale", "vae"):
+        if tier.get("fps"):
+            fps = tier["fps"]
+            # A video tier's fps passes through unchanged: FlashVSR advertises a
+            # {min, max, default} range rather than an allowed list.
+            if kind != "video":
+                options["fps"] = self._map_options(fps)
+            else:
+                options["fps"] = dict(fps) if isinstance(fps, dict) else fps
+        for field in ("timesignature", "language", "keyscale", "vae"):
             if tier.get(field):
                 options[field] = self._map_options(tier[field])
         if tier.get("speaker"):
@@ -3288,9 +3479,17 @@ class ProjectsApi(EventEmitter):
             or data.get("referenceVideo")
             or data.get("referenceVideoUrls")
         )
+        # FlashVSR source geometry is only meaningful as a pair.
+        source_size = (
+            (_query_number(data["sourceWidth"]), _query_number(data["sourceHeight"]))
+            if data.get("sourceWidth") is not None and data.get("sourceHeight") is not None
+            else (None, None)
+        )
         response = await self.client.socket.get(
             "/api/v1/job-video/estimate/" + "/".join(quote(str(item)) for item in path),
             {
+                "sourceWidth": source_size[0],
+                "sourceHeight": source_size[1],
                 "hasVideoInput": 1 if has_video else None,
                 "referenceImageCount": (
                     math.floor(data["referenceImageCount"])
