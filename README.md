@@ -130,6 +130,43 @@ closely the clone preserves the source voice and accent. Voice Design uses
 `qwen3_tts_1.7b_voice_design_bf16` and requires `instruct` to describe the
 speaker to invent.
 
+## Upscale a video with FlashVSR
+
+`FLASHVSR_VIDEO_UPSCALE_MODEL_ID` (`flashvsr_v1.1_tiny_long_bf16`) upscales one
+finished video to 1080p or 1440p on its short edge. It is promptless and
+separate from video generation: it keeps every source frame, the exact frame
+rate (including fractional rates such as 24000/1001), the full aspect ratio,
+and the original audio, and it never trims, crops, restyles, or interpolates.
+
+Sources must be at most 768px on the short edge, 1-362 frames and about 15
+seconds, 1-60 fps at a constant frame rate, SDR, square pixels with rotation
+applied, and 100 MB or less. The output is at most twice the source size, so
+1080p needs a source short edge of at least 540px and 1440p at least 720px.
+You do not send the source's frame count, frame rate, or size: the server
+probes the upload and uses its verified values. `frames`, `fps`, `width`, and
+`height` are optional, and any you do send must match the source.
+
+```python
+from sogni_client import FLASHVSR_VIDEO_UPSCALE_MODEL_ID
+
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id=FLASHVSR_VIDEO_UPSCALE_MODEL_ID,
+    positive_prompt="",
+    number_of_media=1,
+    reference_video="clip.mp4",
+    upscale_resolution=1440,  # or 1080: the output's short edge
+)
+print(await project.wait_for_completion())  # MP4 with the original audio
+```
+
+To show a price first, call `estimate_video_cost()` with the output `width` and
+`height` (the source scaled so its short edge equals the target, both edges
+rounded to even pixels), the source's `frames` and `fps`, `steps=1`, and
+`source_width`/`source_height`; the job itself is charged from the verified
+source.
+
 ## Chat
 
 Socket-backed completion:

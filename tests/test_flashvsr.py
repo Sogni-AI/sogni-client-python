@@ -1,4 +1,4 @@
-"""FlashVSR v1.1 video upscaling, mirroring sogni-client 5.37.0.
+"""FlashVSR v1.1 video upscaling, mirroring sogni-client 5.37.1.
 
 The TypeScript behavioral checks live in `scripts/check-flashvsr-video.cjs`;
 the messages below are copied from `createJobRequestMessage.ts` byte for byte.
@@ -29,7 +29,8 @@ MODEL_ID = FLASHVSR_VIDEO_UPSCALE_MODEL_ID
 RESOLUTION = "Choose 1080p or 1440p for video upscaling."
 REFERENCE_VIDEO = "FlashVSR requires an uploaded referenceVideo."
 TIMING = (
-    "Supply the source video’s exact frame count and frame rate (up to 362 frames and 15 seconds)."
+    "Omit the source timing, or supply the source video’s exact frame count "
+    "and frame rate (up to 362 frames and 15 seconds)."
 )
 PROMPTLESS = "FlashVSR is promptless."
 CONTROLS = (
@@ -172,9 +173,7 @@ def test_source_video_is_required_and_other_assets_are_refused() -> None:
     # The asset check above answers first in both clients; the upscale check
     # keeps its own message for callers that reach it directly.
     with pytest.raises(ValueError, match=exactly(REFERENCE_VIDEO)):
-        _validate_video_upscale_params(
-            {"upscaleResolution": 1440, "frames": 158, "fps": 24, "numberOfMedia": 1}
-        )
+        _validate_video_upscale_params({"upscaleResolution": 1440, "numberOfMedia": 1})
 
 
 @pytest.mark.parametrize(
@@ -216,20 +215,44 @@ def test_empty_reference_url_arrays_are_refused_for_every_non_external_model() -
         {"fps": "24"},
         {"fps": True},
         {"fps": float("inf")},
-        {"fps": _OMIT},
+        {"fps": 120},
         {"frames": 362, "fps": 23},
-        {"frames": _OMIT},
-        {"frames": None},
         {"frames": _OMIT, "duration": 0.02},
         {"frames": _OMIT, "duration": "soon"},
         {"frames": _OMIT, "duration": 16},
+        # A duration identifies the source's frames only together with its exact rate.
+        {"frames": _OMIT, "fps": _OMIT, "duration": 5},
+        {"frames": None, "fps": None, "duration": 5},
     ],
 )
-def test_rejects_anything_but_an_exact_source_frame_count_and_rate(
-    changes: dict[str, Any],
-) -> None:
+def test_rejects_source_timing_that_is_sent_but_invalid(changes: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match=exactly(TIMING)):
         request(**changes)
+
+
+def test_minimal_request_leaves_the_source_timing_and_size_to_the_server() -> None:
+    # The server probes the uploaded source and adopts its exact frames, rate and size.
+    key = request(width=_OMIT, height=_OMIT, frames=_OMIT, fps=_OMIT, upscaleResolution=1080)
+    for field in ("frames", "fps", "width", "height"):
+        assert field not in key, f"a minimal upscale must leave {field} to the verified source"
+    assert key["upscaleResolution"] == 1080
+    assert key["hasReferenceVideo"] is True
+    assert key["steps"] == 1
+    assert key["seed"] == 0
+    # None counts as omitted, as everywhere else in the Python client.
+    none_key = request(width=None, height=None, frames=None, fps=None, upscaleResolution=1440)
+    assert {"frames", "fps", "width", "height"}.isdisjoint(none_key)
+
+
+def test_rate_only_and_frames_only_requests_send_just_what_was_given() -> None:
+    rate_only = request(
+        width=_OMIT, height=_OMIT, frames=_OMIT, upscaleResolution=1440, fps=30000 / 1001
+    )
+    assert rate_only["fps"] == 30000 / 1001
+    assert "frames" not in rate_only
+    frames_only = request(fps=_OMIT)
+    assert frames_only["frames"] == 158
+    assert "fps" not in frames_only
 
 
 def test_integral_float_frame_count_is_accepted_and_sent_as_an_int() -> None:

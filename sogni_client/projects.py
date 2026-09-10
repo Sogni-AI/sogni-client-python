@@ -582,13 +582,51 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
 _VIDEO_UPSCALE_RESOLUTIONS = (1080, 1440)
 _VIDEO_UPSCALE_MAX_FRAMES = 362
 _VIDEO_UPSCALE_MAX_DURATION = _VIDEO_UPSCALE_MAX_FRAMES / 24
+_VIDEO_UPSCALE_TIMING_ERROR = (
+    "Omit the source timing, or supply the source video’s exact frame count "
+    "and frame rate (up to 362 frames and 15 seconds)."
+)
 
 
-def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int]:
+def _validate_video_upscale_timing(params: dict[str, Any]) -> int | None:
+    """FlashVSR source timing is optional, as in the JS SDK's ``validateVideoUpscaleTiming``.
+
+    The server probes the uploaded video and adopts its exact frame count and
+    frame rate when they are omitted (``None`` counts as omitted); values a
+    caller does send must describe the source. Returns the frame count the
+    caller supplied or implied through ``duration``, else ``None``. Unlike
+    JavaScript's ``Number()``, a string or boolean fps is refused rather than
+    coerced.
+    """
+
+    fps = params.get("fps")
+    if fps is not None and not (_is_finite_number(fps) and 1 <= fps <= 60):
+        raise ValueError(_VIDEO_UPSCALE_TIMING_ERROR)
+    frames: Any = params.get("frames")
+    if frames is None and params.get("duration") is not None:
+        # A duration identifies the source's frames only together with its exact rate.
+        if fps is None:
+            raise ValueError(_VIDEO_UPSCALE_TIMING_ERROR)
+        product = _js_number(params.get("duration")) * fps
+        frames = math.floor(product + 0.5) if math.isfinite(product) else math.nan
+    if frames is None:
+        return None
+    if (
+        not _is_finite_number(frames)
+        or not float(frames).is_integer()
+        or not 1 <= frames <= _VIDEO_UPSCALE_MAX_FRAMES
+        or (fps is not None and frames / fps > _VIDEO_UPSCALE_MAX_DURATION + 0.001)
+    ):
+        raise ValueError(_VIDEO_UPSCALE_TIMING_ERROR)
+    return int(frames)
+
+
+def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int | None]:
     """FlashVSR request checks, in the JS SDK's order and with its messages.
 
     Returns the delivery resolution on the shorter edge and the source frame
-    count. The JS SDK throws a plain ``Error`` here, which this port raises as
+    count, or ``None`` when the caller left the source timing to the server.
+    The JS SDK throws a plain ``Error`` here, which this port raises as
     ``ValueError``.
     """
 
@@ -600,23 +638,7 @@ def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int]:
         raise ValueError("Choose 1080p or 1440p for video upscaling.")
     if not params.get("referenceVideo"):
         raise ValueError("FlashVSR requires an uploaded referenceVideo.")
-    frames: Any = params.get("frames")
-    if frames is None:
-        product = _js_number(params.get("duration")) * _js_number(params.get("fps"))
-        frames = math.floor(product + 0.5) if math.isfinite(product) else math.nan
-    fps = params.get("fps")
-    if (
-        not _is_finite_number(frames)
-        or not float(frames).is_integer()
-        or not 1 <= frames <= _VIDEO_UPSCALE_MAX_FRAMES
-        or not _is_finite_number(fps)
-        or not 1 <= fps <= 60
-        or frames / fps > _VIDEO_UPSCALE_MAX_DURATION + 0.001
-    ):
-        raise ValueError(
-            "Supply the source video’s exact frame count and frame rate "
-            "(up to 362 frames and 15 seconds)."
-        )
+    frames = _validate_video_upscale_timing(params)
     if any(
         prompt is not None and str(prompt).strip(_JS_WHITESPACE)
         for prompt in (params.get("positivePrompt"), params.get("negativePrompt"))
@@ -641,7 +663,7 @@ def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int]:
     number_of_media = params.get("numberOfMedia")
     if not (_is_finite_number(number_of_media) and number_of_media == 1):
         raise ValueError("Upscale one source video per project.")
-    return int(resolution), int(frames)
+    return int(resolution), frames
 
 
 def _validate_h3_references(params: dict[str, Any]) -> None:
@@ -1549,13 +1571,14 @@ def create_job_request_message(
         if is_upscale:
             keyframe.update(
                 upscaleResolution=upscale_resolution,
-                # The validated source count, as an int (158.0 is sent as 158).
-                frames=upscale_frames,
                 steps=1,
                 seed=0,
                 generateAudio=True,
                 interpolation="none",
             )
+            if upscale_frames is not None:
+                # The validated source count, as an int (158.0 is sent as 158).
+                keyframe["frames"] = upscale_frames
 
     else:
         for field in (
