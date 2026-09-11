@@ -342,6 +342,88 @@
     {
       "type": "function",
       "function": {
+        "name": "generate_speech",
+        "description": "Turn written words into spoken audio. Use when the user wants something read aloud, a narration, a voiceover, a line of dialogue, an audiobook passage, or a voice cloned from a recording they uploaded. This tool speaks text; it does not compose music — use generate_music for songs and instrumentals.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "description": "The exact words to be spoken, verbatim. This is NOT a description of the audio: whatever is written here is read aloud character for character. \"a calm woman reading the news\" would be spoken as those seven words — put that in voiceDescription instead and write the actual news copy here.\n\nLITERAL PROMPT OVERRIDE: If the user explicitly says not to modify the prompt, or to use it exactly/verbatim/as-is, copy the identified prompt text verbatim instead of applying these construction rules unless a hard requirement is missing.\n\nPunctuation is prosody: full stops, commas, question marks and ellipses control pauses and intonation, so keep them. Write numbers, dates, currency and abbreviations the way they should be said (\"nineteen eighty-four\", \"twelve dollars fifty\", \"Doctor Chen\") when the plain form would be ambiguous. Line breaks are not pauses; use punctuation.\n\nLimit 4096 characters, roughly five minutes of speech. A longer script is refused rather than cut off mid-sentence, so split it across several calls at a natural break.",
+              "maxLength": 4096
+            },
+            "model": {
+              "type": "string",
+              "enum": [
+                "voice",
+                "clone",
+                "design"
+              ],
+              "description": "Which speech model to use, chosen by what the user gave you. \"voice\" (default): one of nine studio voices, optionally restyled by voiceDescription — the right choice for narration, voiceover and dialogue when no particular person is being imitated. \"clone\": reproduces a specific voice from a recording the user uploaded; requires voiceSourceIndex. \"design\": invents a speaker who does not exist from a written description; requires voiceDescription and takes no recording. Pick \"clone\" whenever the user uploads a voice clip and asks for that person, and \"design\" when they describe a speaker instead of choosing one."
+            },
+            "voice": {
+              "type": "string",
+              "enum": [
+                "serena",
+                "vivian",
+                "uncle_fu",
+                "ryan",
+                "aiden",
+                "ono_anna",
+                "sohee",
+                "eric",
+                "dylan"
+              ],
+              "description": "Studio voice to speak in. Only used when model=\"voice\". Female: serena (English), vivian (Chinese), ono_anna (Japanese), sohee (Korean). Male: ryan, aiden, eric, dylan (English), uncle_fu (older, Chinese). Every voice speaks all supported languages — the note above describes the accent it carries, not a limit on what it can read. Default: serena."
+            },
+            "voiceDescription": {
+              "type": "string",
+              "description": "How the line should be delivered, or who should deliver it. With model=\"voice\" this restyles the chosen voice without changing who it is: \"whispering, close to the microphone\", \"furious\", \"reading a bedtime story\", \"like a sports commentator\". With model=\"design\" this is required and describes a speaker to invent: age, gender, accent, timbre, pace, mood, and recording space — \"a warm, unhurried narrator in her forties with a faint Scottish lilt, close-miked in a quiet room\". Describe one coherent person; contradictory directions produce a voice that shifts mid-sentence. Not accepted with model=\"clone\", where the recording defines the voice. Limit 512 characters.",
+              "maxLength": 512
+            },
+            "voiceSourceIndex": {
+              "type": "number",
+              "description": "Index of the uploaded audio file holding the voice to clone (0-based, from the uploaded files list, the same numbering other tools use for audio). Required when model=\"clone\" and ignored otherwise. The clip should be three to thirty seconds of one person speaking cleanly, with no music, no second speaker and no heavy room echo; anything past thirty seconds is trimmed.",
+              "minimum": 0
+            },
+            "voiceTranscript": {
+              "type": "string",
+              "description": "The exact words spoken in the uploaded clip, when model=\"clone\". Supplying it lets the model condition on the recording itself rather than on a speaker fingerprint alone, which is markedly closer to the source — set it whenever the user tells you what the clip says or the transcript is otherwise known. Omitting it still produces a recognisable clone, just a looser one. Limit 1024 characters.",
+              "maxLength": 1024
+            },
+            "language": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "english",
+                "chinese",
+                "japanese",
+                "korean",
+                "german",
+                "french",
+                "russian",
+                "portuguese",
+                "spanish",
+                "italian"
+              ],
+              "description": "Language of the script. Default \"auto\", which infers it from the text and is the only setting that reads a code-switched line correctly. Pin a language only when auto mis-reads a name, a loanword, or a passage that is ambiguous between two of them. Cloning is cross-lingual: an English reference clip can read Japanese in the same voice."
+            },
+            "numberOfVariations": {
+              "type": "number",
+              "description": "Number of takes (1-16). Each take is a separate read of the same script with the same voice, differing only in delivery. Use more than 1 when the user asks for options or alternate reads. Default: 1.",
+              "minimum": 1,
+              "maximum": 16
+            }
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "edit_image",
         "description": "Generate images guided by reference photos. Supports GPT Image 2 up to 16 images, Qwen up to 3 images, and Krea 2 Identity Edit / Dark Beast Krea 2 Identity Edit up to 2 images. Best for style-guided generation, combining elements from multiple images, ANY persona image creation, identity-preserving Krea edits, and any uploaded brand asset reuse — logos, brand marks, mascots, product shots, photos, screenshots, sketches, or character designs the user expects to appear in or guide the result. ALWAYS use this (never generate_image) when persona photos OR uploaded image assets meant for reuse are in context — even if a specific edit model is requested. Exception: explicit Z-image/Z-image Turbo/Krea 2 Turbo uploaded-image enhancement uses generate_image with sourceImageIndex and starting_image_strength because those base image-to-image models are not edit_image models. If a previous edit_image attempt did not preserve the uploaded asset well, stay on edit_image and tighten the prompt or switch model; generate_image has no access to the upload.",
         "parameters": {
@@ -527,6 +609,31 @@
               "minimum": 512,
               "maximum": 15360,
               "description": "Optional requested pixel length for the output longest edge, from 512 through 15360. Use 3840 for 4K UHD, 7680 for 8K, or 15360 for the 16K maximum. The other edge is calculated automatically so the source aspect ratio is preserved; both 8px-aligned output edges must be at least 512px."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "upscale_video",
+        "description": "Upscale an existing video to 1080p or 1440p with FlashVSR video super-resolution. This is promptless, deterministic enhancement, not a generative edit: it keeps every source frame, the exact frame rate, the full aspect ratio, and the original audio, and it never changes content, trims, crops, restyles, or interpolates frames. Use it when the user asks to upscale, enlarge, sharpen, or increase the resolution of an uploaded or previously generated video, or wants an HD, 1080p, 1440p, or 2K copy of it. Do not use it to create, restyle, extend, or edit a video; when the user explicitly asks a generative model such as Seedance to re-render the clip, use video_to_video. The output is at most twice the source size, so 1080p needs a source whose short edge is 540-768px and 1440p needs 720-768px, and the source can be at most about 1344x768 pixels (768x1344 in portrait). It must also be at most 362 frames and about 15 seconds long, 1-60 fps, and 100 MB. It cannot produce 4K or any size above 1440p; when the user asks for one, say so and offer 1440p. Each upscale costs credits based on the source video's size and length.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sourceVideoIndex": {
+              "type": "number",
+              "description": "Source video to upscale. Non-negative values select a prior generated video result by 0-based index. Negative values select uploaded videos: -1 is the first uploaded video, -2 the second, and so on. If omitted, use the latest generated video, falling back to the most recent uploaded video."
+            },
+            "targetResolution": {
+              "type": "number",
+              "enum": [
+                1080,
+                1440
+              ],
+              "description": "Output resolution of the short edge in pixels: 1440 for 1440p/2K or 1080 for 1080p/Full HD. The long edge follows the source aspect ratio, so portrait videos stay portrait. Default: 1440, or 1080 when the source's short edge is below 720px. Set 1080 when the user asks for 1080p or Full HD."
             }
           },
           "required": []
@@ -773,7 +880,7 @@
       "type": "function",
       "function": {
         "name": "video_to_video",
-        "description": "Transform an existing video using AI. Uses WAN 2.2 Animate (move/replace) with a reference image, LTX 2.5 V2V controls by default (canny/pose/depth/detailer plus distilled inpaint/outpaint), LTX 2.3 as rollback, or Seedance V2V when explicitly requested. LTX 2.5 Fast, HQ, and Pro use the release-validated official Distilled workflow for canny/pose/depth/detailer/inpaint/outpaint; Dev is not publicly routed until upstream publishes and Sogni validates an official ComfyUI Dev recipe. Requires an uploaded video file. Use when the user wants to animate a photo with video motion, replace subjects, restyle footage, extend its canvas, regenerate a region, or enhance quality. Wan 3 is not a source-video editing model; its video inputs are loose references handled by generate_video.",
+        "description": "Transform an existing video using AI. Uses WAN 2.2 Animate (move/replace) with a reference image, LTX 2.5 V2V controls by default (canny/pose/depth/detailer plus distilled inpaint/outpaint), LTX 2.3 as rollback, or Seedance V2V when explicitly requested. LTX 2.5 Fast, HQ, and Pro use the release-validated official Distilled workflow for canny/pose/depth/detailer/inpaint/outpaint; Dev is not publicly routed until upstream publishes and Sogni validates an official ComfyUI Dev recipe. Requires an uploaded video file. Use when the user wants to animate a photo with video motion, replace subjects, restyle footage, extend its canvas, regenerate a region, or enhance quality. For a pure resolution upscale that keeps the same content (a sharper 1080p or 1440p copy), use upscale_video instead. Wan 3 is not a source-video editing model; its video inputs are loose references handled by generate_video.",
         "parameters": {
           "type": "object",
           "properties": {
