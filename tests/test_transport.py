@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
 import json
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
+from websockets.asyncio.server import ServerConnection, serve
+from websockets.exceptions import ConnectionClosed
+from websockets.frames import Close
 
 from sogni_client.auth import ApiKeyAuthManager
 from sogni_client.errors import ApiError
@@ -46,12 +51,15 @@ class FakeHttpClient:
 
 class FakeSocket:
     def __init__(self) -> None:
-        self.messages: asyncio.Queue[str | bytes] = asyncio.Queue()
+        self.messages: asyncio.Queue[str | bytes | Exception] = asyncio.Queue()
         self.sent: list[str] = []
         self.closed: tuple[int, str] | None = None
 
     async def recv(self) -> str | bytes:
-        return await self.messages.get()
+        message = await self.messages.get()
+        if isinstance(message, Exception):
+            raise message
+        return message
 
     async def send(self, message: str) -> None:
         self.sent.append(message)
@@ -60,13 +68,23 @@ class FakeSocket:
         self.closed = (code, reason)
 
 
+def frame(message_type: str, data: Any) -> str:
+    return json.dumps({"type": message_type, "data": b64_json_encode(data)})
+
+
 class FakeSocketFactory:
-    def __init__(self, socket: FakeSocket | None = None) -> None:
+    """Hands out one fake socket. Like a real server it accepts the connection
+    for work with an ``authenticated`` frame unless ``authenticate`` is off."""
+
+    def __init__(self, socket: FakeSocket | None = None, *, authenticate: bool = True) -> None:
         self.socket = socket or FakeSocket()
+        self.authenticate = authenticate
         self.calls: list[dict[str, Any]] = []
 
     async def __call__(self, url: str, **kwargs: Any) -> FakeSocket:
         self.calls.append({"url": url, **kwargs})
+        if self.authenticate:
+            self.socket.messages.put_nowait(frame("authenticated", {"clientType": "artist"}))
         return self.socket
 
 
@@ -395,3 +413,202 @@ async def test_api_client_nonrecoverable_socket_error_clears_auth() -> None:
 
     assert client.auth.is_authenticated is False
     await client.aclose()
+
+
+# When `WebSocketClient.send` puts a frame on the wire (mirrors sogni-client
+# scripts/check-socket-send-readiness.cjs).
+#
+# The socket server drops any frame that arrives before its `authenticated`
+# handshake, and during a socket deploy there is a gap in which connections are
+# refused or accepted and immediately closed with 1001. Work submitted in that
+# window must go out on the next authenticated connection, not fail and not
+# vanish. These run a real local WebSocket server.
+
+
+class ReadinessServer:
+    """A local socket server whose per-connection behaviour the test controls."""
+
+    def __init__(self) -> None:
+        self.mode = "auth"
+        self.auth_delay = 0.0
+        self.received: list[dict[str, Any]] = []
+        self.connections = 0
+        self.live: set[ServerConnection] = set()
+        self._server: Any = None
+
+    async def __aenter__(self) -> ReadinessServer:
+        self._server = await serve(self._handle, "127.0.0.1", 0)
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        self._server.close()
+        await self._server.wait_closed()
+
+    @property
+    def url(self) -> str:
+        port = self._server.sockets[0].getsockname()[1]
+        return f"http://127.0.0.1:{port}"
+
+    async def close_all(self, code: int, reason: str) -> None:
+        await asyncio.gather(*(ws.close(code, reason) for ws in list(self.live)))
+
+    async def _handle(self, ws: ServerConnection) -> None:
+        self.connections += 1
+        if self.mode == "restarting":
+            await ws.close(1001, "Server is restarting")
+            return
+        self.live.add(ws)
+        state = {"authenticated": False}
+
+        async def authenticate() -> None:
+            await asyncio.sleep(self.auth_delay)
+            state["authenticated"] = True
+            await ws.send(frame("authenticated", {"clientType": "artist", "activeProjects": []}))
+
+        authenticating = asyncio.create_task(authenticate())
+        try:
+            async for raw in ws:
+                message = json.loads(raw)
+                self.received.append(
+                    {
+                        "type": message["type"],
+                        "authenticated": state["authenticated"],
+                        "data": json.loads(base64.b64decode(message["data"])),
+                    }
+                )
+        finally:
+            self.live.discard(ws)
+            authenticating.cancel()
+            with contextlib.suppress(BaseException):
+                await authenticating
+
+
+async def authenticated_socket_client(url: str, app_id: str) -> WebSocketClient:
+    auth = ApiKeyAuthManager()
+    await auth.authenticate("key")
+    return WebSocketClient(url, auth, app_id, "fast")
+
+
+@pytest.mark.asyncio
+async def test_send_right_after_connect_waits_for_authenticated() -> None:
+    async with ReadinessServer() as server:
+        server.auth_delay = 0.15
+        client = await authenticated_socket_client(server.url, "APP-1")
+        await client.connect()
+        await client.send("jobRequest", {"jobID": "P1"})
+        await asyncio.sleep(0.05)
+        try:
+            assert len(server.received) == 1
+            assert server.received[0]["authenticated"] is True, "sent only after authentication"
+        finally:
+            await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_send_issued_during_a_socket_restart_goes_out_after_reconnect() -> None:
+    # Socket deploy: the connection closes with 1001 and the next attempts are
+    # turned away. A send issued in the gap waits and goes out on the connection
+    # that authenticates, without opening connections of its own.
+    async with ReadinessServer() as server:
+        client = await authenticated_socket_client(server.url, "APP-2")
+        authenticated = asyncio.get_running_loop().create_future()
+        client.once("authenticated", lambda data: authenticated.set_result(data))
+        await client.connect()
+        await asyncio.wait_for(authenticated, 1)
+        server.mode = "restarting"
+
+        # Emulate the ApiClient: reconnect after each recoverable close.
+        async def reconnect() -> None:
+            with contextlib.suppress(Exception):
+                await client.connect()
+
+        def on_disconnected(data: Any) -> None:
+            if data.get("code") in {1001, 1006}:
+                asyncio.get_running_loop().call_later(
+                    0.04, lambda: asyncio.ensure_future(reconnect())
+                )
+
+        remove_reconnect = client.on("disconnected", on_disconnected)
+        try:
+            await server.close_all(1001, "Server is restarting")
+            await asyncio.sleep(0.02)
+            assert client._reconnect_expected is True
+            connections_before = server.connections
+            sending = asyncio.create_task(client.send("jobRequest", {"jobID": "P2"}))
+            await asyncio.sleep(0.15)
+            assert server.received == [], "nothing sent into the gap"
+            assert server.connections - connections_before <= 4, (
+                "send did not add its own connection attempts on top of the reconnect loop"
+            )
+            server.mode = "auth"
+            await asyncio.wait_for(sending, 5)
+            await asyncio.sleep(0.05)
+            assert [(r["data"]["jobID"], r["authenticated"]) for r in server.received] == [
+                ("P2", True)
+            ], "delivered once, after the restart, on an authenticated connection"
+        finally:
+            remove_reconnect()
+            await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_close_ends_the_send_wait_with_an_error() -> None:
+    async with ReadinessServer() as server:
+        server.auth_delay = 10
+        client = await authenticated_socket_client(server.url, "APP-3")
+        await client.connect()
+        sending = asyncio.create_task(client.send("jobRequest", {"jobID": "P3"}))
+        await asyncio.sleep(0.08)
+        await server.close_all(4021, "Authentication error")
+        try:
+            with pytest.raises(ConnectionError, match="connection failed"):
+                await asyncio.wait_for(sending, 1)
+            assert server.received == []
+        finally:
+            await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_send_falls_back_to_an_open_but_silent_socket_from_an_older_server() -> None:
+    auth = ApiKeyAuthManager()
+    await auth.authenticate("key")
+    factory = FakeSocketFactory(authenticate=False)
+    client = WebSocketClient("wss://socket.sogni.ai", auth, "APP", "fast", connect_factory=factory)
+    client._send_ready_tuning["authenticated_fallback_seconds"] = 0.05
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+
+    await client.send("jobRequest", {"jobID": "OLD"})
+    try:
+        assert loop.time() - started >= 0.05
+        assert len(factory.socket.sent) == 1
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_send_waits_for_the_reconnect_loop_and_times_out_if_it_never_comes() -> None:
+    auth = ApiKeyAuthManager()
+    await auth.authenticate("key")
+    factory = FakeSocketFactory()
+    client = WebSocketClient("wss://socket.sogni.ai", auth, "APP", "fast", connect_factory=factory)
+    client._send_ready_tuning["timeout_seconds"] = 0.1
+    disconnected = asyncio.get_running_loop().create_future()
+    client.once("disconnected", lambda data: disconnected.set_result(data))
+    await client.connect()
+    # A recoverable close: the ApiClient owns the reconnect, which never comes here.
+    factory.socket.messages.put_nowait(ConnectionClosed(Close(1001, "Server is restarting"), None))
+    assert await asyncio.wait_for(disconnected, 1) == {
+        "code": 1001,
+        "reason": "Server is restarting",
+    }
+    assert client.is_connected is False
+    assert client._reconnect_expected is True
+
+    try:
+        with pytest.raises(TimeoutError, match="WebSocket connection timeout"):
+            await client.send("jobRequest", {"jobID": "LATE"})
+        assert len(factory.calls) == 1, "send never opened a competing connection"
+        assert factory.socket.sent == []
+    finally:
+        await client.aclose()

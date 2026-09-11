@@ -21,7 +21,12 @@ from sogni_client.chat import (
     normalize_vision_messages,
     parse_tool_call_arguments,
 )
-from sogni_client.errors import ApiError, ChatJobError
+from sogni_client.errors import (
+    RETRYABLE_CHAT_ERROR_TYPES,
+    ApiError,
+    ChatJobError,
+    is_retryable_chat_error,
+)
 from sogni_client.events import EventEmitter
 
 
@@ -863,3 +868,245 @@ async def test_chat_wait_for_models_times_out_and_removes_listener() -> None:
         await api.waitForModels(timeout=0.01)
 
     assert "modelsUpdated" not in api._listeners
+
+
+# Socket LLM streams across a transport drop (mirrors sogni-client
+# scripts/check-chat-transport-recovery.cjs).
+#
+# A socket deploy refunds every in-flight LLM job and closes the socket; the
+# `llmJobError` it sends first is best-effort. A plain network blip is different:
+# the server keeps the job for 30 s and rebinds it when the same app-id
+# reconnects. The SDK must never leave a stream waiting forever, must keep a
+# stream the server rebound, and must mark connection failures as retryable so
+# apps can re-issue the request.
+
+
+def transport_harness(
+    *, grace_seconds: float = 0.06, send_error: Exception | None = None
+) -> tuple[ChatApi, FakeSocket, FakeClient]:
+    socket = FakeSocket()
+    if send_error is not None:
+
+        async def failing_send(_message_type: str, _data: Any) -> None:
+            raise send_error
+
+        socket.send = failing_send  # type: ignore[method-assign]
+    client = FakeClient(socket=socket)
+    chat = ChatApi(client, FakeProjects())  # type: ignore[arg-type]
+    chat._transport_tuning["grace_seconds"] = grace_seconds
+    return chat, socket, client
+
+
+async def open_stream(chat: ChatApi, socket: FakeSocket) -> tuple[ChatStream, str]:
+    stream = await chat.completions.create(
+        model="qwen", messages=[{"role": "user", "content": "hello"}], stream=True
+    )
+    return stream, socket.sent[-1]["data"]["jobID"]
+
+
+async def drain(stream: ChatStream) -> str:
+    content = ""
+    async for chunk in stream:
+        content += chunk["content"]
+    return content
+
+
+@pytest.mark.asyncio
+async def test_stream_fails_retryably_when_reconnect_does_not_list_the_job() -> None:
+    # Socket restarted: the reconnect handshake does not list the job, so the
+    # stream fails at once with a retryable error instead of hanging.
+    chat, socket, client = transport_harness(grace_seconds=10)
+    stream, job_id = await open_stream(chat, socket)
+    socket.emit("jobTokens", {"jobID": job_id, "content": "partial "})
+    pending = asyncio.create_task(drain(stream))
+    client.emit("connecting", {"network": "fast"})
+    client.emit("connected", {"network": "fast"})
+    socket.emit("authenticated", {"clientType": "artist", "activeLLMJobIDs": []})
+
+    with pytest.raises(ChatJobError) as raised:
+        await asyncio.wait_for(pending, 1)
+
+    assert raised.value.error_type == "transport_lost"
+    assert raised.value.errorType == "transport_lost"
+    assert raised.value.retryable is True
+    assert is_retryable_chat_error(raised.value) is True
+    assert chat._transport_grace_timer is None, "no timer left behind"
+
+
+@pytest.mark.asyncio
+async def test_stream_rebound_inside_the_server_grace_keeps_going() -> None:
+    # Network blip inside the server's grace: the job is listed (ids compare
+    # case-insensitively), so the stream keeps going and completes normally.
+    chat, socket, client = transport_harness(grace_seconds=0.03)
+    stream, job_id = await open_stream(chat, socket)
+    pending = asyncio.create_task(drain(stream))
+    socket.emit("jobTokens", {"jobID": job_id, "content": "a"})
+    client.emit("connecting", {"network": "fast"})
+    client.emit("connected", {"network": "fast"})
+    socket.emit("authenticated", {"clientType": "artist", "activeLLMJobIDs": [job_id.lower()]})
+    await asyncio.sleep(0.06)
+    socket.emit("jobTokens", {"jobID": job_id, "content": "b"})
+    socket.emit("llmJobResult", {"jobID": job_id, "timeTaken": 1})
+
+    assert await asyncio.wait_for(pending, 1) == "ab", "rebound stream delivers the rest"
+
+
+@pytest.mark.asyncio
+async def test_older_server_fails_a_silent_stream_after_the_grace_window() -> None:
+    # Older server (no activeLLMJobIDs): the stream is failed when the grace
+    # window passes in silence.
+    chat, socket, client = transport_harness(grace_seconds=0.04)
+    stream, _job_id = await open_stream(chat, socket)
+    pending = asyncio.create_task(drain(stream))
+    client.emit("connecting", {"network": "fast"})
+    client.emit("connected", {"network": "fast"})
+    socket.emit("authenticated", {"clientType": "artist"})
+
+    with pytest.raises(ChatJobError) as raised:
+        await asyncio.wait_for(pending, 1)
+    assert raised.value.error_type == "transport_lost"
+
+
+@pytest.mark.asyncio
+async def test_older_server_keeps_a_stream_that_sends_a_frame_inside_the_grace() -> None:
+    # A frame from the job inside the window proves it survived.
+    chat, socket, client = transport_harness(grace_seconds=0.04)
+    stream, job_id = await open_stream(chat, socket)
+    pending = asyncio.create_task(drain(stream))
+    client.emit("connecting", {"network": "fast"})
+    client.emit("connected", {"network": "fast"})
+    socket.emit("jobTokens", {"jobID": job_id, "content": "still here"})
+    await asyncio.sleep(0.08)
+    socket.emit("llmJobResult", {"jobID": job_id, "timeTaken": 1})
+
+    assert await asyncio.wait_for(pending, 1) == "still here"
+
+
+@pytest.mark.asyncio
+async def test_server_restart_refund_is_a_retryable_failure() -> None:
+    chat, socket, _client = transport_harness()
+    stream, job_id = await open_stream(chat, socket)
+    pending = asyncio.create_task(drain(stream))
+    socket.emit(
+        "llmJobError",
+        {
+            "jobID": job_id,
+            "error": "server_restarting",
+            "error_message": "Server is restarting; this LLM request was refunded.",
+        },
+    )
+
+    with pytest.raises(ChatJobError) as raised:
+        await asyncio.wait_for(pending, 1)
+    assert raised.value.error_type == "server_restarting"
+    assert raised.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_terminal_close_fails_open_streams_immediately() -> None:
+    # A terminal close (e.g. signed out) fails open streams at once.
+    chat, socket, client = transport_harness(grace_seconds=10)
+    stream, _job_id = await open_stream(chat, socket)
+    pending = asyncio.create_task(drain(stream))
+    client.emit("disconnected", {"code": 4021, "reason": "auth"})
+
+    with pytest.raises(ChatJobError) as raised:
+        await asyncio.wait_for(pending, 1)
+    assert raised.value.error_type == "transport_lost"
+    assert chat._transport_grace_timer is None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_app_id_handoff_is_treated_like_a_reconnect() -> None:
+    # 4015 hands the app-id to another connection: wait for the verdict rather
+    # than failing at once.
+    chat, socket, client = transport_harness(grace_seconds=10)
+    stream, job_id = await open_stream(chat, socket)
+    pending = asyncio.create_task(drain(stream))
+    client.emit("disconnected", {"code": 4015, "reason": "duplicate"})
+    await asyncio.sleep(0.02)
+    assert not pending.done()
+    socket.emit("jobTokens", {"jobID": job_id, "content": "handed over"})
+    socket.emit("llmJobResult", {"jobID": job_id, "timeTaken": 1})
+
+    assert await asyncio.wait_for(pending, 1) == "handed over"
+    assert chat._transport_grace_timer is None
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_could_not_be_sent_is_retryable() -> None:
+    chat, _socket, _client = transport_harness(
+        send_error=ConnectionError("WebSocket connection timeout")
+    )
+
+    with pytest.raises(ChatJobError) as raised:
+        await chat.completions.create(
+            model="qwen", messages=[{"role": "user", "content": "x"}], stream=True
+        )
+
+    assert raised.value.error_type == "transport_lost"
+    assert raised.value.retryable is True
+    assert "WebSocket connection timeout" in str(raised.value)
+    assert chat._active_streams == {}, "no orphaned stream"
+    assert chat._unsent_jobs == set()
+
+
+@pytest.mark.asyncio
+async def test_unsent_request_is_not_judged_by_the_reconnect() -> None:
+    # A request still waiting inside `send` (e.g. for the reconnect) never
+    # reached the server, so the handshake's job list says nothing about it.
+    chat, socket, client = transport_harness(grace_seconds=10)
+    release = asyncio.Event()
+    sent: list[Any] = []
+
+    async def slow_send(_message_type: str, data: Any) -> None:
+        await release.wait()
+        sent.append(data)
+
+    socket.send = slow_send  # type: ignore[method-assign]
+    creating = asyncio.create_task(
+        chat.completions.create(
+            model="qwen", messages=[{"role": "user", "content": "x"}], stream=True
+        )
+    )
+    await asyncio.sleep(0.01)
+    client.emit("connecting", {"network": "fast"})
+    socket.emit("authenticated", {"clientType": "artist", "activeLLMJobIDs": []})
+    release.set()
+    stream = await asyncio.wait_for(creating, 1)
+
+    assert chat._jobs_awaiting_reconnect == set()
+    assert chat._transport_grace_timer is None
+    job_id = sent[0]["jobID"]
+    socket.emit("jobTokens", {"jobID": job_id, "content": "ok"})
+    socket.emit("llmJobResult", {"jobID": job_id, "timeTaken": 1})
+    assert await asyncio.wait_for(drain(stream), 1) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_requests_reject_the_same_way() -> None:
+    chat, socket, client = transport_harness(grace_seconds=10)
+    pending = asyncio.create_task(
+        chat.completions.create(model="qwen", messages=[{"role": "user", "content": "x"}])
+    )
+    await asyncio.sleep(0.005)
+    client.emit("connecting", {"network": "fast"})
+    socket.emit("authenticated", {"clientType": "artist", "activeLLMJobIDs": []})
+
+    with pytest.raises(ChatJobError) as raised:
+        await asyncio.wait_for(pending, 1)
+    assert raised.value.retryable is True
+
+
+def test_ordinary_failures_are_not_retryable() -> None:
+    assert RETRYABLE_CHAT_ERROR_TYPES == ("server_restarting", "transport_lost")
+    assert is_retryable_chat_error(ChatJobError("nope", error_type="invalid_request")) is False
+    assert ChatJobError("nope").retryable is False
+    assert is_retryable_chat_error(Exception("plain")) is False
+    assert is_retryable_chat_error({"errorType": "transport_lost"}) is True
+
+    import sogni_client
+
+    assert sogni_client.is_retryable_chat_error is is_retryable_chat_error
+    assert sogni_client.isRetryableChatError is is_retryable_chat_error
+    assert sogni_client.RETRYABLE_CHAT_ERROR_TYPES is RETRYABLE_CHAT_ERROR_TYPES

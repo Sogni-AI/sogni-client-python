@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -41,9 +44,10 @@ class FakeSocket(EventEmitter):
         self.app_id = app_id
         self.responses = responses or {}
         self.get_calls: list[tuple[str, dict[str, Any] | None]] = []
+        self.sent: list[dict[str, Any]] = []
 
-    async def send(self, message_type: str, data: Any) -> None:  # pragma: no cover - unused
-        pass
+    async def send(self, message_type: str, data: Any) -> None:
+        self.sent.append({"type": message_type, "data": data})
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         self.get_calls.append((path, params))
@@ -422,3 +426,160 @@ async def test_replayed_project_status_maps_onto_local_state(status: str, expect
     if project._completion.done():
         with contextlib.suppress(Exception):
             project._completion.exception()
+
+
+# Socket restarts (mirrors blocks 11-13 of sogni-client
+# scripts/check-project-recovery.cjs).
+
+
+def settle(project: Project) -> None:
+    """Consume a failed project's completion so the loop reports nothing."""
+
+    if project._completion.done():
+        with contextlib.suppress(BaseException):
+            project._completion.exception()
+
+
+def restart_harness(
+    socket_responses: dict[str, Any] | None = None,
+) -> tuple[ProjectsApi, FakeClient, list[dict[str, Any]], list[dict[str, Any]]]:
+    client = FakeClient(socket_responses=socket_responses)
+    api = ProjectsApi(client)
+    api._recovery_tuning.update(
+        {
+            "authenticated_grace_seconds": 0.02,
+            "recently_created_grace_seconds": 0,
+            "missing_project_attempts": 2,
+            "missing_project_retry_seconds": 0.005,
+        }
+    )
+
+    # Make the staleness watchdog's live-list lookup inert, as the JS harness does.
+    async def no_live_list() -> None:
+        return None
+
+    api._list_active_project_ids = no_live_list  # type: ignore[method-assign]
+    project_events: list[dict[str, Any]] = []
+    api.on("project", project_events.append)
+    synced: list[dict[str, Any]] = []
+    api.on("projectsSynced", synced.append)
+    return api, client, project_events, synced
+
+
+def track(api: ProjectsApi, *, started_seconds_ago: float = 60) -> Project:
+    """Track a project the way ``create()`` does once the request is sent."""
+
+    project = Project(
+        {
+            "type": "image",
+            "modelId": "flux1-schnell-fp8",
+            "numberOfMedia": 1,
+            "positivePrompt": "a lighthouse at dusk",
+            "steps": 4,
+        },
+        api,
+    )
+    project._data["startedAt"] = datetime.now(timezone.utc) - timedelta(seconds=started_seconds_ago)
+    api._projects.append(project)
+    return project
+
+
+def stop_timers(api: ProjectsApi) -> None:
+    api._clear_authenticated_timer()
+    if api._recheck_timer is not None:
+        api._recheck_timer.cancel()
+        api._recheck_timer = None
+    for project in api._projects:
+        if project._timeout_handle is not None:
+            project._timeout_handle.cancel()
+
+
+async def test_a_recoverable_drop_defers_project_timeouts_too() -> None:
+    # `connecting` (the socket-deploy path) is a recoverable drop;
+    # `disconnected` is only emitted for terminal closes.
+    api, client, _events, _synced = restart_harness()
+    track(api)
+
+    client.emit("connecting", {"network": "fast"})
+    assert api._should_defer_project_timeouts() is True, "timeouts defer while reconnecting"
+    client.emit("connected", {"network": "fast"})
+    assert api._should_defer_project_timeouts() is False, "timeouts resume on reconnect"
+    stop_timers(api)
+
+
+async def test_a_request_refused_while_the_socket_restarts_is_resubmitted_once() -> None:
+    # A request refused while the socket restarts (jobError 1001, no imgID) is
+    # not a failure: it is sent again, unchanged, on the next connection.
+    api, client, events, _synced = restart_harness()
+    project = track(api)
+    request = {"jobID": project.id, "keyFrames": [{"modelID": "flux1-schnell-fp8"}]}
+    api._unadmitted_requests[project.id] = request
+    refusal = {
+        "jobID": project.id,
+        "isFromWorker": False,
+        "error": "1001",
+        "error_message": "Server is restarting",
+    }
+
+    client.socket.emit("jobError", refusal)
+
+    assert project.status == "pending", "a refusal during restart does not fail the project"
+    assert client.socket.sent == [], "nothing is written into the closing socket"
+    # Until it is re-sent, a reconcile does not judge it missing (no lookup).
+    result = await api._reconcile(
+        {"activeProjects": [], "unclaimedCompletedProjects": []}, "manual", time.time()
+    )
+    assert result["lost"] == [] and client.rest.calls == []
+    assert api._recheck_timer is None
+
+    client.emit("connecting", {"network": "fast"})
+    client.emit("connected", {"network": "fast"})
+    await asyncio.sleep(0.01)
+
+    assert client.socket.sent == [{"type": "jobRequest", "data": request}], "resubmitted once"
+    assert [e for e in events if e["type"] == "error"] == [], "no error surfaced"
+    assert project.id not in api._awaiting_resubmit
+    assert api._unadmitted_requests[project.id] is request
+    assert api._recheck_timer is not None, "the re-sent project is re-checked after its grace"
+
+    # A second refusal is not retried again: it surfaces.
+    del api._unadmitted_requests[project.id]
+    client.socket.emit("jobError", refusal)
+    assert project.status == "failed", "a request with nothing left to resubmit fails"
+    assert project.error == {"code": 1001, "message": "Server is restarting"}
+    settle(project)
+    stop_timers(api)
+
+
+async def test_a_project_too_new_to_judge_is_rechecked_after_its_grace() -> None:
+    # A project too new to judge at the reconnect sync is re-checked once the
+    # grace ends, instead of waiting minutes for the staleness watchdog.
+    api, client, events, synced = restart_harness(
+        socket_responses={
+            "/api/v1/artist/projects/sync": {"activeProjects": [], "unclaimedCompletedProjects": []}
+        }
+    )
+    api._recovery_tuning["recently_created_grace_seconds"] = 0.04
+    project = track(api, started_seconds_ago=0)
+    # The recheck's lookups: two REST attempts, then the owner-scoped live lookup.
+    client.rest.responses.extend([ApiError(404, {"message": "not found"})] * 3)
+
+    client.emit("connected", {"network": "fast"})
+    client.socket.emit(
+        "authenticated",
+        {"clientType": "artist", "activeProjects": [], "unclaimedCompletedProjects": []},
+    )
+    await asyncio.sleep(0.02)
+    assert len(synced) == 1
+    assert synced[0]["lost"] == [], "too new to judge on the first sync"
+
+    await asyncio.sleep(0.4)
+    recheck = next((r for r in synced if r["reason"] == "recheck"), None)
+    assert recheck is not None, "a recheck sync ran after the grace"
+    assert recheck["lost"] == [project.id], "the recheck resolves it"
+    # A lost verdict fails the project, as in the JS SDK.
+    assert project.status == "failed"
+    assert is_project_lost_error(project.error)
+    assert [e["projectId"] for e in events if e["type"] == "error"] == [project.id]
+    settle(project)
+    stop_timers(api)

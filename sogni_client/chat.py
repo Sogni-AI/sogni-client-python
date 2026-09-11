@@ -19,13 +19,23 @@ from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ChatJobError, extract_chat_job_error_fields
 from .events import EventEmitter
 from .projects import ProjectsApi
-from .transport import ApiClient
+from .transport import SWITCH_CONNECTION, ApiClient
 from .utils import (
     is_minimax_h3_model,
     is_wan3_model,
     new_id,
     normalize_params,
     parse_sse_chunk,
+)
+
+# How long a stream that was open when the socket dropped may stay silent before
+# it is failed as `transport_lost`. The server keeps an in-flight LLM job for 30 s
+# after its artist disconnects and rebinds it if the same app-id returns; after
+# that the job is gone. Newer servers answer sooner by listing the surviving jobs
+# in the `authenticated` frame.
+LLM_TRANSPORT_GRACE_SECONDS = 35.0
+TRANSPORT_LOST_MESSAGE = (
+    "The connection to Sogni dropped and this request did not survive it. Send it again."
 )
 
 HOSTED_TOOL_NAMES = (
@@ -790,6 +800,16 @@ class ChatApi(EventEmitter):
         self.hosted = _Hosted(self)
         self.runs = _Runs(self)
         self._active_streams: dict[str, ChatStream] = {}
+        # Jobs whose request has not reached the socket yet (`send` may be
+        # waiting out a reconnect).
+        self._unsent_jobs: set[str] = set()
+        # Jobs that were in flight when the transport dropped and have not been
+        # confirmed alive since.
+        self._jobs_awaiting_reconnect: set[str] = set()
+        self._transport_grace_timer: asyncio.TimerHandle | None = None
+        # Transport-recovery timing. Overridable so regression tests can run the
+        # flow in fractions of a second.
+        self._transport_tuning = {"grace_seconds": LLM_TRANSPORT_GRACE_SECONDS}
         self._models: dict[str, dict[str, Any]] = {}
         socket = client.socket
         socket.on("jobTokens", self._handle_tokens)
@@ -797,6 +817,9 @@ class ChatApi(EventEmitter):
         socket.on("llmJobError", self._handle_error)
         socket.on("jobState", self._handle_state)
         socket.on("swarmLLMModels", self._handle_models)
+        socket.on("authenticated", self._handle_socket_authenticated)
+        client.on("connecting", self._handle_transport_lost)
+        client.on("disconnected", self._handle_transport_closed)
 
     @property
     def models(self) -> dict[str, dict[str, Any]]:
@@ -923,7 +946,19 @@ class ChatApi(EventEmitter):
         request = {key: value for key, value in request.items() if value is not None}
         stream = ChatStream(job_id)
         self._active_streams[job_id] = stream
-        await self.client.socket.send("llmJobRequest", request)
+        self._unsent_jobs.add(job_id)
+        try:
+            await self.client.socket.send("llmJobRequest", request)
+        except Exception as error:
+            self._active_streams.pop(job_id, None)
+            # Nothing reached the server, so nothing was charged: safe to send again.
+            raise ChatJobError(
+                f"{TRANSPORT_LOST_MESSAGE} ({str(error) or type(error).__name__})",
+                error_type="transport_lost",
+                job_id=job_id,
+            ) from error
+        finally:
+            self._unsent_jobs.discard(job_id)
         if params.get("stream"):
             return stream
         try:
@@ -1160,12 +1195,83 @@ class ChatApi(EventEmitter):
         }
         self.emit("modelsUpdated", self.models)
 
+    def _handle_transport_lost(self, _data: Any = None) -> None:
+        """The socket dropped and a reconnect is scheduled.
+
+        The server may keep each in-flight job and hand it back (same app-id,
+        inside its grace window), or it may be gone (the socket restarted). Wait
+        for the reconnect to say which; never wait longer than the server would
+        have kept the job.
+        """
+
+        for job_id in self._active_streams:
+            if job_id not in self._unsent_jobs:
+                self._jobs_awaiting_reconnect.add(job_id)
+        if self._jobs_awaiting_reconnect and self._transport_grace_timer is None:
+            self._transport_grace_timer = asyncio.get_running_loop().call_later(
+                float(self._transport_tuning["grace_seconds"]), self._transport_grace_elapsed
+            )
+
+    def _transport_grace_elapsed(self) -> None:
+        self._transport_grace_timer = None
+        self._fail_jobs_awaiting_reconnect()
+
+    def _handle_transport_closed(self, data: Any) -> None:
+        # A duplicate-app-id handoff keeps the app-id alive on another
+        # connection; treat it like a reconnect. Any other terminal close ends
+        # the session, and no event will ever finish these streams.
+        code = data.get("code") if isinstance(data, dict) else None
+        self._handle_transport_lost()
+        if code == SWITCH_CONNECTION:
+            return
+        self._fail_jobs_awaiting_reconnect()
+
+    def _handle_socket_authenticated(self, data: Any) -> None:
+        if not self._jobs_awaiting_reconnect or not isinstance(data, dict):
+            return
+        active = data.get("activeLLMJobIDs")
+        if not isinstance(active, list):
+            return
+        live = {str(job_id).upper() for job_id in active}
+        gone = [job_id for job_id in self._jobs_awaiting_reconnect if job_id.upper() not in live]
+        self._jobs_awaiting_reconnect.clear()
+        self._clear_transport_grace_timer()
+        for job_id in gone:
+            self._fail_transport_lost(job_id)
+
+    def _fail_jobs_awaiting_reconnect(self) -> None:
+        job_ids = list(self._jobs_awaiting_reconnect)
+        self._jobs_awaiting_reconnect.clear()
+        self._clear_transport_grace_timer()
+        for job_id in job_ids:
+            self._fail_transport_lost(job_id)
+
+    def _fail_transport_lost(self, job_id: str) -> None:
+        self._handle_error(
+            {"jobID": job_id, "error": "transport_lost", "error_message": TRANSPORT_LOST_MESSAGE}
+        )
+
+    def _mark_job_alive(self, job_id: str) -> None:
+        """The job produced a frame, so it survived the gap; stop watching it."""
+
+        if job_id not in self._jobs_awaiting_reconnect:
+            return
+        self._jobs_awaiting_reconnect.discard(job_id)
+        if not self._jobs_awaiting_reconnect:
+            self._clear_transport_grace_timer()
+
+    def _clear_transport_grace_timer(self) -> None:
+        if self._transport_grace_timer is not None:
+            self._transport_grace_timer.cancel()
+            self._transport_grace_timer = None
+
     def _handle_tokens(self, data: Any) -> None:
         if not isinstance(data, dict):
             return
         stream = self._active_streams.get(data.get("jobID"))
         if not stream:
             return
+        self._mark_job_alive(data["jobID"])
         chunk = {
             "jobID": data["jobID"],
             "content": data.get("content", ""),
@@ -1183,6 +1289,7 @@ class ChatApi(EventEmitter):
         stream = self._active_streams.pop(data.get("jobID"), None)
         if not stream:
             return
+        self._mark_job_alive(data["jobID"])
         stream._complete(
             data.get("timeTaken", 0),
             data.get("usage"),
@@ -1198,6 +1305,7 @@ class ChatApi(EventEmitter):
         stream = self._active_streams.pop(data.get("jobID"), None)
         if not stream:
             return
+        self._mark_job_alive(data["jobID"])
         error = ChatJobError(
             data.get("error_message") or str(data.get("error")),
             code=data.get("error_code"),
@@ -1225,6 +1333,7 @@ class ChatApi(EventEmitter):
         if not isinstance(data, dict) or data.get("jobID") not in self._active_streams:
             return
         stream = self._active_streams[data["jobID"]]
+        self._mark_job_alive(data["jobID"])
         if data.get("workerName"):
             stream._worker_name = data["workerName"]
         self.emit(

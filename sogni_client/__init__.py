@@ -25,12 +25,15 @@ from .chat import (
 )
 from .client import AsyncSogniClient, SogniClient
 from .errors import (
+    RETRYABLE_CHAT_ERROR_TYPES,
     SUBSCRIPTION_ERROR_CODES,
     ApiError,
     ChatJobError,
     ProjectError,
     SogniError,
+    is_retryable_chat_error,
     is_subscription_limit_error,
+    isRetryableChatError,
     isSubscriptionLimitError,
 )
 from .events import DataEntity, EventEmitter
@@ -87,6 +90,7 @@ __all__ = [
     "PIXAL3D_IMAGE_TO_3D_MODEL_ID",
     "PROJECT_LOST_ERROR",
     "PROJECT_LOST_ORIGINAL_CODE",
+    "RETRYABLE_CHAT_ERROR_TYPES",
     "SAM3_IMAGE_SEGMENT_MODEL_ID",
     "SUBSCRIPTION_ERROR_CODES",
     "VIDEO_WORKFLOW_ASSETS",
@@ -122,6 +126,7 @@ __all__ = [
     "is_audio_model",
     "is_model_artifact_model",
     "is_project_lost_error",
+    "is_retryable_chat_error",
     "is_segmentation_model",
     "is_sogni_tool_call",
     "is_subscription_limit_error",
@@ -130,6 +135,7 @@ __all__ = [
     "isAudioModel",
     "isModelArtifactModel",
     "isProjectLostError",
+    "isRetryableChatError",
     "isSegmentationModel",
     "isSogniToolCall",
     "isSubscriptionLimitError",

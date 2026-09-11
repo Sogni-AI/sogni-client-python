@@ -233,6 +233,14 @@ _AUTHENTICATED_GRACE_SECONDS = 1.5
 # snapshot yet (the request may still be in flight), so it is not treated as
 # missing.
 _RECENTLY_CREATED_GRACE_SECONDS = 5.0
+# Close code the socket also sends as a project `jobError` when a request reaches
+# it while it is shutting down: the project was never admitted (nothing queued,
+# nothing charged) and can be sent again after reconnect.
+_SERVER_RESTARTING_ERROR_CODE = 1001
+# How long a rejected-while-restarting project waits for a connection to resubmit on.
+_RESUBMIT_RECONNECT_TIMEOUT_SECONDS = 60.0
+# Slack added to a recheck so the project is safely past its grace when judged.
+_RECHECK_PADDING_SECONDS = 0.25
 # Retries for the REST lookup of a project the socket no longer lists.
 _MISSING_PROJECT_ATTEMPTS = 4
 _MISSING_PROJECT_RETRY_SECONDS = 2.5
@@ -2342,6 +2350,9 @@ class Project(DataEntity):
         if self.finished:
             for job in self._jobs:
                 job._stop_runtime_timeout()
+            forget = getattr(self._api, "_forget_submission", None)
+            if callable(forget):
+                forget(self.id)
         if ("status" in keys or "jobs" in keys) and self.status == "completed":
             all_started = len(self._jobs) >= int(self.params.get("numberOfMedia", 1))
             if all_started and all(job.finished for job in self._jobs):
@@ -2549,6 +2560,15 @@ class ProjectsApi(EventEmitter):
         self._sync_lock = asyncio.Lock()
         self._recovered_completed_ids: set[str] = set()
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._recheck_timer: asyncio.TimerHandle | None = None
+        # Requests sent but not yet acknowledged by any server frame. Kept so a
+        # request the socket refused while restarting can be sent again unchanged.
+        self._unadmitted_requests: dict[str, dict[str, Any]] = {}
+        # Projects waiting for a reconnect to be resubmitted on.
+        self._awaiting_resubmit: set[str] = set()
+        # When each resubmitted project was last sent (epoch seconds), for the
+        # recently-created grace.
+        self._resubmitted_at: dict[str, float] = {}
         # Recovery timings. Overridable so regression tests can run the flow in
         # fractions of a second instead of seconds.
         self._recovery_tuning = {
@@ -2566,6 +2586,9 @@ class ProjectsApi(EventEmitter):
         socket.on("jobResult", self._handle_job_result)
         socket.on("jobError", self._handle_job_error)
         socket.on("authenticated", self._handle_socket_authenticated)
+        # `connecting` is a recoverable drop (the client is reconnecting);
+        # `disconnected` is terminal.
+        client.on("connecting", self._handle_transport_lost)
         client.on("disconnected", self._handle_disconnect)
         client.on("connected", self._handle_connect)
 
@@ -2717,6 +2740,7 @@ class ProjectsApi(EventEmitter):
         request = create_job_request_message(project.id, request_params, options)
         await self._process_assets(project, data, request)
         await self.client.socket.send("jobRequest", request)
+        self._unadmitted_requests[project.id] = request
         self._projects.append(project)
         return project
 
@@ -3059,6 +3083,7 @@ class ProjectsApi(EventEmitter):
             if not project_id or is_llm_recovered_project(recovered) or project_id in seen:
                 continue
             seen.add(project_id)
+            self._unadmitted_requests.pop(project_id, None)
             tracked = self._project(project_id)
             if tracked is not None:
                 if tracked.finished:
@@ -3102,13 +3127,25 @@ class ProjectsApi(EventEmitter):
         # registered yet.
         grace = float(self._recovery_tuning["recently_created_grace_seconds"])
         cutoff = requested_at - grace
+        unlisted = [
+            project for project in self._projects if not project.finished and project.id not in seen
+        ]
         missing = [
             project
-            for project in self._projects
-            if not project.finished
-            and project.id not in seen
-            and project.started_at.timestamp() <= cutoff
+            for project in unlisted
+            if project.id not in self._awaiting_resubmit
+            and self._last_submitted_at(project) <= cutoff
         ]
+        # Too new to judge now: look again once they are. Awaiting-resubmit
+        # projects schedule their own recheck once re-sent.
+        deferred = [
+            project
+            for project in unlisted
+            if project not in missing and project.id not in self._awaiting_resubmit
+        ]
+        if deferred:
+            judgeable_at = max(self._last_submitted_at(project) + grace for project in deferred)
+            self._schedule_recheck(judgeable_at - time.time())
         if missing:
             resolved = await self.resolve_missing([project.id for project in missing])
             for project in missing:
@@ -3131,6 +3168,9 @@ class ProjectsApi(EventEmitter):
                             "error": dict(PROJECT_LOST_ERROR),
                         },
                     )
+                    # The JS SDK fails the project from its `project` error
+                    # event; this port updates it directly, as `jobError` does.
+                    project._update({"status": "failed", "error": dict(PROJECT_LOST_ERROR)})
                     result["lost"].append(project.id)
                 else:
                     result["unverified"].append(project.id)
@@ -3806,6 +3846,7 @@ class ProjectsApi(EventEmitter):
     def _handle_job_state(self, data: Any) -> None:
         if not isinstance(data, dict):
             return
+        self._unadmitted_requests.pop(data.get("jobID", ""), None)
         kind = data.get("type")
         if kind == "queued":
             seconds = data.get("estimatedStartSeconds")
@@ -4093,8 +4134,18 @@ class ProjectsApi(EventEmitter):
         }
         try:
             code = int(data.get("error"))
-            error = {"code": code, "message": data.get("error_message")}
         except (TypeError, ValueError):
+            code = None
+        if (
+            not data.get("imgID")
+            and code == _SERVER_RESTARTING_ERROR_CODE
+            and self._resubmit_after_reconnect(data.get("jobID", ""), data.get("error_message"))
+        ):
+            return
+        self._unadmitted_requests.pop(data.get("jobID", ""), None)
+        if code is not None:
+            error = {"code": code, "message": data.get("error_message")}
+        else:
             original = str(data.get("error"))
             error = {
                 "code": symbolic.get(original, 5000),
@@ -4149,17 +4200,116 @@ class ProjectsApi(EventEmitter):
         task.add_done_callback(self._background_tasks.discard)
         return task
 
-    def _handle_disconnect(self, _data: Any) -> None:
+    def _handle_transport_lost(self, _data: Any = None) -> None:
         # A dropped socket used to fail every in-flight project. It no longer
         # does: generation continues on the Supernet and the server hands the
         # project back on reconnect, so hold the projects alive and quiet until
         # then.
         self._transport_disconnected = True
         self._clear_authenticated_timer()
-        self._set_available_models([])
         for project in self._projects:
             if not project.finished:
                 project._keep_alive()
+
+    def _handle_disconnect(self, _data: Any) -> None:
+        self._handle_transport_lost()
+        self._set_available_models([])
+
+    def _forget_submission(self, project_id: str) -> None:
+        self._unadmitted_requests.pop(project_id, None)
+        self._resubmitted_at.pop(project_id, None)
+
+    def _resubmit_after_reconnect(self, project_id: str, message: Any) -> bool:
+        """The socket refused this project because it was shutting down.
+
+        It never ran and nothing was charged. Send the same request again once
+        the client has reconnected, once per project. Returns ``False`` when the
+        project cannot be resubmitted and the error should surface as usual.
+        """
+
+        request = self._unadmitted_requests.get(project_id)
+        project = self._project(project_id)
+        if request is None or project is None or project.finished:
+            return False
+        # One resubmit per project: a second refusal surfaces as an error.
+        del self._unadmitted_requests[project_id]
+        self._awaiting_resubmit.add(project_id)
+        project._keep_alive()
+        _LOGGER.info(
+            "Project %s reached the server while it was restarting; resubmitting after reconnect",
+            project_id,
+        )
+
+        def fail(error: BaseException) -> None:
+            self._awaiting_resubmit.discard(project_id)
+            _LOGGER.warning(
+                "Resubmitting project %s failed", project_id, exc_info=(type(error), error, None)
+            )
+            failure = {"code": _SERVER_RESTARTING_ERROR_CODE, "message": message}
+            self.emit("project", {"type": "error", "projectId": project_id, "error": failure})
+            if not project.finished:
+                project._update({"status": "failed", "error": failure})
+
+        async def resend() -> None:
+            try:
+                await self.client.socket.send("jobRequest", request)
+            except Exception as error:
+                fail(error)
+                return
+            self._awaiting_resubmit.discard(project_id)
+            self._resubmitted_at[project_id] = time.time()
+            self._unadmitted_requests[project_id] = request
+            project._keep_alive()
+            self._schedule_recheck(float(self._recovery_tuning["recently_created_grace_seconds"]))
+
+        # The refusal arrives just before the server closes this socket, so wait
+        # for the next connection instead of writing into the closing one.
+        def on_connected(_data: Any) -> None:
+            remove_connected()
+            timer.cancel()
+            if project.finished:
+                self._awaiting_resubmit.discard(project_id)
+                return
+            self._track_task(resend())
+
+        def timed_out() -> None:
+            remove_connected()
+            fail(ConnectionError("No connection to resubmit on"))
+
+        remove_connected = self.client.on("connected", on_connected)
+        timer = asyncio.get_running_loop().call_later(
+            _RESUBMIT_RECONNECT_TIMEOUT_SECONDS, timed_out
+        )
+        return True
+
+    def _schedule_recheck(self, delay_seconds: float) -> None:
+        """Reconcile again once projects that were too new (or still being
+        resubmitted) at the last sync can be judged.
+
+        Without this a project whose request died with the old socket is only
+        caught by the slow staleness watchdog, minutes later.
+        """
+
+        if self._recheck_timer is not None:
+            self._recheck_timer.cancel()
+
+        def elapsed() -> None:
+            self._recheck_timer = None
+
+            async def run() -> None:
+                try:
+                    await self.sync("recheck")
+                except Exception:
+                    _LOGGER.warning("Project recheck sync failed", exc_info=True)
+
+            self._track_task(run())
+
+        self._recheck_timer = asyncio.get_running_loop().call_later(
+            max(0.0, delay_seconds) + _RECHECK_PADDING_SECONDS, elapsed
+        )
+
+    def _last_submitted_at(self, project: Project) -> float:
+        return max(project.started_at.timestamp(), self._resubmitted_at.get(project.id, 0.0))
 
     def _handle_connect(self, _data: Any) -> None:
         self._transport_disconnected = False

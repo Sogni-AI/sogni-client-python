@@ -299,6 +299,37 @@ with an error where `is_project_lost_error(error)` is `True`. Apps that persist
 project ids themselves can run the same lookup with
 `sogni.projects.resolve_missing(ids)`.
 
+### Socket server restarts
+
+A Sogni platform release restarts the socket server: every connection closes
+with code `1001` for a few seconds. The SDK is built so apps need no special
+handling for it:
+
+- `create()` and chat requests made during the gap wait (up to 30 seconds) for
+  the reconnected, authenticated socket instead of failing.
+- A project request that reached the server while it was shutting down is
+  refused by id; the SDK sends the same request again after reconnecting, once.
+  Projects created moments before a reconnect are re-checked when they become
+  old enough to judge, rather than minutes later.
+- LLM jobs are not carried across a restart. The server refunds them, and a
+  stream that was open fails with a `ChatJobError` whose `retryable` is `True`
+  (`error_type` `"server_restarting"` or `"transport_lost"`) rather than waiting
+  forever. After a plain network blip the server keeps the job for 30 seconds
+  and the stream simply continues. Re-issue retryable failures as new requests:
+
+```python
+from sogni_client import is_retryable_chat_error
+
+
+async def complete_with_retry(**params):
+    try:
+        return await sogni.chat.completions.create(**params)
+    except Exception as error:
+        if not is_retryable_chat_error(error):
+            raise
+        return await sogni.chat.completions.create(**params)  # waits for the reconnect
+```
+
 The same snapshot answers "is anything rendering elsewhere on this account?" —
 `sogni.projects.list_projects_elsewhere()` returns those in-flight projects
 read-only (`appSource`, `status`, `model`, per-job step counts). The socket

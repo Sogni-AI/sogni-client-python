@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -34,6 +35,19 @@ SWITCH_CONNECTION = 4015
 # reconnect.
 WS_RECONNECT_BASE_DELAY = 1.0
 WS_RECONNECT_MAX_DELAY = 15.0
+# How long `send` waits for a socket that can carry work. Covers a socket deploy
+# (a ~6 s gap plus reconnect backoff) without hanging the caller on a transport
+# that is not coming back.
+SEND_READY_TIMEOUT_SECONDS = 30.0
+# The server drops frames that arrive before its `authenticated` handshake. Every
+# current server sends that frame within milliseconds; if an open socket stays
+# silent this long, send anyway rather than stall on an older server.
+AUTHENTICATED_FALLBACK_SECONDS = 10.0
+READY_POLL_SECONDS = 0.1
+
+
+def _is_not_recoverable(code: int) -> bool:
+    return 4000 <= code < 5000
 
 
 class RestClient:
@@ -239,6 +253,22 @@ class WebSocketClient(EventEmitter):
         self._reader_task: asyncio.Task[None] | None = None
         self._connect_lock = asyncio.Lock()
         self._intentional_close = False
+        # The socket the server has sent `authenticated` on, i.e. one that
+        # accepts work.
+        self._authenticated_socket: Any = None
+        self._opened_at = 0.0
+        # Set when the last close was recoverable while the session is
+        # authenticated: the ApiClient owns the reconnect, so `send` waits for it
+        # instead of racing it with a connection of its own (which would also
+        # reset the reconnect backoff on every failed attempt).
+        self._reconnect_expected = False
+        # Send-readiness timing. Overridable so regression tests can run the
+        # flow in fractions of a second.
+        self._send_ready_tuning = {
+            "timeout_seconds": SEND_READY_TIMEOUT_SECONDS,
+            "authenticated_fallback_seconds": AUTHENTICATED_FALLBACK_SECONDS,
+            "poll_seconds": READY_POLL_SECONDS,
+        }
 
         def remember_subscriptions(payload: Any) -> None:
             if isinstance(payload, dict) and isinstance(
@@ -299,11 +329,18 @@ class WebSocketClient(EventEmitter):
                 close_timeout=5,
                 max_size=None,
             )
+            # Cleared only once a socket is open: a failed attempt leaves the
+            # reconnect loop in charge, so `send` keeps waiting for it.
+            self._reconnect_expected = False
+            self._authenticated_socket = None
+            self._opened_at = asyncio.get_running_loop().time()
             self._reader_task = asyncio.create_task(self._read_loop())
             self.emit("connected", {"network": self.supernet_type})
 
     async def disconnect(self, code: int = 1000, reason: str = "Client disconnected") -> None:
         self._intentional_close = True
+        self._reconnect_expected = False
+        self._authenticated_socket = None
         socket, self._socket = self._socket, None
         reader, self._reader_task = self._reader_task, None
         if socket is not None:
@@ -331,6 +368,8 @@ class WebSocketClient(EventEmitter):
                         for key in ("jobID", "imgID"):
                             if payload.get(key):
                                 payload[key] = str(payload[key]).upper()
+                    if envelope["type"] == "authenticated" and socket is self._socket:
+                        self._authenticated_socket = socket
                     self.emit(envelope["type"], payload)
                 except (KeyError, TypeError, UnicodeDecodeError, ValueError):
                     # A malformed application frame must not tear down a healthy
@@ -339,8 +378,11 @@ class WebSocketClient(EventEmitter):
                         "Dropped malformed WebSocket frame", exc_info=True
                     )
         except ConnectionClosed as closed:
-            close_code = int(closed.code or 0)
-            close_reason = closed.reason or ""
+            # `ConnectionClosed.code` / `.reason` are deprecated since websockets
+            # 13.1; read the received close frame (none means 1006, as before).
+            received = closed.rcvd
+            close_code = int(received.code) if received is not None else 1006
+            close_reason = (received.reason if received is not None else "") or ""
         except asyncio.CancelledError:
             return
         except Exception:
@@ -348,16 +390,104 @@ class WebSocketClient(EventEmitter):
         finally:
             if socket is self._socket:
                 self._socket = None
+            if not self._intentional_close and self._socket is None:
+                self._authenticated_socket = None
+                self._reconnect_expected = (
+                    self.auth.is_authenticated
+                    and bool(close_code)
+                    and close_code != 1000
+                    and not _is_not_recoverable(close_code)
+                )
             if not self._intentional_close:
                 self.emit("disconnected", {"code": close_code, "reason": close_reason})
 
+    def _is_ready_for_work(self) -> bool:
+        """The current socket is open and the server has accepted it for work."""
+
+        return self._socket is not None and self._authenticated_socket is self._socket
+
+    def _expecting_reconnect(self) -> bool:
+        return self._reconnect_expected and self.auth.is_authenticated
+
+    async def _wait_for_connection(self, timeout: float | None = None) -> None:
+        """Wait until the socket can carry work.
+
+        An open socket is not enough: the server drops frames that arrive before
+        its ``authenticated`` handshake. A recoverable close (a socket deploy, a
+        network blip) keeps the wait alive while the ApiClient reconnects, so
+        work submitted during the gap goes out on the next connection instead of
+        failing. A terminal close, a signed-out session, or the deadline ends it.
+        """
+
+        if self._is_ready_for_work():
+            return
+        if (
+            self._socket is None
+            and not self._expecting_reconnect()
+            and not self._connect_lock.locked()
+        ):
+            raise ConnectionError("WebSocket not connected")
+        tuning = self._send_ready_tuning
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (
+            timeout if timeout is not None else float(tuning["timeout_seconds"])
+        )
+        fallback_seconds = float(tuning["authenticated_fallback_seconds"])
+        wake = asyncio.Event()
+        failure: list[Exception] = []
+
+        def on_authenticated(_data: Any) -> None:
+            wake.set()
+
+        def on_disconnected(_data: Any) -> None:
+            if not self._expecting_reconnect():
+                failure.append(ConnectionError("WebSocket connection failed"))
+            wake.set()
+
+        remove_authenticated = self.on("authenticated", on_authenticated)
+        remove_disconnected = self.on("disconnected", on_disconnected)
+        try:
+            while True:
+                wake.clear()
+                if failure:
+                    raise failure[0]
+                if self._is_ready_for_work():
+                    return
+                open_seconds = loop.time() - self._opened_at
+                if self._socket is not None and open_seconds >= fallback_seconds:
+                    # An older server that never sends `authenticated`.
+                    return
+                if (
+                    self._socket is None
+                    and not self._expecting_reconnect()
+                    and not self._connect_lock.locked()
+                ):
+                    # Closed on purpose, or signed out while waiting.
+                    raise ConnectionError("WebSocket connection failed")
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError("WebSocket connection timeout")
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        wake.wait(), min(float(tuning["poll_seconds"]), remaining)
+                    )
+        finally:
+            remove_authenticated()
+            remove_disconnected()
+
     async def send(self, message_type: str, data: Any) -> None:
-        if self._socket is None:
+        # While a recoverable close is being handled the ApiClient reconnects;
+        # opening a connection here would race it.
+        if self._socket is None and not self._expecting_reconnect():
             await self.connect()
+        await self._wait_for_connection()
+        socket = self._socket
+        if socket is None:  # pragma: no cover - guarded by the wait above
+            raise ConnectionError("WebSocket not connected")
         envelope = json.dumps(
             {"type": message_type, "data": b64_json_encode(data)}, separators=(",", ":")
         )
-        await self._socket.send(envelope)
+        await socket.send(envelope)
 
     async def switch_network(self, network: str) -> str:
         loop = asyncio.get_running_loop()
