@@ -124,11 +124,52 @@ def test_request_preserves_source_timing_and_pins_generation_fields() -> None:
     assert key["interpolation"] == "none"
     assert key["upscaleResolution"] == 1440
     assert key["steps"] == 1
-    assert key["seed"] == 0
+    assert key["seed"] == 987
     assert key["comfySampler"] is None
     assert request(width=1890, height=1080)["upscaleResolution"] == 1080
     assert request(fps=24000 / 1001)["fps"] == 24000 / 1001
     assert message()["numberOfImages"] == 1
+
+
+def test_detail_speed_and_seed_default_to_the_stable_recipe() -> None:
+    key = request(seed=_OMIT)
+    assert (key["detailPreference"], key["processingSpeed"], key["seed"]) == ("stable", "stable", 0)
+    none_key = request(seed=None, detailPreference=None, processingSpeed=None)
+    assert (none_key["detailPreference"], none_key["processingSpeed"], none_key["seed"]) == (
+        "stable",
+        "stable",
+        0,
+    )
+
+
+@pytest.mark.parametrize("detail", ["stable", "sharper"])
+@pytest.mark.parametrize("speed", ["stable", "faster"])
+@pytest.mark.parametrize("seed", [-1, 0, 4294967295, 42.0])
+def test_detail_speed_and_seed_are_forwarded(detail: str, speed: str, seed: float) -> None:
+    key = request(detailPreference=detail, processingSpeed=speed, seed=seed)
+    assert (key["detailPreference"], key["processingSpeed"]) == (detail, speed)
+    assert key["seed"] == seed and type(key["seed"]) is int
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({"detailPreference": "auto"}, "FlashVSR detailPreference must be stable or sharper."),
+        ({"detailPreference": ""}, "FlashVSR detailPreference must be stable or sharper."),
+        ({"processingSpeed": "auto"}, "FlashVSR processingSpeed must be stable or faster."),
+        ({"processingSpeed": "Faster"}, "FlashVSR processingSpeed must be stable or faster."),
+        *(
+            (
+                {"seed": seed},
+                "FlashVSR seed must be -1 (random) or an integer from 0 through 4294967295.",
+            )
+            for seed in (-2, 0.5, 4294967296, "42", True, float("nan"))
+        ),
+    ],
+)
+def test_rejects_invalid_detail_speed_and_seed(changes: dict[str, Any], expected: str) -> None:
+    with pytest.raises(ValueError, match=exactly(expected)):
+        request(**changes)
 
 
 def test_upscale_resolution_param_overrides_the_shorter_edge() -> None:

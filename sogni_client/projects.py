@@ -626,6 +626,20 @@ def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int | N
     ``ValueError``.
     """
 
+    for field, allowed in (
+        ("detailPreference", ("stable", "sharper")),
+        ("processingSpeed", ("stable", "faster")),
+    ):
+        if params.get(field) is not None and params[field] not in allowed:
+            raise ValueError(f"FlashVSR {field} must be {allowed[0]} or {allowed[1]}.")
+    # -1 is the platform-wide random seed, which the worker resolves.
+    seed = params.get("seed")
+    if seed is not None and (
+        not _is_finite_number(seed) or int(seed) != seed or not -1 <= seed <= 4294967295
+    ):
+        raise ValueError(
+            "FlashVSR seed must be -1 (random) or an integer from 0 through 4294967295."
+        )
     resolution: Any = params.get("upscaleResolution")
     if resolution is None:
         width, height = _js_number(params.get("width")), _js_number(params.get("height"))
@@ -1569,7 +1583,9 @@ def create_job_request_message(
             keyframe.update(
                 upscaleResolution=upscale_resolution,
                 steps=1,
-                seed=0,
+                seed=0 if params.get("seed") is None else int(params["seed"]),
+                detailPreference=params.get("detailPreference") or "stable",
+                processingSpeed=params.get("processingSpeed") or "stable",
                 generateAudio=True,
                 interpolation="none",
             )

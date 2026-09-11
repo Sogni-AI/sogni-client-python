@@ -164,6 +164,13 @@ project = await sogni.projects.create(
 print(await project.wait_for_completion())  # MP4 with the original audio
 ```
 
+Three optional choices tune the render. `detail_preference` is `"stable"`
+(default, More Stable) or `"sharper"`; `processing_speed` is `"stable"`
+(default, More Stable) or `"faster"`; `seed` defaults to `0` for a repeatable
+result, and `-1` asks for a random seed. Sharper, Faster and any seed other
+than `0` or `-1` need a worker release that supports them; until one is
+connected, the server refuses those requests.
+
 To show a price first, call `estimate_video_cost()` with the output `width` and
 `height` (the source scaled so its short edge equals the target, both edges
 rounded to even pixels), the source's `frames` and `fps`, `steps=1`, and
