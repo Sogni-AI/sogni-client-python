@@ -188,6 +188,16 @@ class RestClient:
                 },
             )
 
+    async def put_signed(self, url: str, data: bytes, *, headers: dict[str, str]) -> int:
+        """PUT to a presigned URL with its signed headers; returns the HTTP status.
+
+        No auth headers or cookies are sent and redirects are not followed.
+        """
+        response = await self._client.put(
+            url, content=data, headers=headers, timeout=300, follow_redirects=False
+        )
+        return response.status_code
+
     async def get_bytes(self, url: str) -> bytes:
         response = await self._client.get(url, timeout=300)
         response.raise_for_status()

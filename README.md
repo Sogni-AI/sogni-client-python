@@ -177,6 +177,44 @@ rounded to even pixels), the source's `frames` and `fps`, `steps=1`, and
 `source_width`/`source_height`; the job itself is charged from the verified
 source.
 
+## GPT Image 2.5
+
+`gpt-image-2.5-flare` and `gpt-image-2.5-sunburst` join `gpt-image-2`. All three
+accept up to 16 `context_images` references (never trimmed) and custom sizes up to
+3840px. Quality must be a concrete value: `low`, `medium` or `high`, plus `xhigh`
+and `max` on 2.5; `"auto"` is rejected because every request is quoted, charged and
+rendered at the quality it names. 2.5 also supports `gpt_image_background="transparent"`
+(PNG or WebP output only), and `gpt_image_output_compression` (0-100) applies to JPEG
+or WebP output.
+
+To edit part of the first reference, pass a PNG alpha mask as `gpt_image_mask`
+(bytes or a path) or `gpt_image_mask_url` (a URL, or a `data:image/png;base64,...`
+URI under 50 MB, which is uploaded like `gpt_image_mask`). Transparent mask
+regions are edited. In chat tools, `gpt-image-2.5` and `flare` select Flare;
+`sunburst` selects Sunburst.
+
+## Reusable subscriber uploads
+
+On servers that support saved uploads, eligible subscribers reuse the same image,
+video or audio file across projects. Pass files to `projects.create()` as usual:
+the client checks the account's saved copies by SHA-256 before transferring bytes,
+so a repeated reference is not uploaded again. Uploads stay private to the
+signed-in account.
+
+```python
+saved = await sogni.projects.assets.upload(open("product.png", "rb").read(), "image/png", "Product")
+listing = await sogni.projects.assets.list()  # {"assets": [...], "limits": {...}}
+await sogni.projects.assets.remove(saved["id"])  # already-bound project inputs stay
+```
+
+Older servers and ineligible accounts keep using ordinary project uploads, but
+only when saved storage cannot be prepared; a transfer, checksum or binding
+failure after preparation stops project submission. Saved IDs do not replace file
+parameters in `projects.create()`; `assets.bind(id, {"projectId": ..., "type": ...})`
+is available for callers that manage project input slots directly. Project history
+may include `byolUsed`, `personalLoras` (public-source snapshots) and
+`reusedAssetCount`; missing fields on older projects mean unknown, not zero.
+
 ## Chat
 
 Socket-backed completion:
@@ -355,7 +393,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.40.0`. The
+This release tracks the current TypeScript source at `5.42.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 27 hosted-tool

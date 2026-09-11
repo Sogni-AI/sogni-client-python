@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -13,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
+from .assets import ReusableUploads
 from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ProjectError
 from .events import DataEntity, EventEmitter
@@ -399,12 +401,82 @@ def _js_length(value: Any) -> int:
     return len(value) if isinstance(value, (str, list, tuple)) else 0
 
 
+_GPT_IMAGE_MODEL_IDS = frozenset({"gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"})
+
+
+def is_gpt_image_model(model_id: str | None) -> bool:
+    return model_id in _GPT_IMAGE_MODEL_IDS
+
+
+def _validate_gpt_image_options(params: dict[str, Any]) -> None:
+    """Mirror sogni-client's validateGptImageOptions (5.41.0)."""
+    model_id = params.get("modelId")
+    if not is_gpt_image_model(model_id):
+        if params.get("gptImageMask") or params.get("gptImageMaskUrl"):
+            raise _api_error("GPT Image masks require a GPT Image model")
+        return
+    contexts = params.get("contextImages")
+    if params.get("gptImageMask") and params.get("gptImageMaskUrl"):
+        raise _api_error("Provide one GPT Image mask")
+    if params.get("gptImageMask") and not contexts:
+        raise _api_error("GPT Image mask requires a first reference image")
+    if contexts is not None and (
+        not isinstance(contexts, list) or len(contexts) > 16 or any(not image for image in contexts)
+    ):
+        raise _api_error("GPT Image accepts up to 16 non-empty references in source order")
+    mask_url = params.get("gptImageMaskUrl")
+    if (
+        "gptImageMaskUrl" in params
+        and mask_url is not None
+        and (not isinstance(mask_url, str) or not mask_url.strip() or not contexts)
+    ):
+        raise _api_error("GPT Image mask requires a mask URL and a first reference image")
+    is_25 = model_id != "gpt-image-2"
+    quality = params.get("gptImageQuality")
+    if quality == "auto":
+        raise _api_error(
+            f"Unsupported quality for {model_id}: auto. "
+            f"Choose low, medium or high{', xhigh or max' if is_25 else ''}."
+        )
+    if quality is not None:
+        allowed = ["low", "medium", "high", "standard", "hd", *(["xhigh", "max"] if is_25 else [])]
+        if quality not in allowed:
+            raise _api_error(f"Unsupported quality for {model_id}: {quality}")
+    background = params.get("gptImageBackground")
+    if background is not None and background not in [
+        "opaque",
+        "auto",
+        *(["transparent"] if is_25 else []),
+    ]:
+        raise _api_error(f"Unsupported background for {model_id}: {background}")
+    if background == "transparent" and params.get("outputFormat") == "jpg":
+        raise _api_error("Transparent GPT Image output requires PNG or WebP")
+    compression = params.get("gptImageOutputCompression")
+    if compression is not None:
+        if (
+            isinstance(compression, bool)
+            or not isinstance(compression, int)
+            or not 0 <= compression <= 100
+        ):
+            raise _api_error("GPT Image output compression must be an integer from 0 to 100")
+        if params.get("outputFormat") not in ("jpg", "webp"):
+            raise _api_error("GPT Image output compression requires JPEG or WebP")
+
+
+def _saved_upload_binding(project_id: str, role: str) -> dict[str, Any]:
+    """Project input slot for a saved upload, in sogni-client's wire shape."""
+    slot = re.fullmatch(r"(referenceAudio|referenceVideo)([1-3])", role)
+    if slot:
+        return {"projectId": project_id, "type": slot.group(1), "id": role}
+    return {"projectId": project_id, "type": role}
+
+
 def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
     if model_id == "rtx_vsr_pro":
         return 512, 15360
     if model_id in _KREA_IDENTITY_EDIT_MODEL_IDS:
         return 512, 2048
-    if model_id == "gpt-image-2":
+    if is_gpt_image_model(model_id):
         return 256, 3840
     if model_id in _EXTENDED_IMAGE_SIZE_MODEL_IDS:
         return 256, 2560
@@ -1412,10 +1484,18 @@ def create_job_request_message(
             )
         elif size_preset is None:
             keyframe.pop("sizePreset", None)
+        _validate_gpt_image_options(params)
         if params.get("gptImageQuality") is not None:
             keyframe["gptImageQuality"] = params["gptImageQuality"]
         if params.get("gptImageBackground") is not None:
             keyframe["gptImageBackground"] = params["gptImageBackground"]
+        if params.get("gptImageMask"):
+            keyframe["hasReferenceMask"] = True
+            keyframe["referenceMaskContentType"] = "image/png"
+        if params.get("gptImageMaskUrl") is not None:
+            keyframe["gptImageMaskUrl"] = params["gptImageMaskUrl"]
+        if params.get("gptImageOutputCompression") is not None:
+            keyframe["gptImageOutputCompression"] = params["gptImageOutputCompression"]
 
     elif project_type == "video":
         if not is_video_model(params["modelId"]):
@@ -2462,6 +2542,7 @@ class ProjectsApi(EventEmitter):
         self._current_network_type: str | None = None
         self._cancellation_requests: dict[str, asyncio.Task[None]] = {}
         self._lora_catalog_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._assets: ReusableUploads | None = None
         self._transport_disconnected = False
         self._connected_at = 0.0
         self._authenticated_timer: asyncio.TimerHandle | None = None
@@ -2609,6 +2690,22 @@ class ProjectsApi(EventEmitter):
         # params agree with the request that was actually sent.
         if data.get("type") == "image" and is_model_artifact_model(data.get("modelId", "")):
             data = {**data, "numberOfPreviews": 0}
+        mask_url = data.get("gptImageMaskUrl")
+        if (
+            data.get("type") == "image"
+            and is_gpt_image_model(data.get("modelId"))
+            and isinstance(mask_url, str)
+            and mask_url.startswith("data:")
+        ):
+            if data.get("gptImageMask"):
+                raise _api_error("Provide one GPT Image mask, not both media and URL")
+            match = re.fullmatch(r"data:image/png;base64,([A-Za-z0-9+/=]+)", mask_url)
+            if not match or len(match.group(1)) >= -(-(50 * 1024 * 1024 * 4) // 3):
+                raise _api_error("GPT Image mask must be a PNG data URI smaller than 50 MB")
+            data = {
+                **{key: value for key, value in data.items() if key != "gptImageMaskUrl"},
+                "gptImageMask": base64.b64decode(match.group(1)),
+            }
         project = Project(data, self)
         options = await self.get_model_options(data["modelId"])
         request_params = dict(data)
@@ -2634,7 +2731,7 @@ class ProjectsApi(EventEmitter):
             contexts = data.get("contextImages") or []
             max_context = (
                 16
-                if data["modelId"] == "gpt-image-2"
+                if is_gpt_image_model(data["modelId"])
                 else 2
                 if "kontext" in data["modelId"] or "identity_edit" in data["modelId"]
                 else 3
@@ -2644,6 +2741,9 @@ class ProjectsApi(EventEmitter):
             assets.extend(
                 (f"contextImage{index}", value, False) for index, value in enumerate(contexts, 1)
             )
+            mask = data.get("gptImageMask")
+            if mask and mask is not True:
+                assets.append(("referenceMask", mask, False))
             for role, value, media in assets:
                 if value and value is not True:
                     await self._upload_asset(project.id, role, value, media=media)
@@ -2708,9 +2808,18 @@ class ProjectsApi(EventEmitter):
                 )
                 request["keyFrames"][0]["referenceAudioContentType"] = content_type
 
+    @property
+    def assets(self) -> ReusableUploads:
+        """Manage subscriber uploads once and reuse them across projects."""
+        if self._assets is None:
+            self._assets = ReusableUploads(self.client.rest)
+        return self._assets
+
     async def _upload_asset(self, job_id: str, role: str, value: Any, *, media: bool) -> str | None:
         content_type = detect_content_type(value)
         body = read_media(value)
+        if await self.assets.try_bind_file(body, content_type, _saved_upload_binding(job_id, role)):
+            return content_type
         if media:
             url = await self.media_upload_url(
                 {"jobId": job_id, "type": role, "contentType": content_type}

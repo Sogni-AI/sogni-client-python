@@ -413,6 +413,14 @@ class ChatToolsApi:
         "openai-image": "gpt-image-2",
         "gpt-image": "gpt-image-2",
         "gpt-image-2": "gpt-image-2",
+        "gpt-image-2.0": "gpt-image-2",
+        # GPT Image 2.5 (sogni-client 5.41.0): the bare 2.5 selectors choose Flare.
+        "gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare": "gpt-image-2.5-flare",
+        "gpt-image-2.5": "gpt-image-2.5-flare",
+        "gpt-image2.5": "gpt-image-2.5-flare",
+        "sunburst": "gpt-image-2.5-sunburst",
+        "flare": "gpt-image-2.5-flare",
         "z-turbo": "z_image_turbo_bf16",
         "krea2-turbo": "krea2_turbo_fp8_scaled",
         "krea-2-turbo": "krea2_turbo_fp8_scaled",
@@ -605,6 +613,21 @@ class ChatToolsApi:
             ):
                 if args.get(source) is not None:
                     project_params[target] = args[source]
+            if media == "image":
+                # Mirrors sogni-client's applyHostedImageOptions (5.41.0).
+                quality = args.get("gpt_image_quality", args.get("gptImageQuality"))
+                if isinstance(quality, str) and quality.strip():
+                    project_params["gptImageQuality"] = quality.strip().lower()
+                if args.get("mask_image_url") is not None:
+                    project_params["gptImageMaskUrl"] = args["mask_image_url"]
+                background = args.get("gpt_image_background", args.get("gptImageBackground"))
+                if isinstance(background, str) and background.strip():
+                    project_params["gptImageBackground"] = background.strip().lower()
+                compression = args.get(
+                    "gpt_image_output_compression", args.get("gptImageOutputCompression")
+                )
+                if compression is not None:
+                    project_params["gptImageOutputCompression"] = compression
             if media == "video":
                 project_params.setdefault("fps", 30 if is_wan3_model(model_id) else 24)
                 project_params.setdefault("duration", 6 if is_minimax_h3_model(model_id) else 5)

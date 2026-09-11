@@ -40,6 +40,10 @@ class FakeRest:
         return response
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        # Saved-upload reuse is unavailable unless a test opts in, so ordinary
+        # project uploads stay on their existing presigned path.
+        if path == "/v1/assets/capabilities":
+            return {"status": "success", "data": {"enabled": False}}
         self.calls.append({"method": "GET", "path": path, "params": params})
         return self._response()
 
