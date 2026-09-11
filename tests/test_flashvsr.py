@@ -28,10 +28,7 @@ from sogni_client.utils import get_video_workflow_type
 MODEL_ID = FLASHVSR_VIDEO_UPSCALE_MODEL_ID
 RESOLUTION = "Choose 1080p or 1440p for video upscaling."
 REFERENCE_VIDEO = "FlashVSR requires an uploaded referenceVideo."
-TIMING = (
-    "Omit the source timing, or supply the source video’s exact frame count "
-    "and frame rate (up to 362 frames and 15 seconds)."
-)
+TIMING = "Omit the source timing, or supply the source video’s exact frame count and frame rate."
 PROMPTLESS = "FlashVSR is promptless."
 CONTROLS = (
     "Video upscaling preserves the complete source video and its audio; "
@@ -42,7 +39,9 @@ EXTERNAL_URLS = (
     "External reference URLs are supported only by Seedance, HappyHorse, and Wan 3 models."
 )
 
-# The server-advertised FlashVSR tier, as delivered in the model catalog.
+# The server-advertised FlashVSR tier, as delivered in the model catalog. Its
+# frame range is left out on purpose: the client never caps FlashVSR length,
+# which only the server's admission check decides.
 TIER = {
     "type": "video",
     "task": "video-upscale",
@@ -52,7 +51,6 @@ TIER = {
     "maxPixels": 3686400,
     "width": {"min": 2, "max": 2560, "step": 2, "default": 2520},
     "height": {"min": 2, "max": 2560, "step": 2, "default": 1440},
-    "frames": {"min": 1, "max": 362, "step": 1, "default": 158},
     "fps": {"min": 1, "max": 60, "default": 24},
     "steps": {"min": 1, "max": 1, "default": 1},
     "guidance": {"min": 1, "max": 1, "default": 1},
@@ -205,7 +203,6 @@ def test_empty_reference_url_arrays_are_refused_for_every_non_external_model() -
     "changes",
     [
         {"frames": 0},
-        {"frames": 363},
         {"frames": 158.5},
         {"frames": "158"},
         {"frames": True},
@@ -216,10 +213,8 @@ def test_empty_reference_url_arrays_are_refused_for_every_non_external_model() -
         {"fps": True},
         {"fps": float("inf")},
         {"fps": 120},
-        {"frames": 362, "fps": 23},
         {"frames": _OMIT, "duration": 0.02},
         {"frames": _OMIT, "duration": "soon"},
-        {"frames": _OMIT, "duration": 16},
         # A duration identifies the source's frames only together with its exact rate.
         {"frames": _OMIT, "fps": _OMIT, "duration": 5},
         {"frames": None, "fps": None, "duration": 5},
@@ -269,19 +264,34 @@ def test_duration_only_request_derives_the_source_frame_count() -> None:
     assert request(frames=_OMIT, duration=362 / 24)["frames"] == 362
 
 
-def test_duration_only_request_applies_the_one_frame_minimum_and_15_second_maximum() -> None:
+def test_duration_only_request_applies_the_one_frame_minimum() -> None:
     # Rounds to one frame, so it passes the frame check, then fails the 1/fps minimum.
     with pytest.raises(
         ValueError,
         match=exactly("Video duration must greater or equal 0.041666666666666664, got 0.03"),
     ):
         request(frames=_OMIT, duration=0.03)
-    # Rounds to 362 frames within the 1ms tolerance, then fails the 362/24 maximum.
-    with pytest.raises(
-        ValueError,
-        match=exactly("Video duration must be less or equal 15.083333333333334, got 15.1"),
-    ):
-        request(frames=_OMIT, duration=15.1)
+
+
+@pytest.mark.parametrize("frames", [900, 1800])
+def test_long_sources_pass_because_only_the_server_caps_length(frames: int) -> None:
+    # No client-side length cap: the server's admission check alone refuses a
+    # source that is too long, so long clips pass the client untouched.
+    key = request(frames=frames, fps=30)
+    assert key["frames"] == frames
+    assert key["fps"] == 30
+
+
+def test_long_duration_only_requests_have_no_maximum() -> None:
+    assert request(frames=_OMIT, fps=30, duration=60)["frames"] == 1800
+    assert request(frames=_OMIT, fps=60, duration=120)["frames"] == 7200
+    assert request(frames=_OMIT, duration=15.1)["frames"] == 362
+
+
+def test_timing_error_states_no_length_limit() -> None:
+    with pytest.raises(ValueError) as caught:
+        request(frames=0)
+    assert not re.search(r"\d+ frames|seconds", str(caught.value))
 
 
 def test_explicit_frame_count_skips_duration_validation() -> None:

@@ -580,11 +580,8 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
 
 
 _VIDEO_UPSCALE_RESOLUTIONS = (1080, 1440)
-_VIDEO_UPSCALE_MAX_FRAMES = 362
-_VIDEO_UPSCALE_MAX_DURATION = _VIDEO_UPSCALE_MAX_FRAMES / 24
 _VIDEO_UPSCALE_TIMING_ERROR = (
-    "Omit the source timing, or supply the source video’s exact frame count "
-    "and frame rate (up to 362 frames and 15 seconds)."
+    "Omit the source timing, or supply the source video’s exact frame count and frame rate."
 )
 
 
@@ -597,6 +594,10 @@ def _validate_video_upscale_timing(params: dict[str, Any]) -> int | None:
     caller supplied or implied through ``duration``, else ``None``. Unlike
     JavaScript's ``Number()``, a string or boolean fps is refused rather than
     coerced.
+
+    These are sanity checks only. The client sets no maximum frame count or
+    clip length: the server's admission check is the one place that limit
+    lives, and it refuses a source that is too long with a clear error.
     """
 
     fps = params.get("fps")
@@ -611,12 +612,7 @@ def _validate_video_upscale_timing(params: dict[str, Any]) -> int | None:
         frames = math.floor(product + 0.5) if math.isfinite(product) else math.nan
     if frames is None:
         return None
-    if (
-        not _is_finite_number(frames)
-        or not float(frames).is_integer()
-        or not 1 <= frames <= _VIDEO_UPSCALE_MAX_FRAMES
-        or (fps is not None and frames / fps > _VIDEO_UPSCALE_MAX_DURATION + 0.001)
-    ):
+    if not _is_finite_number(frames) or not float(frames).is_integer() or frames < 1:
         raise ValueError(_VIDEO_UPSCALE_TIMING_ERROR)
     return int(frames)
 
@@ -1501,10 +1497,11 @@ def create_job_request_message(
         ):
             if is_upscale:
                 # fps is already validated; the shortest upscale is one frame.
+                # There is no maximum: the server's admission check owns the
+                # longest source it accepts and refuses a longer one itself.
                 duration = _validate_number(
                     params["duration"],
                     minimum=1 / params["fps"],
-                    maximum=_VIDEO_UPSCALE_MAX_DURATION,
                     property_name="Video duration",
                 )
             else:
