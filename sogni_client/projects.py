@@ -2430,6 +2430,9 @@ class Project(DataEntity):
         return data
 
 
+_IN_FLIGHT_LOOKUP_STATUSES = frozenset({"pending", "queued", "processing"})
+
+
 class ProjectsApi(EventEmitter):
     def __init__(self, client: ApiClient) -> None:
         super().__init__()
@@ -2709,8 +2712,28 @@ class ProjectsApi(EventEmitter):
         return content_type
 
     async def get(self, project_id: str) -> dict[str, Any]:
+        """Stored record of a finished project; raises a 404 while it is still
+        queued or rendering. Use :meth:`get_status` for a project of your own
+        that has not finished yet."""
         response = await self.client.rest.get(f"/v1/projects/{quote(project_id)}")
         return response["data"]["project"]
+
+    async def get_status(self, project_id: str) -> dict[str, Any]:
+        """Current state of one of this account's projects, including while it is
+        still queued or rendering (``GET /v2/projects/:id``).
+
+        Unlike :meth:`get`, which answers only once a project has finished, this
+        reads the owner-scoped live lookup, so it needs an authenticated client.
+        ``status`` is one of the normalized names ``pending``, ``queued``,
+        ``processing``, ``completed``, ``failed`` or ``canceled``, and
+        ``finished`` is true for the last three. A project owned by another
+        account, or one that does not exist, raises a 404 ``ApiError``; a 503
+        means the state could not be determined yet and the call can be retried.
+        """
+        response = await self.client.rest.get(f"/v2/projects/{quote(project_id, safe='')}")
+        return response["data"]["project"]
+
+    getStatus = get_status
 
     async def _list_active_project_ids(self) -> list[str] | None:
         try:
@@ -2805,7 +2828,10 @@ class ProjectsApi(EventEmitter):
         Each id resolves to one of ``{"state": "finished", "project": ...}``,
         ``{"state": "active"}``, ``{"state": "lost"}``, or
         ``{"state": "unknown", "error": ...}`` when a transport error prevented a
-        verdict (nothing is changed in that case).
+        verdict (nothing is changed in that case). Before an id is declared lost
+        the owner-scoped live lookup (:meth:`get_status`) is asked too: a pending,
+        queued or processing answer makes it ``active``, and a finished answer
+        whose record is not stored yet makes it ``unknown``.
         """
 
         max_attempts = max(1, attempts or int(self._recovery_tuning["missing_project_attempts"]))
@@ -2835,13 +2861,46 @@ class ProjectsApi(EventEmitter):
         if pending:
             # Last word goes to the socket: a project that reached the server
             # after the snapshot was taken is in flight, not lost. `None` means
-            # the list could not be fetched, so the REST verdict stands.
+            # the list could not be fetched.
             live = await self._list_active_project_ids()
+            # Before failing anything, ask the owner-scoped live lookup. It can
+            # only rescue a project: a positive in-flight answer means "active",
+            # and a finished answer whose full record has not reached the
+            # terminal REST store yet stays unverified for the next sync.
+            # Anything else, including an unauthenticated client or an older API
+            # without the lookup, keeps the "lost" verdict.
+            unlisted = [project_id for project_id in pending if not (live and project_id in live)]
+            answers = await asyncio.gather(
+                *(self._lookup_unlisted_project(project_id) for project_id in unlisted)
+            )
+            checks = dict(zip(unlisted, answers, strict=True))
             for project_id in pending:
-                result[project_id] = (
-                    {"state": "active"} if live and project_id in live else {"state": "lost"}
-                )
+                if live and project_id in live:
+                    result[project_id] = {"state": "active"}
+                else:
+                    result[project_id] = checks.get(project_id) or {"state": "lost"}
         return result
+
+    async def _lookup_unlisted_project(self, project_id: str) -> dict[str, Any] | None:
+        """Second opinion for a project neither the terminal REST record nor the
+        live socket list knows. Returns ``None`` when the lookup cannot vouch for it."""
+
+        try:
+            project = await self.get_status(project_id)
+        except Exception:
+            return None
+        if not isinstance(project, dict) or project.get("id") != project_id:
+            return None
+        if not project.get("finished") and project.get("status") in _IN_FLIGHT_LOOKUP_STATUSES:
+            return {"state": "active"}
+        if project.get("finished") is True:
+            return {
+                "state": "unknown",
+                "error": RuntimeError(
+                    "The project finished but its full record is not available yet"
+                ),
+            }
+        return None
 
     resolveMissing = resolve_missing
 

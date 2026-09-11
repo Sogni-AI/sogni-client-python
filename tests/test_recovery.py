@@ -258,6 +258,8 @@ async def test_missing_tracked_projects_resolve_to_finished_active_or_lost() -> 
 
     client.rest.responses.append(ApiError(404, {"message": "not found"}))
     client.socket.responses["/api/v1/artist/projects/active"] = {"projects": []}
+    # The owner-scoped live lookup does not know it either.
+    client.rest.responses.append(ApiError(404, {"message": "not found"}))
 
     errors: list[dict[str, Any]] = []
     api.on("project", lambda event: errors.append(event) if event["type"] == "error" else None)
@@ -281,6 +283,92 @@ async def test_missing_tracked_projects_resolve_to_finished_active_or_lost() -> 
     client.rest.responses.append(ApiError(500, {"message": "boom"}))
     unknown = await api.resolve_missing(["OTHER"])
     assert unknown["OTHER"]["state"] == "unknown"
+
+
+async def test_live_lookup_only_rescues_projects_the_socket_cannot_vouch_for() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api._recovery_tuning["missing_project_attempts"] = 1
+    api._recovery_tuning["missing_project_retry_seconds"] = 0
+    # The socket's live list is unavailable, so only the live lookup can help.
+    client.socket.responses["/api/v1/artist/projects/active"] = ApiError(503, {"message": "down"})
+    jobs = {"workerJobs": [], "completedWorkerJobs": []}
+    ids = ["QUEUED", "PROCESSING", "GONE", "ANON", "SETTLED", "MISMATCH"]
+    client.rest.responses.extend([ApiError(404, {"message": "not found"})] * len(ids))
+    client.rest.responses.extend(
+        [
+            {"data": {"project": {"id": "QUEUED", "status": "queued", "finished": False, **jobs}}},
+            {
+                "data": {
+                    "project": {
+                        "id": "PROCESSING",
+                        "status": "processing",
+                        "finished": False,
+                        **jobs,
+                    }
+                }
+            },
+            ApiError(404, {"message": "not found"}),
+            ApiError(401, {"message": "unauthorized"}),
+            {
+                "data": {
+                    "project": {"id": "SETTLED", "status": "completed", "finished": True, **jobs}
+                }
+            },
+            {
+                "data": {
+                    "project": {"id": "SOMEONE-ELSE", "status": "queued", "finished": False, **jobs}
+                }
+            },
+        ]
+    )
+
+    resolved = await api.resolve_missing(ids)
+
+    assert list(resolved) == ids, "results keep the caller's order"
+    assert resolved["QUEUED"] == {"state": "active"}
+    assert resolved["PROCESSING"] == {"state": "active"}
+    assert resolved["GONE"] == {"state": "lost"}
+    assert resolved["ANON"] == {"state": "lost"}
+    assert resolved["SETTLED"]["state"] == "unknown"
+    assert resolved["MISMATCH"] == {"state": "lost"}
+    lookups = [call["path"] for call in client.rest.calls if call["path"].startswith("/v2/")]
+    assert lookups == [f"/v2/projects/{project_id}" for project_id in ids]
+
+
+async def test_a_project_the_socket_lists_is_not_looked_up_again() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api._recovery_tuning["missing_project_attempts"] = 1
+    client.rest.responses.append(ApiError(404, {"message": "not found"}))
+    client.socket.responses["/api/v1/artist/projects/active"] = {"projects": [{"id": "LATE"}]}
+
+    assert await api.resolve_missing(["LATE"]) == {"LATE": {"state": "active"}}
+    assert [call["path"] for call in client.rest.calls] == ["/v1/projects/LATE"]
+
+
+async def test_get_status_reads_the_live_lookup_and_get_keeps_its_v1_path() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    snapshot = {
+        "id": "A/B",
+        "status": "queued",
+        "finished": False,
+        "workerJobs": [],
+        "completedWorkerJobs": [],
+    }
+    client.rest.responses.extend(
+        [{"data": {"project": snapshot}}, ApiError(404, {"message": "not found"})]
+    )
+
+    assert await api.get_status("A/B") == snapshot
+    assert api.getStatus == api.get_status
+    with pytest.raises(ApiError):
+        await api.get("A/B")
+    assert [call["path"] for call in client.rest.calls] == [
+        "/v2/projects/A%2FB",
+        "/v1/projects/A/B",
+    ]
 
 
 async def test_list_projects_elsewhere_excludes_this_app_and_llm_requests() -> None:
