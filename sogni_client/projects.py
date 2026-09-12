@@ -10,6 +10,7 @@ import logging
 import math
 import re
 import time
+import weakref
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
@@ -291,6 +292,12 @@ _ENHANCEMENT_DEFAULTS: dict[str, Any] = {
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _job_index(value: Any) -> int | None:
+    """A frame's ``jobIndex`` when it is a number, else ``None``."""
+
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _format_runtime_limit(seconds: float) -> str:
@@ -1777,6 +1784,9 @@ class Job(DataEntity):
         self._enhancement_project: Project | None = None
         self._enhancement_listener: Any = None
         self._runtime_timeout: asyncio.TimerHandle | None = None
+        # Identifies the budget this job is currently running; see
+        # `_runtime_timeout_elapsed`.
+        self._runtime_timeout_generation = 0
         self.on("updated", self._handle_updated)
         if self.status == "processing":
             self._start_runtime_timeout()
@@ -1952,6 +1962,18 @@ class Job(DataEntity):
         return self._data.get("workerName")
 
     workerName = worker_name
+
+    @property
+    def job_index(self) -> int | None:
+        """This render's position in its project.
+
+        Unlike ``id``, which each worker mints afresh, it stays the same when the
+        server moves the render to another worker.
+        """
+
+        return self._data.get("jobIndex")
+
+    jobIndex = job_index
 
     @property
     def eta(self) -> datetime | None:
@@ -2168,11 +2190,19 @@ class Job(DataEntity):
         if self._runtime_timeout is not None or self.finished:
             return
         limit = self._runtime_limit_seconds()
+        self._runtime_timeout_generation += 1
         self._runtime_timeout = asyncio.get_running_loop().call_later(
-            limit, self._runtime_timeout_elapsed, limit
+            limit, self._runtime_timeout_elapsed, limit, self._runtime_timeout_generation
         )
 
-    def _runtime_timeout_elapsed(self, limit: float) -> None:
+    def _runtime_timeout_elapsed(self, limit: float, generation: int) -> None:
+        # Only the budget this job is currently running may act. A job that the
+        # server moved to another worker keeps this same instance and is
+        # `processing` again under its new attempt, so status alone cannot tell
+        # the departed worker's budget from the live one -- and acting on the
+        # stale one cancels the whole project on the server, retry included.
+        if self._runtime_timeout is None or generation != self._runtime_timeout_generation:
+            return
         self._runtime_timeout = None
         if self.status == "processing" and not self._project.finished:
             self._project._handle_job_runtime_timeout(self, limit)
@@ -2594,6 +2624,11 @@ class ProjectsApi(EventEmitter):
         # When each resubmitted project was last sent (epoch seconds), for the
         # recently-created grace.
         self._resubmitted_at: dict[str, float] = {}
+        # Renders the server announced it moved to another worker (`jobRetry`),
+        # still waiting for that worker's first frame. Only consulted when a
+        # frame arrives with no `jobIndex` to match on; see
+        # `_find_reassigned_job`.
+        self._awaiting_reassignment: weakref.WeakSet[Job] = weakref.WeakSet()
         # Recovery timings. Overridable so regression tests can run the flow in
         # fractions of a second instead of seconds.
         self._recovery_tuning = {
@@ -2610,6 +2645,7 @@ class ProjectsApi(EventEmitter):
         socket.on("jobETA", self._handle_job_eta)
         socket.on("jobResult", self._handle_job_result)
         socket.on("jobError", self._handle_job_error)
+        socket.on("jobRetry", self._handle_job_retry)
         socket.on("authenticated", self._handle_socket_authenticated)
         # `connecting` is a recoverable drop (the client is reconnecting);
         # `disconnected` is terminal.
@@ -3929,6 +3965,15 @@ class ProjectsApi(EventEmitter):
         if not project:
             return
         if kind == "queued":
+            # The server only reports a project as queued while none of its
+            # renders is on a worker, so any runtime budget still running belongs
+            # to a render that was taken off its worker -- a disconnect reclaim or
+            # a personal-LoRA requeue, neither of which announces itself. Left
+            # running, that deadline would expire during the queue wait and cancel
+            # the project on the server before the render is ever picked back up.
+            for job in project.jobs:
+                if not job.finished:
+                    job._stop_runtime_timeout()
             project._update(
                 {
                     "status": "queued",
@@ -3945,7 +3990,9 @@ class ProjectsApi(EventEmitter):
         elif kind in {"initiatingModel", "jobStarted"}:
             if project.estimated_start_at is not None or project.queue_status is not None:
                 project._update({"estimatedStartAt": None, "queueStatus": None})
-            job = project.job(data.get("imgID", "")) or project._add_job(
+            job = self._reclaim_reassigned_job(
+                project, data.get("imgID", ""), data.get("jobIndex")
+            ) or project._add_job(
                 {
                     "id": data.get("imgID"),
                     "projectId": project.id,
@@ -3969,7 +4016,7 @@ class ProjectsApi(EventEmitter):
         if not project:
             return None, None
         job_id = data.get("imgID") or ""
-        job = project.job(job_id) or project._add_job(
+        job = self._reclaim_reassigned_job(project, job_id) or project._add_job(
             {
                 "id": job_id,
                 "projectId": project.id,
@@ -3979,6 +4026,127 @@ class ProjectsApi(EventEmitter):
             }
         )
         return project, job
+
+    def _reclaim_reassigned_job(
+        self, project: Project, job_id: str, job_index: Any = None
+    ) -> Job | None:
+        """The job a frame belongs to: tracked under its id, or a moved render's.
+
+        A render the server moved to another worker comes back under that
+        worker's new id. It already has a job -- the one its abandoned attempt was
+        tracked in -- so it reclaims that one instead of adding a second, which
+        would leave the project with more jobs than it requested and an orphan
+        whose runtime budget later cancels the project.
+        """
+
+        job = project.job(job_id)
+        if job is not None:
+            return job
+        reassigned = self._find_reassigned_job(project, job_index)
+        if reassigned is None:
+            return None
+        self._awaiting_reassignment.discard(reassigned)
+        self._reset_job_for_new_attempt(reassigned)
+        reassigned._update({"id": job_id})
+        return reassigned
+
+    def _handle_job_retry(self, data: Any) -> None:
+        """The server gave up on this render's worker and put the SAME render
+        back in the queue for another one, inside the same project.
+
+        Handled entirely inside the SDK's own state and never emitted as a job
+        event: surfaced as a job error it would fail a single-media project
+        outright, which is exactly the render the server-side retry exists to
+        save. The job goes back to waiting, and the next worker's first frame
+        reclaims it by ``jobIndex`` (see ``_find_reassigned_job``).
+        """
+
+        if not isinstance(data, dict) or not data.get("jobID"):
+            return
+        project = self._project(data["jobID"])
+        if project is None or project.finished:
+            return
+        job_index = _job_index(data.get("jobIndex"))
+        job = project.job(data["imgID"]) if data.get("imgID") else None
+        if job is None and job_index is not None:
+            job = next((item for item in project.jobs if item.job_index == job_index), None)
+        if job is None or job.finished:
+            return
+        self._awaiting_reassignment.add(job)
+        self._reset_job_for_new_attempt(job, status="pending", job_index=job_index)
+
+    def _find_reassigned_job(self, project: Project, job_index: Any = None) -> Job | None:
+        """The existing job a render that moved to another worker should come back to.
+
+        A reassigned render keeps its place in the project but not its identity:
+        the new worker mints a fresh ``imgID``, which is what the SDK reports as
+        the job id. The server moves renders on several paths -- a worker that
+        failed, one that disconnected and never reclaimed its render, a personal
+        LoRA that went away -- and only the failure path announces itself with
+        ``jobRetry``, so the match cannot rely on that frame alone.
+
+        ``jobIndex`` is the render's stable position in the project and rides
+        every ``initiating`` / ``started`` frame: an unfinished job already
+        holding that index IS this render under the id its previous worker gave
+        it. With no index on either side, the match falls back to a render
+        explicitly announced as waiting, and only when it is the only one, so a
+        frame can never take a sibling's job.
+        """
+
+        unfinished = [job for job in project.jobs if not job.finished]
+        if not unfinished:
+            return None
+        index = _job_index(job_index)
+        if index is not None:
+            by_index = next((job for job in unfinished if job.job_index == index), None)
+            if by_index is not None:
+                return by_index
+        waiting = [
+            job
+            for job in unfinished
+            if job in self._awaiting_reassignment and job.job_index is None
+        ]
+        return waiting[0] if len(waiting) == 1 else None
+
+    @staticmethod
+    def _reset_job_for_new_attempt(
+        job: Job, *, status: str | None = None, job_index: int | None = None
+    ) -> None:
+        """Put a job back to the start of a render.
+
+        Every number the abandoned worker reported described work that no longer
+        exists. ``step`` in particular only ever moves forward (progress frames
+        take a running maximum), so leaving it would pin the new attempt to the
+        old one's high-water mark.
+
+        The runtime budget is stopped as well. It is deliberately never reset by
+        progress -- the first processing transition is the hard start of ONE
+        worker job -- but a reassigned render is a different worker job. Left
+        running, the departed worker's deadline expires during the queue wait
+        and ``_handle_job_runtime_timeout`` cancels the whole project on the
+        server, retry included. The next processing transition arms a fresh
+        deadline.
+        """
+
+        job._stop_runtime_timeout()
+        delta: dict[str, Any] = {}
+        if status:
+            delta["status"] = status
+        if job_index is not None:
+            delta["jobIndex"] = job_index
+        delta.update(
+            {
+                "step": 0,
+                "workerName": None,
+                "previewUrl": None,
+                "externalProgress": None,
+                "eta": None,
+                "etaStartedAt": None,
+                "etaSeconds": None,
+                "etaRange": None,
+            }
+        )
+        job._update(delta)
 
     def _handle_job_progress(self, data: Any) -> None:
         if not isinstance(data, dict):
