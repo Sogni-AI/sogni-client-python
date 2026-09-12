@@ -88,7 +88,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_video",
       "sdkToolName": "generate_video",
-      "hostedSchemaSha256": "1fdd593856e0248d6ec6d2ecf43ec8b001b833e5381a60abae532d73be305550",
+      "hostedSchemaSha256": "9ed07118a80df989233324d37d7bb04fe6cc1e46bd1fe06a68dd9bb0819fee6e",
       "hostedRequired": [
         "prompt"
       ],
@@ -97,7 +97,6 @@
         "expandPrompt",
         "skipPromptProcessing",
         "duration",
-        "smartDuration",
         "ratio",
         "watermark",
         "referenceFileUrl",
@@ -111,6 +110,7 @@
         "width",
         "height",
         "targetResolution",
+        "outputScale",
         "numberOfVariations",
         "aspectRatio",
         "voicePersonaName",
@@ -138,7 +138,7 @@
       "executionMode": "direct",
       "hostedToolName": "animate_photo",
       "sdkToolName": "animate_photo",
-      "hostedSchemaSha256": "cda43cb1fc1df0028d39aaddf23b17f8e4319109763accf9e4b96b6c4b2bf1e5",
+      "hostedSchemaSha256": "2773da88ff05dcdaad59ee3d7d808468391b5b09f9910c51f81c8c94d648cd74",
       "hostedRequired": [
         "prompt"
       ],
@@ -150,10 +150,10 @@
         "negativePrompt",
         "generateAudio",
         "duration",
-        "smartDuration",
         "ratio",
         "watermark",
         "targetResolution",
+        "outputScale",
         "sourceImageIndex",
         "sourceImageIndices",
         "prompts",
@@ -188,7 +188,7 @@
       "executionMode": "direct",
       "hostedToolName": "sound_to_video",
       "sdkToolName": "sound_to_video",
-      "hostedSchemaSha256": "84ba24691e008514d044489eff88e9eb38f026b59271c1b4665d8ca0a237701e",
+      "hostedSchemaSha256": "66bb9fb390dee61b2dac27679e89fb3a18c6c5ab4b69510b387f14ba0615fa6b",
       "hostedRequired": [
         "prompt"
       ],
@@ -200,7 +200,6 @@
         "sourceImageIndex",
         "audioStart",
         "duration",
-        "smartDuration",
         "ratio",
         "watermark",
         "referenceFileUrl",
