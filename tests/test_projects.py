@@ -1390,6 +1390,120 @@ def test_minimax_h3_reference_video_durations_are_optional_preflight_hints() -> 
         )
 
 
+def test_minimax_h3_output_scale_is_a_2k_delivery_switch_sent_only_when_2() -> None:
+    ids = {
+        "minimax-h3-fl2va-fp8_t2v": (20, {}),
+        "minimax-h3-fl2va-fp8_i2v_balanced": (8, {"referenceImage": True}),
+        "minimax-h3-fl2va-fp8_flf2v_turbo": (
+            4,
+            {"referenceImage": True, "referenceImageEnd": True},
+        ),
+        "minimax-h3-fastvideo-int8_t2v_turbo": (4, {}),
+        "minimax-h3-ref2va-fp8_r2v_balanced": (8, {"referenceImage": True}),
+    }
+    for model_id, (steps, extra) in ids.items():
+        params: dict[str, Any] = {
+            "type": "video",
+            "modelId": model_id,
+            "positivePrompt": "integrated_multimodal_description: [Shot 1] A kite over a beach.",
+            "numberOfMedia": 1,
+            "duration": 6,
+            "width": 1344,
+            "height": 768,
+            "steps": steps,
+            **extra,
+        }
+        plain = create_job_request_message("h3-2k-plain", params, model_options("video"))
+        one = create_job_request_message(
+            "h3-2k-one", {**params, "outputScale": 1}, model_options("video")
+        )
+        # Omitted or 1 sends nothing, so the request is byte-identical.
+        assert "outputScale" not in plain["keyFrames"][0]
+        assert one["keyFrames"][0] == plain["keyFrames"][0]
+        two = create_job_request_message(
+            "h3-2k-two", {**params, "outputScale": 2}, model_options("video")
+        )["keyFrames"][0]
+        # 2K is a delivery switch: the requested canvas, frames and fps are unchanged.
+        assert two["outputScale"] == 2
+        assert (two["width"], two["height"], two["fps"]) == (1344, 768, 24)
+        assert two["frames"] == plain["keyFrames"][0]["frames"]
+        for bad in (0, 3, -2, 1.5, "2", True, float("nan")):
+            with pytest.raises(ApiError, match="MiniMax H3 outputScale must be 1 or 2"):
+                create_job_request_message(
+                    "h3-2k-bad", {**params, "outputScale": bad}, model_options("video")
+                )
+
+    # Other video models have no 2K stage: 2 is refused, 1 is harmless and sends nothing.
+    for model_id in (
+        "ltx25-22b-int8_t2v_distilled",
+        "wan_v2.2-14b-fp8_t2v_lightx2v",
+        "seedance-2-0",
+    ):
+        base: dict[str, Any] = {
+            "type": "video",
+            "modelId": model_id,
+            "positivePrompt": "a kite",
+            "numberOfMedia": 1,
+            "duration": 5,
+            "width": 1280,
+            "height": 720,
+        }
+        with pytest.raises(ApiError, match="outputScale is supported only by MiniMax H3 models"):
+            create_job_request_message(
+                "non-h3-2k", {**base, "outputScale": 2}, model_options("video")
+            )
+        one = create_job_request_message(
+            "non-h3-one", {**base, "outputScale": 1}, model_options("video")
+        )
+        assert "outputScale" not in one["keyFrames"][0]
+
+
+async def test_minimax_h3_2k_estimates_add_output_scale_only_when_requested() -> None:
+    quote = {
+        "quote": {
+            "project": {
+                "costInToken": "1",
+                "costInUSD": "2",
+                "costInSpark": "3",
+                "costInSogni": "4",
+            }
+        }
+    }
+
+    class QuoteSocket(FakeSocket):
+        async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+            self.get_calls.append((path, params))
+            return quote
+
+    client = FakeClient()
+    client.socket = QuoteSocket()
+    api = ProjectsApi(client)
+    base = {
+        "tokenType": "spark",
+        "model": "minimax-h3-fl2va-fp8_t2v",
+        "width": 1344,
+        "height": 768,
+        "duration": 6,
+        "fps": 24,
+        "steps": 20,
+        "numberOfMedia": 1,
+    }
+    await api.estimate_video_cost(base)
+    await api.estimate_video_cost({**base, "outputScale": 1})
+    await api.estimate_video_cost({**base, "output_scale": 2})
+    paths = [path for path, _query in client.socket.get_calls]
+    # 2K keeps the requested canvas in the path: it is a delivery switch, not a size.
+    assert (
+        paths
+        == ["/api/v1/job-video/estimate/spark/minimax-h3-fl2va-fp8_t2v/1344/768/141/24/20/1"] * 3
+    )
+    sent = [
+        {key: value for key, value in (query or {}).items() if value is not None}
+        for _path, query in client.socket.get_calls
+    ]
+    assert sent == [{}, {}, {"outputScale": 2}]
+
+
 def test_cost_estimates_carry_live_benchmark_seconds_only_when_the_server_has_samples() -> None:
     quote = {
         "quote": {

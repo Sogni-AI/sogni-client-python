@@ -657,6 +657,26 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
             raise _api_error(
                 "MiniMax H3 dimensions must use a 32px grid, stay at or below 1344px per axis, and fit within 1,032,192 pixels."
             )
+    scale = params.get("outputScale")
+    if scale is not None and (isinstance(scale, bool) or scale not in (1, 2)):
+        raise _api_error("MiniMax H3 outputScale must be 1 or 2 (2 delivers 2K output).")
+
+
+def _validate_output_scale(params: dict[str, Any]) -> None:
+    """``outputScale`` is MiniMax H3's 2K delivery switch.
+
+    Other video models have no such stage, so a request for 2K on them is
+    refused up front rather than silently ignored; ``1`` (the standard size) is
+    harmless anywhere.
+    """
+
+    scale = params.get("outputScale")
+    if scale is None or is_minimax_h3_model(params["modelId"]):
+        return
+    if isinstance(scale, bool) or scale != 1:
+        raise _api_error(
+            "outputScale is supported only by MiniMax H3 models (2 delivers 2K output)."
+        )
 
 
 _VIDEO_UPSCALE_RESOLUTIONS = (1080, 1440)
@@ -1513,6 +1533,7 @@ def create_job_request_message(
         if is_upscale:
             upscale_resolution, upscale_frames = _validate_video_upscale_params(params)
         _validate_h3_params(params)
+        _validate_output_scale(params)
         if params.get("referenceImage"):
             keyframe["hasReferenceImage"] = True
         for slot, _value in _video_context_slots(params):
@@ -1593,6 +1614,10 @@ def create_job_request_message(
             keyframe["fps"] = 30
         elif is_external_video_model(params["modelId"]) or is_minimax_h3_model(params["modelId"]):
             keyframe["fps"] = 24
+        # MiniMax H3 2K delivery. Sent only when requested, so every other request
+        # (and the worker payload the socket builds from it) stays byte-identical.
+        if params.get("outputScale") == 2 and not isinstance(params.get("outputScale"), bool):
+            keyframe["outputScale"] = 2
         # An explicit source frame count wins over duration for an upscale.
         if params.get("duration") is not None and not (
             is_upscale and params.get("frames") is not None
@@ -3757,6 +3782,14 @@ class ProjectsApi(EventEmitter):
                     and not isinstance(data.get("referenceVideoDurationSeconds"), bool)
                     and math.isfinite(data["referenceVideoDurationSeconds"])
                     and data["referenceVideoDurationSeconds"] >= 0
+                    else None
+                ),
+                # MiniMax H3 2K delivery carries a per-second surcharge the server
+                # prices only when told; omitted or 1 keeps the legacy request.
+                "outputScale": (
+                    2
+                    if data.get("outputScale") == 2
+                    and not isinstance(data.get("outputScale"), bool)
                     else None
                 ),
             },
