@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from .attribution import (
     build_sogni_attribution_headers,
@@ -48,6 +48,30 @@ READY_POLL_SECONDS = 0.1
 
 def _is_not_recoverable(code: int) -> bool:
     return 4000 <= code < 5000
+
+
+def _connection_error_diagnostics(error: BaseException | None) -> dict[str, int]:
+    """The only facts about a connection failure that are safe to log.
+
+    Connection errors can carry the upgrade request, its URL, and its
+    authentication headers (``api-key`` / ``Authorization``) in their message,
+    chained exceptions, or traceback. Keep only the bounded HTTP upgrade status
+    when the server rejected the handshake.
+    """
+
+    if not isinstance(error, InvalidStatus):
+        return {}
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 999:
+        return {"status": status}
+    return {}
+
+
+def _log_connection_error(error: BaseException | None) -> None:
+    # Never pass the exception, its message, or exc_info to the logger.
+    logging.getLogger("sogni_client").error(
+        "WebSocket connection error %s", _connection_error_diagnostics(error)
+    )
 
 
 class RestClient:
@@ -385,8 +409,8 @@ class WebSocketClient(EventEmitter):
             close_reason = (received.reason if received is not None else "") or ""
         except asyncio.CancelledError:
             return
-        except Exception:
-            logging.getLogger("sogni_client").exception("WebSocket receive loop failed")
+        except Exception as error:
+            _log_connection_error(error)
         finally:
             if socket is self._socket:
                 self._socket = None
@@ -679,10 +703,8 @@ class ApiClient(EventEmitter):
             await self.socket.connect()
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logging.getLogger("sogni_client").warning(
-                "WebSocket reconnect attempt failed", exc_info=True
-            )
+        except Exception as error:
+            _log_connection_error(error)
             self._schedule_reconnect()
 
     async def set_socket_event_subscriptions(self, update: dict[str, Any]) -> None:
