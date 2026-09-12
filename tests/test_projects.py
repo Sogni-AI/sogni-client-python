@@ -2103,42 +2103,31 @@ def test_world_generation_receipt_binds_its_stage_model_and_hashes() -> None:
         "lastFrameSha256": selection,
     }
 
-    with pytest.raises(ApiError, match='worldGenerationReceipt requires appSource "sogni-world".'):
-        create_job_request_message(
-            "world-wrong-app-source",
-            {
-                "type": "image",
-                "modelId": "krea2_identity_edit_sogni_v0_3_alpha",
-                "positivePrompt": "swap the sky",
-                "numberOfMedia": 1,
-                "worldGenerationReceipt": {
-                    "stage": "target_still",
-                    "sourceImageSha256": source,
-                    "selectionHash": selection,
-                },
+    # The serializer carries the receipt for any application and any model: the
+    # service, not the SDK, decides which requests are eligible (JS SDK 5.44.1+,
+    # scripts/check-generation-receipt-transport.cjs).
+    for app_source in (None, "receipt-transport-test"):
+        params: dict[str, Any] = {
+            "type": "image",
+            "modelId": "model-from-service-plan",
+            "positivePrompt": "A garden",
+            "numberOfMedia": 1,
+            "worldGenerationReceipt": {
+                "stage": "target_still",
+                "sourceImageSha256": source.upper(),
+                "selectionHash": selection.upper(),
             },
-            model_options("image"),
+        }
+        if app_source is not None:
+            params["appSource"] = app_source
+        receipt_request = create_job_request_message(
+            "receipt-transport", params, model_options("image")
         )
-    with pytest.raises(
-        ApiError,
-        match="The target_still receipt requires krea2_identity_edit_sogni_v0_3_alpha.",
-    ):
-        create_job_request_message(
-            "world-wrong-model",
-            {
-                "type": "image",
-                "modelId": "flux1-schnell-fp8",
-                "positivePrompt": "swap the sky",
-                "numberOfMedia": 1,
-                "appSource": "sogni-world",
-                "worldGenerationReceipt": {
-                    "stage": "target_still",
-                    "sourceImageSha256": source,
-                    "selectionHash": selection,
-                },
-            },
-            model_options("image"),
-        )
+        assert receipt_request["keyFrames"][0]["worldGenerationReceipt"] == {
+            "stage": "target_still",
+            "sourceImageSha256": source.lower(),
+            "selectionHash": selection.lower(),
+        }
     with pytest.raises(
         ApiError, match="worldGenerationReceipt.selectionHash must be a SHA-256 hex digest."
     ):

@@ -1046,8 +1046,6 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
 _SAM3_IMAGE_SEGMENT_WORKFLOW_ID = SAM3_IMAGE_SEGMENT_MODEL_ID
 _BIREFNET_BACKGROUND_REMOVAL_WORKFLOW_ID = BIREFNET_BACKGROUND_REMOVAL_MODEL_ID
 _PIXAL3D_WORKFLOW_ID = PIXAL3D_IMAGE_TO_3D_MODEL_ID
-_WORLD_TARGET_STILL_MODEL_ID = "krea2_identity_edit_sogni_v0_3_alpha"
-_WORLD_TRANSITION_MODEL_ID = "minimax-h3-fastvideo-int8_flf2v_turbo"
 _MAX_SAM3_POINTS = 32
 _MAX_SAM3_BOXES = 16
 _MAX_SAM3_TEXT_LENGTH = 240
@@ -1169,14 +1167,17 @@ def _job_provenance_from_result(data: dict[str, Any]) -> dict[str, Any] | None:
     return result or None
 
 
-def _normalize_world_generation_receipt(params: dict[str, Any]) -> dict[str, Any] | None:
-    """Bind a Sogni World job to the exact bytes it was rendered from."""
+def _normalize_world_generation_receipt(receipt: Any) -> dict[str, Any] | None:
+    """Bind a generation to the exact bytes it was rendered from.
 
-    receipt = params.get("worldGenerationReceipt")
+    Keeps the existing receipt wire shape. Applications select their generation
+    recipe and the service decides which requests are eligible for a receipt,
+    so there is no application allowlist or hard-coded recipe model here --
+    mirrors ``normalizeWorldGenerationReceipt`` in the JS SDK (5.44.1+).
+    """
+
     if receipt is None:
         return None
-    if params.get("appSource") != "sogni-world":
-        raise _api_error('worldGenerationReceipt requires appSource "sogni-world".')
 
     def _hash(value: Any, field: str) -> str:
         if not isinstance(value, str) or not _SHA256_HEX_PATTERN.match(value):
@@ -1185,16 +1186,12 @@ def _normalize_world_generation_receipt(params: dict[str, Any]) -> dict[str, Any
 
     stage = receipt.get("stage") if isinstance(receipt, dict) else None
     if stage == "target_still":
-        if params.get("modelId") != _WORLD_TARGET_STILL_MODEL_ID:
-            raise _api_error(f"The target_still receipt requires {_WORLD_TARGET_STILL_MODEL_ID}.")
         return {
             "stage": stage,
             "sourceImageSha256": _hash(receipt.get("sourceImageSha256"), "sourceImageSha256"),
             "selectionHash": _hash(receipt.get("selectionHash"), "selectionHash"),
         }
     if stage == "transition":
-        if params.get("modelId") != _WORLD_TRANSITION_MODEL_ID:
-            raise _api_error(f"The transition receipt requires {_WORLD_TRANSITION_MODEL_ID}.")
         return {
             "stage": stage,
             "firstFrameSha256": _hash(receipt.get("firstFrameSha256"), "firstFrameSha256"),
@@ -1388,7 +1385,9 @@ def create_job_request_message(
             f"Invalid model type. Model does not support {project_type} generation. Please use a different model."
         )
     template = _template()
-    world_generation_receipt = _normalize_world_generation_receipt(params)
+    world_generation_receipt = _normalize_world_generation_receipt(
+        params.get("worldGenerationReceipt")
+    )
     keyframe = dict(template["keyFrames"][0])
     keyframe.update(
         {
