@@ -177,6 +177,32 @@ rounded to even pixels), the source's `frames` and `fps`, `steps=1`, and
 `source_width`/`source_height`; the job itself is charged from the verified
 source.
 
+## MiniMax H3 2K output
+
+Every MiniMax H3 model id accepts `output_scale=2` for 2K delivery. The clip is
+generated on the requested canvas and delivered at exactly twice its width and
+height (1344×768 becomes 2688×1536; Ref2VA Turbo's 960×544 becomes 1920×1088)
+with the same frame count, 24 fps timing and audio, so keep `width`/`height` on
+the normal H3 grid. 2K adds 10 Spark ($0.05) per output second at 544/768p-class
+sizes or 6 Spark ($0.03) at 480p on top of the tier rate, needs Comfy worker
+1.0.212 or newer, and is refused by every other video model. Omit it, or pass
+`1`, for the standard size; nothing is sent in that case, so existing requests
+are unchanged. Pass `output_scale=2` to `estimate_video_cost()` as well so the
+quote includes the surcharge.
+
+```python
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id="minimax-h3-fastvideo-int8_t2v_turbo",
+    positive_prompt="integrated_multimodal_description: [Shot 1] ...",
+    duration=8,
+    width=1344,
+    height=768,
+    output_scale=2,  # delivered at 2688x1536
+)
+```
+
 ## GPT Image 2.5
 
 `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst` join `gpt-image-2`. All three
