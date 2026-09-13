@@ -1506,21 +1506,63 @@ def test_minimax_h3_two_stage_ids_are_fasth3_requests_delivered_at_twice_the_can
             )
 
 
-def test_minimax_h3_requests_never_carry_output_scale() -> None:
+_RETIRED_OUTPUT_SCALE = (
+    r"^outputScale is no longer supported\. For MiniMax H3 1080p or 2K output use the two-stage "
+    r"model ids minimax-h3-fastvideo-int8_t2v_turbo_2stage, "
+    r"minimax-h3-fastvideo-int8_i2v_turbo_2stage or minimax-h3-fastvideo-int8_flf2v_turbo_2stage\.$"
+)
+
+
+def test_minimax_h3_requests_refuse_the_retired_output_scale() -> None:
     covered = 0
     for steps, ids in _MINIMAX_H3_TIERS.items():
         for model_id in ids:
-            for changes in ({}, {"outputScale": 2}, {"output_scale": 1}):
-                message = create_job_request_message(
-                    "h3-no-scale", _h3_params(model_id, steps, **changes), model_options("video")
-                )
-                # The socket refuses the key outright, so no path may send it.
-                assert "outputScale" not in json.dumps(message, default=str)
+            plain = create_job_request_message(
+                "h3-plain", _h3_params(model_id, steps), model_options("video")
+            )
+            assert "outputScale" not in json.dumps(plain, default=str)
+            # Any value, in either key style, is refused with the socket's wording.
+            for key, value in (("outputScale", 2), ("outputScale", 1), ("output_scale", None)):
+                with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE) as raised:
+                    create_job_request_message(
+                        "h3-retired",
+                        _h3_params(model_id, steps, **{key: value}),
+                        model_options("video"),
+                    )
+                assert raised.value.status == 400
             covered += 1
     assert covered == 18
 
+    # The retired field is refused on every video model, not only on MiniMax H3.
+    with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):
+        create_job_request_message(
+            "ltx-retired",
+            {
+                "type": "video",
+                "modelId": "ltx25-22b-int8_t2v_distilled",
+                "positivePrompt": "a kite",
+                "numberOfMedia": 1,
+                "duration": 5,
+                "width": 1280,
+                "height": 720,
+                "outputScale": 1,
+            },
+            model_options("video"),
+        )
 
-async def test_minimax_h3_two_stage_estimates_use_the_model_id_and_never_output_scale() -> None:
+
+async def test_create_refuses_the_retired_output_scale_before_any_request() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("video"))  # type: ignore[method-assign]
+    with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):
+        await api.create(_h3_params("minimax-h3-fastvideo-int8_t2v_turbo", 4), output_scale=2)
+    api.get_model_options.assert_not_awaited()
+    assert client.socket.sent == []
+    assert client.socket.get_calls == []
+
+
+async def test_minimax_h3_two_stage_estimates_use_the_model_id_and_refuse_output_scale() -> None:
     quote = {
         "quote": {
             "project": {
@@ -1562,21 +1604,24 @@ async def test_minimax_h3_two_stage_estimates_use_the_model_id_and_never_output_
             "height": 384,
         }
     )
-    await api.estimate_video_cost(
-        {**base, "model": "minimax-h3-fastvideo-int8_t2v_turbo", "output_scale": 2}
-    )
     paths = [path for path, _query in client.socket.get_calls]
     assert paths == [
         "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_t2v_turbo_2stage/1344/768/141/24/4/1",
         "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_i2v_turbo_2stage/960/544/141/24/4/1",
         "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_flf2v_turbo_2stage/672/384/141/24/4/1",
-        "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_t2v_turbo/1344/768/141/24/4/1",
     ]
     sent = [
         {key: value for key, value in (query or {}).items() if value is not None}
         for _path, query in client.socket.get_calls
     ]
-    assert sent == [{}, {}, {}, {}]
+    assert sent == [{}, {}, {}]
+
+    # The retired outputScale is refused with the socket's wording before any request.
+    retired = {**base, "model": "minimax-h3-fastvideo-int8_t2v_turbo"}
+    for changes in ({"output_scale": 2}, {"outputScale": 1}):
+        with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):
+            await api.estimate_video_cost({**retired, **changes})
+    assert len(client.socket.get_calls) == 3
 
 
 def test_cost_estimates_carry_live_benchmark_seconds_only_when_the_server_has_samples() -> None:

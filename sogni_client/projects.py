@@ -312,6 +312,25 @@ def _api_error(message: str) -> ApiError:
     return ApiError(400, {"status": "error", "message": message, "errorCode": 0})
 
 
+RETIRED_OUTPUT_SCALE_MESSAGE = (
+    "outputScale is no longer supported. For MiniMax H3 1080p or 2K output use the two-stage "
+    "model ids minimax-h3-fastvideo-int8_t2v_turbo_2stage, "
+    "minimax-h3-fastvideo-int8_i2v_turbo_2stage or minimax-h3-fastvideo-int8_flf2v_turbo_2stage."
+)
+
+
+def _reject_retired_output_scale(params: dict[str, Any]) -> None:
+    """``outputScale`` is retired; MiniMax H3 1080p and 2K are the two-stage model ids.
+
+    The socket refuses any request or estimate that carries the key. Refuse it
+    here too, with the socket's wording and before any request, instead of
+    silently delivering the standard size.
+    """
+
+    if "outputScale" in params or "output_scale" in params:
+        raise _api_error(RETIRED_OUTPUT_SCALE_MESSAGE)
+
+
 def _validate_option(value: str | None, options: dict[str, Any], key: str) -> str | None:
     allowed = options.get(key, {}).get("allowed", [])
     if not value or not allowed:
@@ -1512,6 +1531,7 @@ def create_job_request_message(
             keyframe["gptImageOutputCompression"] = params["gptImageOutputCompression"]
 
     elif project_type == "video":
+        _reject_retired_output_scale(params)
         if not is_video_model(params["modelId"]):
             raise _api_error("Video generation is only supported for video models.")
         _validate_video_assets(params)
@@ -2737,6 +2757,8 @@ class ProjectsApi(EventEmitter):
         for required in ("type", "modelId", "positivePrompt", "numberOfMedia"):
             if required not in data:
                 raise ValueError(f"{required} is required")
+        if data.get("type") == "video":
+            _reject_retired_output_scale(data)
         # Segmentation is a one-source/one-mask utility workflow, SAM 3 and
         # BiRefNet alike. Normalize before Project construction so lifecycle
         # completion and result MIME use the same values as the serialized
@@ -3737,6 +3759,7 @@ class ProjectsApi(EventEmitter):
         self, params: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         data = normalize_params(params, **kwargs)
+        _reject_retired_output_scale(data)
         frames = data.get("frames") or calculate_video_frames(
             data["model"], data["duration"], data["fps"]
         )

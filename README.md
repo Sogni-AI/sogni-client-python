@@ -197,8 +197,9 @@ and pick the canvas for the delivery you want:
 
 Portrait keeps the aspect: 384×672 delivers 768×1344, 544×960 delivers
 1088×1920. Price it with `estimate_video_cost()` using the `_2stage` model id and
-that canvas. The server refuses the retired `outputScale` field on project requests
-and estimates. Hosted chat tools select these ids with
+that canvas. `projects.create()` and `estimate_video_cost()` raise `ApiError` before
+sending anything if the retired `output_scale`/`outputScale` is passed (the
+server refuses it too), naming the two-stage ids to use. Hosted chat tools select these ids with
 `minimax-h3-fasth3-turbo-2stage` (text or first frame),
 `minimax-h3-fasth3-t2v-turbo-2stage`, `minimax-h3-fasth3-i2v-turbo-2stage` and
 `minimax-h3-fasth3-flf2v-turbo-2stage`; on those selectors `targetResolution`
