@@ -59,6 +59,9 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-fastvideo-int8_t2v_turbo",
     "minimax-h3-fastvideo-int8_i2v_turbo",
     "minimax-h3-fastvideo-int8_flf2v_turbo",
+    "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
+    "minimax-h3-fastvideo-int8_i2v_turbo_2stage",
+    "minimax-h3-fastvideo-int8_flf2v_turbo_2stage",
     "minimax-h3-ref2va-fp8_r2v_turbo",
     "minimax-h3-fl2va-fp8_t2v_balanced",
     "minimax-h3-fl2va-fp8_i2v_balanced",
@@ -66,7 +69,8 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-ref2va-fp8_r2v_balanced",
 }
 _MINIMAX_H3_TURBO_PATTERN = re.compile(
-    r"^minimax-h3-(?:fl2va-fp8|fastvideo-int8)_(?:t2v|i2v|flf2v)_turbo$"
+    r"^minimax-h3-(?:fl2va-fp8_(?:t2v|i2v|flf2v)_turbo"
+    r"|fastvideo-int8_(?:t2v|i2v|flf2v)_turbo(?:_2stage)?)$"
 )
 _MINIMAX_H3_BALANCED_PATTERN = re.compile(r"^minimax-h3-fl2va-fp8_(?:t2v|i2v|flf2v)_balanced$")
 
@@ -166,7 +170,9 @@ def is_minimax_h3_turbo_model(model_id: str) -> bool:
     """One of the 4-step MiniMax H3 Turbo workflows.
 
     FL2VA and FastH3 both cover t2v/i2v/flf2v; Ref2VA uses its dedicated r2v
-    Turbo LoRA. FastH3 has no r2v mode.
+    Turbo LoRA. FastH3 has no r2v mode. The FastH3 Two-Stage ids
+    (``..._turbo_2stage``) share FastH3's 4-step sampling and request; they
+    deliver the clip at twice the canvas width and height.
     """
 
     return bool(_MINIMAX_H3_TURBO_PATTERN.match(model_id)) or (

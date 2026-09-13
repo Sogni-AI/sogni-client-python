@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from typing import Any
 from unittest.mock import ANY, AsyncMock
@@ -11,6 +12,15 @@ from sogni_client.errors import ApiError, ProjectError
 from sogni_client.events import EventEmitter
 from sogni_client.projects import Project, ProjectsApi, create_job_request_message
 from sogni_client.projects import _now as project_now
+from sogni_client.utils import (
+    calculate_video_frames,
+    get_video_workflow_type,
+    is_minimax_h3_balanced_model,
+    is_minimax_h3_model,
+    is_minimax_h3_reference_model,
+    is_minimax_h3_turbo_model,
+    is_video_model,
+)
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
 MP3 = b"ID3" + b"\0" * 16
@@ -1390,75 +1400,127 @@ def test_minimax_h3_reference_video_durations_are_optional_preflight_hints() -> 
         )
 
 
-def test_minimax_h3_output_scale_is_a_2k_delivery_switch_sent_only_when_2() -> None:
-    ids = {
-        "minimax-h3-fl2va-fp8_t2v": (20, {}),
-        "minimax-h3-fl2va-fp8_i2v_balanced": (8, {"referenceImage": True}),
-        "minimax-h3-fl2va-fp8_flf2v_turbo": (
-            4,
-            {"referenceImage": True, "referenceImageEnd": True},
-        ),
-        "minimax-h3-fastvideo-int8_t2v_turbo": (4, {}),
-        "minimax-h3-ref2va-fp8_r2v_balanced": (8, {"referenceImage": True}),
+_MINIMAX_H3_TWO_STAGE_IDS = {
+    "t2v": ("minimax-h3-fastvideo-int8_t2v_turbo_2stage", "minimax-h3-fastvideo-int8_t2v_turbo"),
+    "i2v": ("minimax-h3-fastvideo-int8_i2v_turbo_2stage", "minimax-h3-fastvideo-int8_i2v_turbo"),
+    "flf2v": (
+        "minimax-h3-fastvideo-int8_flf2v_turbo_2stage",
+        "minimax-h3-fastvideo-int8_flf2v_turbo",
+    ),
+}
+_MINIMAX_H3_TIERS = {
+    20: (
+        "minimax-h3-fl2va-fp8_t2v",
+        "minimax-h3-fl2va-fp8_i2v",
+        "minimax-h3-fl2va-fp8_flf2v",
+        "minimax-h3-ref2va-fp8_r2v",
+    ),
+    8: (
+        "minimax-h3-fl2va-fp8_t2v_balanced",
+        "minimax-h3-fl2va-fp8_i2v_balanced",
+        "minimax-h3-fl2va-fp8_flf2v_balanced",
+        "minimax-h3-ref2va-fp8_r2v_balanced",
+    ),
+    4: (
+        "minimax-h3-fl2va-fp8_t2v_turbo",
+        "minimax-h3-fl2va-fp8_i2v_turbo",
+        "minimax-h3-fl2va-fp8_flf2v_turbo",
+        "minimax-h3-ref2va-fp8_r2v_turbo",
+        *(ids for pair in _MINIMAX_H3_TWO_STAGE_IDS.values() for ids in pair),
+    ),
+}
+
+
+def _h3_params(model_id: str, steps: int, **changes: Any) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "type": "video",
+        "modelId": model_id,
+        "positivePrompt": "integrated_multimodal_description: [Shot 1] A kite over a beach.",
+        "numberOfMedia": 1,
+        "duration": 6,
+        "width": 1344,
+        "height": 768,
+        "steps": steps,
+        **changes,
     }
-    for model_id, (steps, extra) in ids.items():
-        params: dict[str, Any] = {
-            "type": "video",
-            "modelId": model_id,
-            "positivePrompt": "integrated_multimodal_description: [Shot 1] A kite over a beach.",
-            "numberOfMedia": 1,
-            "duration": 6,
-            "width": 1344,
-            "height": 768,
-            "steps": steps,
-            **extra,
-        }
-        plain = create_job_request_message("h3-2k-plain", params, model_options("video"))
-        one = create_job_request_message(
-            "h3-2k-one", {**params, "outputScale": 1}, model_options("video")
-        )
-        # Omitted or 1 sends nothing, so the request is byte-identical.
-        assert "outputScale" not in plain["keyFrames"][0]
-        assert one["keyFrames"][0] == plain["keyFrames"][0]
-        two = create_job_request_message(
-            "h3-2k-two", {**params, "outputScale": 2}, model_options("video")
-        )["keyFrames"][0]
-        # 2K is a delivery switch: the requested canvas, frames and fps are unchanged.
-        assert two["outputScale"] == 2
-        assert (two["width"], two["height"], two["fps"]) == (1344, 768, 24)
-        assert two["frames"] == plain["keyFrames"][0]["frames"]
-        for bad in (0, 3, -2, 1.5, "2", True, float("nan")):
-            with pytest.raises(ApiError, match="MiniMax H3 outputScale must be 1 or 2"):
-                create_job_request_message(
-                    "h3-2k-bad", {**params, "outputScale": bad}, model_options("video")
-                )
+    if any(workflow in model_id for workflow in ("_i2v", "_flf2v", "_r2v")):
+        params["referenceImage"] = True
+    if "_flf2v" in model_id:
+        params["referenceImageEnd"] = True
+    return params
 
-    # Other video models have no 2K stage: 2 is refused, 1 is harmless and sends nothing.
-    for model_id in (
-        "ltx25-22b-int8_t2v_distilled",
-        "wan_v2.2-14b-fp8_t2v_lightx2v",
-        "seedance-2-0",
-    ):
-        base: dict[str, Any] = {
-            "type": "video",
-            "modelId": model_id,
-            "positivePrompt": "a kite",
-            "numberOfMedia": 1,
-            "duration": 5,
-            "width": 1280,
-            "height": 720,
-        }
-        with pytest.raises(ApiError, match="outputScale is supported only by MiniMax H3 models"):
-            create_job_request_message(
-                "non-h3-2k", {**base, "outputScale": 2}, model_options("video")
+
+def test_minimax_h3_two_stage_ids_are_fasth3_requests_delivered_at_twice_the_canvas() -> None:
+    for workflow, (model_id, base_id) in _MINIMAX_H3_TWO_STAGE_IDS.items():
+        assert is_video_model(model_id)
+        assert is_minimax_h3_model(model_id)
+        assert is_minimax_h3_turbo_model(model_id)
+        assert not is_minimax_h3_balanced_model(model_id)
+        assert not is_minimax_h3_reference_model(model_id)
+        assert get_video_workflow_type(model_id) == workflow
+        for duration in (1, 5, 6, 10, 15.08, 30):
+            assert calculate_video_frames(model_id, duration, 24) == calculate_video_frames(
+                base_id, duration, 24
             )
-        one = create_job_request_message(
-            "non-h3-one", {**base, "outputScale": 1}, model_options("video")
-        )
-        assert "outputScale" not in one["keyFrames"][0]
+
+        # 2K sends the 768p canvas; 1080p and 720p send the chosen aspect at a 544 px
+        # or 384 px short edge. The clip is delivered at twice the canvas.
+        for width, height in (
+            (1344, 768),
+            (768, 1344),
+            (960, 544),
+            (544, 960),
+            (672, 384),
+            (384, 672),
+            (384, 384),
+        ):
+            sent = create_job_request_message(
+                "h3-2stage",
+                _h3_params(model_id, 4, width=width, height=height),
+                model_options("video"),
+            )["keyFrames"][0]
+            base = create_job_request_message(
+                "h3-fasth3",
+                _h3_params(base_id, 4, width=width, height=height),
+                model_options("video"),
+            )["keyFrames"][0]
+            # The request is the FastH3 request with only the model id changed.
+            assert sent["modelID"] == model_id
+            assert {**sent, "modelID": base_id} == base
+            assert (sent["width"], sent["height"], sent["steps"], sent["frames"]) == (
+                width,
+                height,
+                4,
+                141,
+            )
+        with pytest.raises(ApiError, match="MiniMax H3 Turbo steps are fixed at 4"):
+            create_job_request_message(
+                "h3-2stage-steps", _h3_params(model_id, 20), model_options("video")
+            )
+        # The delivered size is not a canvas.
+        with pytest.raises(ApiError, match="MiniMax H3 dimensions must use a 32px grid"):
+            create_job_request_message(
+                "h3-2stage-size",
+                _h3_params(model_id, 4, width=1920, height=1088),
+                model_options("video"),
+            )
 
 
-async def test_minimax_h3_2k_estimates_add_output_scale_only_when_requested() -> None:
+def test_minimax_h3_requests_never_carry_output_scale() -> None:
+    covered = 0
+    for steps, ids in _MINIMAX_H3_TIERS.items():
+        for model_id in ids:
+            for changes in ({}, {"outputScale": 2}, {"output_scale": 1}):
+                message = create_job_request_message(
+                    "h3-no-scale", _h3_params(model_id, steps, **changes), model_options("video")
+                )
+                # The socket refuses the key outright, so no path may send it.
+                assert "outputScale" not in json.dumps(message, default=str)
+            covered += 1
+    assert covered == 18
+
+
+async def test_minimax_h3_two_stage_estimates_use_the_model_id_and_never_output_scale() -> None:
     quote = {
         "quote": {
             "project": {
@@ -1480,28 +1542,41 @@ async def test_minimax_h3_2k_estimates_add_output_scale_only_when_requested() ->
     api = ProjectsApi(client)
     base = {
         "tokenType": "spark",
-        "model": "minimax-h3-fl2va-fp8_t2v",
+        "model": "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
         "width": 1344,
         "height": 768,
         "duration": 6,
         "fps": 24,
-        "steps": 20,
+        "steps": 4,
         "numberOfMedia": 1,
     }
     await api.estimate_video_cost(base)
-    await api.estimate_video_cost({**base, "outputScale": 1})
-    await api.estimate_video_cost({**base, "output_scale": 2})
-    paths = [path for path, _query in client.socket.get_calls]
-    # 2K keeps the requested canvas in the path: it is a delivery switch, not a size.
-    assert (
-        paths
-        == ["/api/v1/job-video/estimate/spark/minimax-h3-fl2va-fp8_t2v/1344/768/141/24/20/1"] * 3
+    await api.estimate_video_cost(
+        {**base, "model": "minimax-h3-fastvideo-int8_i2v_turbo_2stage", "width": 960, "height": 544}
     )
+    await api.estimate_video_cost(
+        {
+            **base,
+            "model": "minimax-h3-fastvideo-int8_flf2v_turbo_2stage",
+            "width": 672,
+            "height": 384,
+        }
+    )
+    await api.estimate_video_cost(
+        {**base, "model": "minimax-h3-fastvideo-int8_t2v_turbo", "output_scale": 2}
+    )
+    paths = [path for path, _query in client.socket.get_calls]
+    assert paths == [
+        "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_t2v_turbo_2stage/1344/768/141/24/4/1",
+        "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_i2v_turbo_2stage/960/544/141/24/4/1",
+        "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_flf2v_turbo_2stage/672/384/141/24/4/1",
+        "/api/v1/job-video/estimate/spark/minimax-h3-fastvideo-int8_t2v_turbo/1344/768/141/24/4/1",
+    ]
     sent = [
         {key: value for key, value in (query or {}).items() if value is not None}
         for _path, query in client.socket.get_calls
     ]
-    assert sent == [{}, {}, {"outputScale": 2}]
+    assert sent == [{}, {}, {}, {}]
 
 
 def test_cost_estimates_carry_live_benchmark_seconds_only_when_the_server_has_samples() -> None:
