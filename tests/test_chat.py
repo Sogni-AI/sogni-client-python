@@ -232,6 +232,16 @@ def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -
     assert i2v("minimax-h3-fasth3-turbo") == "minimax-h3-fastvideo-int8_i2v_turbo"
     assert i2v("minimax-h3-fasth3-flf2v-turbo") == "minimax-h3-fastvideo-int8_flf2v_turbo"
 
+    # FastH3 Two-Stage is the same request delivered at twice the canvas.
+    assert t2v("minimax-h3-fasth3-turbo-2stage") == "minimax-h3-fastvideo-int8_t2v_turbo_2stage"
+    assert t2v("minimax-h3-fasth3-t2v-turbo-2stage") == "minimax-h3-fastvideo-int8_t2v_turbo_2stage"
+    assert i2v("minimax-h3-fasth3-turbo-2stage") == "minimax-h3-fastvideo-int8_i2v_turbo_2stage"
+    assert i2v("minimax-h3-fasth3-i2v-turbo-2stage") == "minimax-h3-fastvideo-int8_i2v_turbo_2stage"
+    assert (
+        i2v("minimax-h3-fasth3-flf2v-turbo-2stage")
+        == "minimax-h3-fastvideo-int8_flf2v_turbo_2stage"
+    )
+
     # Balanced is the 8-step tier.
     assert t2v("minimax-h3-balanced") == "minimax-h3-fl2va-fp8_t2v_balanced"
     assert i2v("minimax-h3-balanced") == "minimax-h3-fl2va-fp8_i2v_balanced"
@@ -241,6 +251,34 @@ def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -
     # FastH3 has no r2v mode, and t2v-only aliases must not leak into the
     # image-conditioned table.
     assert i2v("minimax-h3-t2v-turbo") == "minimax-h3-t2v-turbo"
+    assert i2v("minimax-h3-fasth3-t2v-turbo-2stage") == "minimax-h3-fasth3-t2v-turbo-2stage"
+
+
+def test_hosted_two_stage_selectors_describe_the_delivered_canvas_classes() -> None:
+    definitions = {item["function"]["name"]: item for item in SogniTools.all}
+    for tool_name, selectors in (
+        (
+            "generate_video",
+            ("minimax-h3-fasth3-turbo-2stage", "minimax-h3-fasth3-t2v-turbo-2stage"),
+        ),
+        (
+            "animate_photo",
+            ("minimax-h3-fasth3-i2v-turbo-2stage", "minimax-h3-fasth3-flf2v-turbo-2stage"),
+        ),
+    ):
+        properties = definitions[tool_name]["function"]["parameters"]["properties"]
+        assert "outputScale" not in properties
+        video_model = properties["videoModel"]
+        for selector in selectors:
+            assert selector in video_model["enum"]
+            assert f'"{selector}"' in properties["loras"]["description"]
+        # targetResolution names the delivered class on the 544, 768 and 384 px canvases.
+        for delivery in (
+            "960x544 delivers 1920x1088",
+            "1344x768 delivers 2688x1536",
+            "672x384 delivers 1344x768",
+        ):
+            assert delivery in video_model["description"]
 
 
 def test_direct_hosted_tool_schemas_match_standalone_golden_fingerprints() -> None:

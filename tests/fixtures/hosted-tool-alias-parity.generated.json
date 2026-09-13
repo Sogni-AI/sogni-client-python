@@ -88,7 +88,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_video",
       "sdkToolName": "generate_video",
-      "hostedSchemaSha256": "9ed07118a80df989233324d37d7bb04fe6cc1e46bd1fe06a68dd9bb0819fee6e",
+      "hostedSchemaSha256": "306686b563063d0c39f02664b36123f03a99220a176d8523c5e4a3176b7947b1",
       "hostedRequired": [
         "prompt"
       ],
@@ -110,7 +110,6 @@
         "width",
         "height",
         "targetResolution",
-        "outputScale",
         "numberOfVariations",
         "aspectRatio",
         "voicePersonaName",
@@ -138,7 +137,7 @@
       "executionMode": "direct",
       "hostedToolName": "animate_photo",
       "sdkToolName": "animate_photo",
-      "hostedSchemaSha256": "2773da88ff05dcdaad59ee3d7d808468391b5b09f9910c51f81c8c94d648cd74",
+      "hostedSchemaSha256": "72b9cbea1e63910fea4ac1086185768ec25424ab3f6ccc60b032da8a6b9549aa",
       "hostedRequired": [
         "prompt"
       ],
@@ -153,7 +152,6 @@
         "ratio",
         "watermark",
         "targetResolution",
-        "outputScale",
         "sourceImageIndex",
         "sourceImageIndices",
         "prompts",
