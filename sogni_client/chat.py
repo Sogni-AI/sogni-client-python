@@ -444,7 +444,8 @@ class ChatToolsApi:
     }
     # Existing "minimax-h3-*-turbo" selectors stay on LightX2V Turbo; FastH3 is the
     # separate FastVideo VSA four-step engine and needs its own explicit aliases.
-    # FastH3 has no r2v mode.
+    # FastH3 Two-Stage ("-2stage") is the same request delivered at twice the
+    # canvas. FastH3 has no r2v mode.
     _VIDEO_SELECTORS = {
         "ltx25": "ltx25-22b-int8_t2v_distilled",
         "ltx23": "ltx23-22b-fp8_t2v_distilled",
@@ -459,6 +460,8 @@ class ChatToolsApi:
         "minimax-h3-t2v-turbo": "minimax-h3-fl2va-fp8_t2v_turbo",
         "minimax-h3-fasth3-turbo": "minimax-h3-fastvideo-int8_t2v_turbo",
         "minimax-h3-fasth3-t2v-turbo": "minimax-h3-fastvideo-int8_t2v_turbo",
+        "minimax-h3-fasth3-turbo-2stage": "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
+        "minimax-h3-fasth3-t2v-turbo-2stage": "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
         "minimax-h3-balanced": "minimax-h3-fl2va-fp8_t2v_balanced",
         "minimax-h3-t2v-balanced": "minimax-h3-fl2va-fp8_t2v_balanced",
         "minimax-h3-r2v": "minimax-h3-ref2va-fp8_r2v",
@@ -489,6 +492,9 @@ class ChatToolsApi:
         "minimax-h3-fasth3-turbo": "minimax-h3-fastvideo-int8_i2v_turbo",
         "minimax-h3-fasth3-i2v-turbo": "minimax-h3-fastvideo-int8_i2v_turbo",
         "minimax-h3-fasth3-flf2v-turbo": "minimax-h3-fastvideo-int8_flf2v_turbo",
+        "minimax-h3-fasth3-turbo-2stage": "minimax-h3-fastvideo-int8_i2v_turbo_2stage",
+        "minimax-h3-fasth3-i2v-turbo-2stage": "minimax-h3-fastvideo-int8_i2v_turbo_2stage",
+        "minimax-h3-fasth3-flf2v-turbo-2stage": "minimax-h3-fastvideo-int8_flf2v_turbo_2stage",
         "minimax-h3-balanced": "minimax-h3-fl2va-fp8_i2v_balanced",
         "minimax-h3-i2v-balanced": "minimax-h3-fl2va-fp8_i2v_balanced",
         "minimax-h3-flf2v-balanced": "minimax-h3-fl2va-fp8_flf2v_balanced",

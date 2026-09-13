@@ -312,6 +312,25 @@ def _api_error(message: str) -> ApiError:
     return ApiError(400, {"status": "error", "message": message, "errorCode": 0})
 
 
+RETIRED_OUTPUT_SCALE_MESSAGE = (
+    "outputScale is no longer supported. For MiniMax H3 1080p or 2K output use the two-stage "
+    "model ids minimax-h3-fastvideo-int8_t2v_turbo_2stage, "
+    "minimax-h3-fastvideo-int8_i2v_turbo_2stage or minimax-h3-fastvideo-int8_flf2v_turbo_2stage."
+)
+
+
+def _reject_retired_output_scale(params: dict[str, Any]) -> None:
+    """``outputScale`` is retired; MiniMax H3 1080p and 2K are the two-stage model ids.
+
+    The socket refuses any request or estimate that carries the key. Refuse it
+    here too, with the socket's wording and before any request, instead of
+    silently delivering the standard size.
+    """
+
+    if "outputScale" in params or "output_scale" in params:
+        raise _api_error(RETIRED_OUTPUT_SCALE_MESSAGE)
+
+
 def _validate_option(value: str | None, options: dict[str, Any], key: str) -> str | None:
     allowed = options.get(key, {}).get("allowed", [])
     if not value or not allowed:
@@ -664,26 +683,6 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
             raise _api_error(
                 "MiniMax H3 dimensions must use a 32px grid, stay at or below 1344px per axis, and fit within 1,032,192 pixels."
             )
-    scale = params.get("outputScale")
-    if scale is not None and (isinstance(scale, bool) or scale not in (1, 2)):
-        raise _api_error("MiniMax H3 outputScale must be 1 or 2 (2 delivers 2K output).")
-
-
-def _validate_output_scale(params: dict[str, Any]) -> None:
-    """``outputScale`` is MiniMax H3's 2K delivery switch.
-
-    Other video models have no such stage, so a request for 2K on them is
-    refused up front rather than silently ignored; ``1`` (the standard size) is
-    harmless anywhere.
-    """
-
-    scale = params.get("outputScale")
-    if scale is None or is_minimax_h3_model(params["modelId"]):
-        return
-    if isinstance(scale, bool) or scale != 1:
-        raise _api_error(
-            "outputScale is supported only by MiniMax H3 models (2 delivers 2K output)."
-        )
 
 
 _VIDEO_UPSCALE_RESOLUTIONS = (1080, 1440)
@@ -1532,6 +1531,7 @@ def create_job_request_message(
             keyframe["gptImageOutputCompression"] = params["gptImageOutputCompression"]
 
     elif project_type == "video":
+        _reject_retired_output_scale(params)
         if not is_video_model(params["modelId"]):
             raise _api_error("Video generation is only supported for video models.")
         _validate_video_assets(params)
@@ -1539,7 +1539,6 @@ def create_job_request_message(
         if is_upscale:
             upscale_resolution, upscale_frames = _validate_video_upscale_params(params)
         _validate_h3_params(params)
-        _validate_output_scale(params)
         if params.get("referenceImage"):
             keyframe["hasReferenceImage"] = True
         for slot, _value in _video_context_slots(params):
@@ -1620,10 +1619,6 @@ def create_job_request_message(
             keyframe["fps"] = 30
         elif is_external_video_model(params["modelId"]) or is_minimax_h3_model(params["modelId"]):
             keyframe["fps"] = 24
-        # MiniMax H3 2K delivery. Sent only when requested, so every other request
-        # (and the worker payload the socket builds from it) stays byte-identical.
-        if params.get("outputScale") == 2 and not isinstance(params.get("outputScale"), bool):
-            keyframe["outputScale"] = 2
         # An explicit source frame count wins over duration for an upscale.
         if params.get("duration") is not None and not (
             is_upscale and params.get("frames") is not None
@@ -2256,6 +2251,17 @@ class Project(DataEntity):
         self.on("updated", self._handle_updated)
         self._arm_timeout()
 
+    def _dispose(self) -> None:
+        """Stop local watchdogs for a project that was never submitted."""
+        if self._timeout_handle is not None:
+            self._timeout_handle.cancel()
+            self._timeout_handle = None
+        for job in self._jobs:
+            job._stop_runtime_timeout()
+        self.remove_all_listeners()
+        if not self._completion.done():
+            self._completion.cancel()
+
     @property
     def id(self) -> str:
         return self._data["id"]
@@ -2762,6 +2768,8 @@ class ProjectsApi(EventEmitter):
         for required in ("type", "modelId", "positivePrompt", "numberOfMedia"):
             if required not in data:
                 raise ValueError(f"{required} is required")
+        if data.get("type") == "video":
+            _reject_retired_output_scale(data)
         # Segmentation is a one-source/one-mask utility workflow, SAM 3 and
         # BiRefNet alike. Normalize before Project construction so lifecycle
         # completion and result MIME use the same values as the serialized
@@ -2790,19 +2798,25 @@ class ProjectsApi(EventEmitter):
                 "gptImageMask": base64.b64decode(match.group(1)),
             }
         project = Project(data, self)
-        options = await self.get_model_options(data["modelId"])
-        request_params = dict(data)
-        request_params["appSource"] = data.get("appSource") or self.client.app_source
-        resolver = getattr(self.client, "resolve_workload_attribution", None)
-        request_params["attribution"] = (
-            resolver(data.get("attribution"), project.id) if callable(resolver) else None
-        )
-        request = create_job_request_message(project.id, request_params, options)
-        await self._process_assets(project, data, request)
-        await self.client.socket.send("jobRequest", request)
-        self._unadmitted_requests[project.id] = request
-        self._projects.append(project)
-        return project
+        try:
+            options = await self.get_model_options(data["modelId"])
+            request_params = dict(data)
+            request_params["appSource"] = data.get("appSource") or self.client.app_source
+            resolver = getattr(self.client, "resolve_workload_attribution", None)
+            request_params["attribution"] = (
+                resolver(data.get("attribution"), project.id) if callable(resolver) else None
+            )
+            request = create_job_request_message(project.id, request_params, options)
+            await self._process_assets(project, data, request)
+            # A refusal can arrive as soon as send yields to the transport.
+            self._unadmitted_requests[project.id] = request
+            await self.client.socket.send("jobRequest", request)
+            self._projects.append(project)
+            return project
+        except BaseException:
+            self._unadmitted_requests.pop(project.id, None)
+            project._dispose()
+            raise
 
     async def _process_assets(
         self, project: Project, data: dict[str, Any], request: dict[str, Any]
@@ -3762,6 +3776,7 @@ class ProjectsApi(EventEmitter):
         self, params: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         data = normalize_params(params, **kwargs)
+        _reject_retired_output_scale(data)
         frames = data.get("frames") or calculate_video_frames(
             data["model"], data["duration"], data["fps"]
         )
@@ -3817,14 +3832,6 @@ class ProjectsApi(EventEmitter):
                     and not isinstance(data.get("referenceVideoDurationSeconds"), bool)
                     and math.isfinite(data["referenceVideoDurationSeconds"])
                     and data["referenceVideoDurationSeconds"] >= 0
-                    else None
-                ),
-                # MiniMax H3 2K delivery carries a per-second surcharge the server
-                # prices only when told; omitted or 1 keeps the legacy request.
-                "outputScale": (
-                    2
-                    if data.get("outputScale") == 2
-                    and not isinstance(data.get("outputScale"), bool)
                     else None
                 ),
             },

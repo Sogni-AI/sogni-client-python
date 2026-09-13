@@ -177,29 +177,46 @@ rounded to even pixels), the source's `frames` and `fps`, `steps=1`, and
 `source_width`/`source_height`; the job itself is charged from the verified
 source.
 
-## MiniMax H3 2K output
+## MiniMax H3 two-stage output (720p, 1080p and 2K)
 
-Every MiniMax H3 model id accepts `output_scale=2` for 2K delivery. The clip is
-generated on the requested canvas and delivered at exactly twice its width and
-height (1344×768 becomes 2688×1536; Ref2VA Turbo's 960×544 becomes 1920×1088)
-with the same frame count, 24 fps timing and audio, so keep `width`/`height` on
-the normal H3 grid. 2K adds 10 Spark ($0.05) per output second at 544/768p-class
-sizes or 6 Spark ($0.03) at 480p on top of the tier rate, needs Comfy worker
-1.0.212 or newer, and is refused by every other video model. Omit it, or pass
-`1`, for the standard size; nothing is sent in that case, so existing requests
-are unchanged. Pass `output_scale=2` to `estimate_video_cost()` as well so the
-quote includes the surcharge.
+720p, 1080p and 2K MiniMax H3 two-stage output are the FastH3 Two-Stage model
+ids, not a request option: `minimax-h3-fastvideo-int8_t2v_turbo_2stage`,
+`minimax-h3-fastvideo-int8_i2v_turbo_2stage` and
+`minimax-h3-fastvideo-int8_flf2v_turbo_2stage`. Each takes exactly the request of
+its FastH3 Turbo id (canvas, frames, 4 steps, Euler/simple, inputs, LoRAs).
+FastH3 renders the canvas, then the worker enlarges it 2× and refines it, so the
+clip is delivered at exactly twice the canvas width and height with the same
+frame count, 24 fps timing and audio. Keep `width`/`height` on the normal H3 grid
+and pick the canvas for the delivery you want:
+
+| Choice | Canvas to send | Delivered |
+| --- | --- | --- |
+| 720p | chosen aspect at a 384 px short edge (1344×768 → 672×384) | 1344×768 |
+| 1080p | chosen aspect at a 544 px short edge (1344×768 → 960×544) | 1920×1088 |
+| 2K | the 768p canvas (1344×768) | 2688×1536 |
+
+Portrait keeps the aspect: 384×672 delivers 768×1344, 544×960 delivers
+1088×1920. Price it with `estimate_video_cost()` using the `_2stage` model id and
+that canvas. `projects.create()` and `estimate_video_cost()` raise `ApiError` before
+sending anything if the retired `output_scale`/`outputScale` is passed (the
+server refuses it too), naming the two-stage ids to use. Hosted chat tools select these ids with
+`minimax-h3-fasth3-turbo-2stage` (text or first frame),
+`minimax-h3-fasth3-t2v-turbo-2stage`, `minimax-h3-fasth3-i2v-turbo-2stage` and
+`minimax-h3-fasth3-flf2v-turbo-2stage`; on those selectors `targetResolution`
+names the delivered class (`720` renders the 384 px canvas, `1080` the 544 px
+canvas, `1440` or omitted the 768p canvas for 2K).
 
 ```python
 project = await sogni.projects.create(
     type="video",
     network="fast",
-    model_id="minimax-h3-fastvideo-int8_t2v_turbo",
+    model_id="minimax-h3-fastvideo-int8_t2v_turbo_2stage",
+    number_of_media=1,
+    steps=4,
     positive_prompt="integrated_multimodal_description: [Shot 1] ...",
     duration=8,
     width=1344,
-    height=768,
-    output_scale=2,  # delivered at 2688x1536
+    height=768,  # delivered at 2688x1536; send 960x544 for 1920x1088, 672x384 for 1344x768
 )
 ```
 
@@ -458,7 +475,7 @@ schemas.
 
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
-FastH3 `fastvideo-int8` Turbo engine), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
+FastH3 `fastvideo-int8` Turbo engine with its Two-Stage 720p/1080p/2K ids), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
 segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,
