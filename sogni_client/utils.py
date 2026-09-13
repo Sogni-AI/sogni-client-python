@@ -65,6 +65,12 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-fastvideo-int8_t2v_turbo_2stage_720p",
     "minimax-h3-fastvideo-int8_i2v_turbo_2stage_720p",
     "minimax-h3-fastvideo-int8_flf2v_turbo_2stage_720p",
+    "minimax-h3-fastvideo-int8_ia2v_turbo",
+    "minimax-h3-fastvideo-int8_flfa2v_turbo",
+    "minimax-h3-fastvideo-int8_a2v_turbo",
+    "minimax-h3-fastvideo-int8_ia2v_turbo_2stage",
+    "minimax-h3-fastvideo-int8_flfa2v_turbo_2stage",
+    "minimax-h3-fastvideo-int8_a2v_turbo_2stage",
     "minimax-h3-ref2va-fp8_r2v_turbo",
     "minimax-h3-fl2va-fp8_t2v_balanced",
     "minimax-h3-fl2va-fp8_i2v_balanced",
@@ -73,9 +79,17 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
 }
 _MINIMAX_H3_TURBO_PATTERN = re.compile(
     r"^minimax-h3-(?:fl2va-fp8_(?:t2v|i2v|flf2v)_turbo"
-    r"|fastvideo-int8_(?:t2v|i2v|flf2v)_turbo(?:_2stage(?:_720p)?)?)$"
+    r"|fastvideo-int8_(?:t2v|i2v|flf2v)_turbo(?:_2stage(?:_720p)?)?"
+    r"|fastvideo-int8_(?:ia2v|flfa2v|a2v)_turbo(?:_2stage)?)$"
 )
 _MINIMAX_H3_BALANCED_PATTERN = re.compile(r"^minimax-h3-fl2va-fp8_(?:t2v|i2v|flf2v)_balanced$")
+_MINIMAX_H3_AUDIO_GUIDE_PATTERN = re.compile(
+    r"^minimax-h3-fastvideo-int8_(?:ia2v|flfa2v|a2v)_turbo(?:_2stage)?$"
+)
+# MiniMax H3 FastH3 audio guide base ids (each also has a ``_2stage`` id).
+MINIMAX_H3_FASTH3_IA2V_MODEL_ID = "minimax-h3-fastvideo-int8_ia2v_turbo"
+MINIMAX_H3_FASTH3_FLFA2V_MODEL_ID = "minimax-h3-fastvideo-int8_flfa2v_turbo"
+MINIMAX_H3_FASTH3_A2V_MODEL_ID = "minimax-h3-fastvideo-int8_a2v_turbo"
 
 LTX2_FRAME_STEP = 8
 MINIMAX_H3_FPS = 24
@@ -172,8 +186,9 @@ def is_minimax_h3_model(model_id: str) -> bool:
 def is_minimax_h3_turbo_model(model_id: str) -> bool:
     """One of the 4-step MiniMax H3 Turbo workflows.
 
-    FL2VA and FastH3 both cover t2v/i2v/flf2v; Ref2VA uses its dedicated r2v
-    Turbo LoRA. FastH3 has no r2v mode. The FastH3 Two-Stage ids
+    FL2VA and FastH3 both cover t2v/i2v/flf2v, and FastH3 also covers the
+    ia2v/flfa2v/a2v audio guide; Ref2VA uses its dedicated r2v Turbo LoRA.
+    FastH3 has no r2v mode. The FastH3 Two-Stage ids
     (``..._turbo_2stage``) share FastH3's 4-step sampling and request; they
     deliver the clip at twice the canvas width and height. The FastH3 Two-Stage
     720p ids (``..._turbo_2stage_720p``) are the half-size 384 px canvas render of
@@ -185,6 +200,20 @@ def is_minimax_h3_turbo_model(model_id: str) -> bool:
     return bool(_MINIMAX_H3_TURBO_PATTERN.match(model_id)) or (
         model_id == "minimax-h3-ref2va-fp8_r2v_turbo"
     )
+
+
+def is_minimax_h3_audio_guide_model(model_id: str) -> bool:
+    """A MiniMax H3 FastH3 audio-guide workflow, standard or two-stage.
+
+    ``ia2v`` takes ``referenceImage`` + ``referenceAudio``, ``flfa2v`` takes
+    ``referenceImage`` + ``referenceImageEnd`` + ``referenceAudio``, and ``a2v``
+    takes ``referenceAudio`` only. The uploaded audio drives the video from frame
+    0 and is trimmed to the video length (``frames / 24`` seconds from the
+    optional ``audioStart``); the output always carries it, so
+    ``generateAudio=False`` and ``audioDuration`` are refused, as are LoRAs.
+    """
+
+    return bool(_MINIMAX_H3_AUDIO_GUIDE_PATTERN.match(model_id))
 
 
 def is_minimax_h3_balanced_model(model_id: str) -> bool:
@@ -329,6 +358,31 @@ def calculate_video_frames(
     return frames
 
 
+def get_minimax_h3_frames_for_audio_duration(audio_duration_seconds: float) -> int:
+    """Smallest valid MiniMax H3 frame count that covers an audio clip.
+
+    Returns the first ``124 + n*17`` value at or above ``seconds * 24``, clamped
+    to 124-362, to size a FastH3 audio-guide request to its uploaded audio.
+    Mirrors the TypeScript ``getMinimaxH3FramesForAudioDuration``.
+    """
+
+    if (
+        isinstance(audio_duration_seconds, bool)
+        or not isinstance(audio_duration_seconds, (int, float))
+        or not math.isfinite(audio_duration_seconds)
+        or audio_duration_seconds <= 0
+    ):
+        raise ValueError("Audio duration must be a finite number of seconds greater than 0.")
+    # The epsilon keeps exact grid durations (e.g. 141/24 s) from rounding up a step.
+    needed_frames = math.ceil(audio_duration_seconds * MINIMAX_H3_FPS - 1e-6)
+    steps = max(0, math.ceil((needed_frames - MINIMAX_H3_BASE_FRAMES) / MINIMAX_H3_FRAME_STEP))
+    return min(MINIMAX_H3_MAX_FRAMES, MINIMAX_H3_BASE_FRAMES + steps * MINIMAX_H3_FRAME_STEP)
+
+
+getMinimaxH3FramesForAudioDuration = get_minimax_h3_frames_for_audio_duration
+isMinimaxH3AudioGuideModel = is_minimax_h3_audio_guide_model
+
+
 def get_video_workflow_type(model_id: str) -> str | None:
     if is_video_upscale_model(model_id):
         return "upscale"
@@ -340,7 +394,9 @@ def get_video_workflow_type(model_id: str) -> str | None:
                 return kind
         return None
     if is_minimax_h3_model(model_id):
-        for kind in ("r2v", "flf2v", "i2v", "t2v"):
+        # ``_flfa2v`` contains neither ``_flf2v`` nor ``_ia2v``, and ``_ia2v``
+        # does not contain ``_a2v``, so each audio-guide suffix is its own test.
+        for kind in ("r2v", "flfa2v", "ia2v", "a2v", "flf2v", "i2v", "t2v"):
             if f"_{kind}" in model_id:
                 return kind
         return None

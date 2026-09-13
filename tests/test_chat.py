@@ -259,6 +259,23 @@ def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -
     assert i2v("minimax-h3-fasth3-t2v-turbo-2stage") == "minimax-h3-fasth3-t2v-turbo-2stage"
 
 
+def test_minimax_h3_audio_guide_selectors_route_only_on_sound_to_video() -> None:
+    for workflow in ("ia2v", "flfa2v", "a2v"):
+        for suffix, id_suffix in (("", ""), ("-2stage", "_2stage")):
+            selector = f"minimax-h3-fasth3-{workflow}-turbo{suffix}"
+            model_id = f"minimax-h3-fastvideo-int8_{workflow}_turbo{id_suffix}"
+            assert (
+                ChatToolsApi._resolve_model("sound_to_video", {"videoModel": selector}) == model_id
+            )
+            # The image tools cannot supply the required referenceAudio.
+            for tool_name, args in (
+                ("generate_video", {"videoModel": selector}),
+                ("generate_video", {"videoModel": selector, "referenceImageIndices": [0]}),
+                ("video_to_video", {"videoModel": selector}),
+            ):
+                assert ChatToolsApi._resolve_model(tool_name, args) == selector
+
+
 def test_hosted_two_stage_selectors_describe_the_delivered_canvas_classes() -> None:
     definitions = {item["function"]["name"]: item for item in SogniTools.all}
     for tool_name, selectors in (

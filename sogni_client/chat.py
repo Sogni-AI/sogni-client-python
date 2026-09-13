@@ -519,6 +519,14 @@ class ChatToolsApi:
         "ltx25-a2v": "ltx25-22b-int8_a2v_distilled",
         "ltx23-ia2v": "ltx23-22b-fp8_ia2v_distilled",
         "ltx23-a2v": "ltx23-22b-fp8_a2v_distilled",
+        # MiniMax H3 FastH3 audio guide: audio-bearing only, so these live here
+        # rather than with the image selectors. "-2stage" delivers twice the canvas.
+        "minimax-h3-fasth3-ia2v-turbo": "minimax-h3-fastvideo-int8_ia2v_turbo",
+        "minimax-h3-fasth3-flfa2v-turbo": "minimax-h3-fastvideo-int8_flfa2v_turbo",
+        "minimax-h3-fasth3-a2v-turbo": "minimax-h3-fastvideo-int8_a2v_turbo",
+        "minimax-h3-fasth3-ia2v-turbo-2stage": "minimax-h3-fastvideo-int8_ia2v_turbo_2stage",
+        "minimax-h3-fasth3-flfa2v-turbo-2stage": "minimax-h3-fastvideo-int8_flfa2v_turbo_2stage",
+        "minimax-h3-fasth3-a2v-turbo-2stage": "minimax-h3-fastvideo-int8_a2v_turbo_2stage",
         "wan3": "wan3.0-video",
     }
     _V2V_SELECTORS = {

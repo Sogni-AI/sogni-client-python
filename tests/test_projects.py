@@ -8,9 +8,15 @@ from unittest.mock import ANY, AsyncMock
 
 import pytest
 
+import sogni_client
 from sogni_client.errors import ApiError, ProjectError
 from sogni_client.events import EventEmitter
-from sogni_client.projects import Project, ProjectsApi, create_job_request_message
+from sogni_client.projects import (
+    VIDEO_WORKFLOW_ASSETS,
+    Project,
+    ProjectsApi,
+    create_job_request_message,
+)
 from sogni_client.projects import _now as project_now
 from sogni_client.utils import (
     calculate_video_frames,
@@ -1776,6 +1782,178 @@ async def test_create_refuses_the_retired_output_scale_before_any_request() -> N
     api.get_model_options.assert_not_awaited()
     assert client.socket.sent == []
     assert client.socket.get_calls == []
+
+
+_MINIMAX_H3_AUDIO_GUIDE_MODES = {
+    "ia2v": ("minimax-h3-fastvideo-int8_ia2v_turbo", ("referenceImage", "referenceAudio")),
+    "flfa2v": (
+        "minimax-h3-fastvideo-int8_flfa2v_turbo",
+        ("referenceImage", "referenceImageEnd", "referenceAudio"),
+    ),
+    "a2v": ("minimax-h3-fastvideo-int8_a2v_turbo", ("referenceAudio",)),
+}
+_MINIMAX_H3_AUDIO_UPLOADS = {"referenceImage": PNG, "referenceImageEnd": PNG, "referenceAudio": MP3}
+_MINIMAX_H3_AUDIO_FLAGS = {
+    "referenceImage": "hasReferenceImage",
+    "referenceImageEnd": "hasReferenceImageEnd",
+    "referenceAudio": "hasReferenceAudio",
+}
+
+
+def _h3_audio_request(model_id: str, uploads: tuple[str, ...], **changes: Any) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "type": "video",
+        "modelId": model_id,
+        "positivePrompt": "The singer performs the uploaded song under warm stage light.",
+        "numberOfMedia": 1,
+        "frames": 243,
+        "width": 1344,
+        "height": 768,
+        "steps": 4,
+        "guidance": 1,
+        **{field: _MINIMAX_H3_AUDIO_UPLOADS[field] for field in uploads},
+    }
+    for key, value in changes.items():
+        if value is None:
+            params.pop(key, None)
+        else:
+            params[key] = value
+    return create_job_request_message("h3-audio", params, model_options("video"))["keyFrames"][0]
+
+
+def test_minimax_h3_audio_guide_ids_take_exactly_their_uploads() -> None:
+    assert sogni_client.MINIMAX_H3_FASTH3_IA2V_MODEL_ID == "minimax-h3-fastvideo-int8_ia2v_turbo"
+    assert (
+        sogni_client.MINIMAX_H3_FASTH3_FLFA2V_MODEL_ID == "minimax-h3-fastvideo-int8_flfa2v_turbo"
+    )
+    assert sogni_client.MINIMAX_H3_FASTH3_A2V_MODEL_ID == "minimax-h3-fastvideo-int8_a2v_turbo"
+    assert VIDEO_WORKFLOW_ASSETS["flfa2v"] == {
+        "referenceImage": "required",
+        "referenceImageEnd": "required",
+        "referenceAudio": "required",
+        "referenceAudioIdentity": "forbidden",
+        "referenceVideo": "forbidden",
+        "referenceMask": "forbidden",
+    }
+    checked = 0
+    for workflow, (base_id, uploads) in _MINIMAX_H3_AUDIO_GUIDE_MODES.items():
+        for model_id in (base_id, f"{base_id}_2stage"):
+            assert is_video_model(model_id)
+            assert is_minimax_h3_model(model_id)
+            assert is_minimax_h3_turbo_model(model_id)
+            assert sogni_client.is_minimax_h3_audio_guide_model(model_id)
+            assert sogni_client.isMinimaxH3AudioGuideModel(model_id)
+            assert not is_minimax_h3_balanced_model(model_id)
+            assert not is_minimax_h3_reference_model(model_id)
+            assert get_video_workflow_type(model_id) == workflow
+
+            plain = _h3_audio_request(model_id, uploads)
+            assert plain["modelID"] == model_id
+            for field, flag in _MINIMAX_H3_AUDIO_FLAGS.items():
+                assert plain.get(flag) is (True if field in uploads else None), (model_id, flag)
+            assert "hasReferenceAudio1" not in plain
+            assert (plain["fps"], plain["frames"], plain["steps"]) == (24, 243, 4)
+            for absent in ("generateAudio", "audioStart", "audioDuration", "loras"):
+                assert absent not in plain
+            assert _h3_audio_request(model_id, uploads, audioStart=2.5)["audioStart"] == 2.5
+            assert _h3_audio_request(model_id, uploads, audioStart=0)["audioStart"] == 0
+            assert _h3_audio_request(model_id, uploads, generateAudio=True)["generateAudio"] is True
+            assert _h3_audio_request(model_id, uploads, loras=[], loraStrengths=[]) == plain
+            if model_id.endswith("_2stage"):
+                # The two-stage request is the base request with only the id changed.
+                base = _h3_audio_request(base_id, uploads)
+                assert {**plain, "modelID": base_id} == base
+
+            for field in uploads:
+                with pytest.raises(ApiError, match=f"{workflow} workflow requires {field}"):
+                    _h3_audio_request(model_id, uploads, **{field: None})
+            for field in ("referenceImage", "referenceImageEnd", "referenceVideo"):
+                if field not in uploads:
+                    with pytest.raises(
+                        ApiError, match=f"{workflow} workflow does not support {field}"
+                    ):
+                        _h3_audio_request(model_id, uploads, **{field: PNG})
+            with pytest.raises(ApiError, match="does not support referenceAudioIdentity"):
+                _h3_audio_request(model_id, uploads, referenceAudioIdentity=MP3)
+            with pytest.raises(ApiError, match="referenceAudios is supported only"):
+                _h3_audio_request(model_id, uploads, referenceAudios=[MP3])
+
+            with pytest.raises(ApiError, match=f"MiniMax H3 {workflow} output always carries"):
+                _h3_audio_request(model_id, uploads, generateAudio=False)
+            for lora_changes in (
+                {"loras": ["h3-realism-people"]},
+                {"loraStrengths": [1]},
+                {"loras": ["h3-realism-people"], "loraStrengths": [0.8]},
+            ):
+                with pytest.raises(ApiError, match=f"MiniMax H3 {workflow} does not support LoRAs"):
+                    _h3_audio_request(model_id, uploads, **lora_changes)
+            with pytest.raises(ApiError, match="MiniMax H3 has no audioDuration input"):
+                _h3_audio_request(model_id, uploads, audioDuration=10)
+            for audio_start in (-1, float("nan"), float("inf"), "1", True):
+                with pytest.raises(
+                    ApiError, match=f"MiniMax H3 {workflow} audioStart must be a number"
+                ):
+                    _h3_audio_request(model_id, uploads, audioStart=audio_start)
+            with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):
+                _h3_audio_request(model_id, uploads, outputScale=2)
+            with pytest.raises(ApiError, match="MiniMax H3 frames must be 124"):
+                _h3_audio_request(model_id, uploads, frames=121)
+            checked += 1
+    assert checked == 6
+
+
+def test_other_minimax_h3_ids_refuse_audio_guide_inputs() -> None:
+    for steps, ids in _MINIMAX_H3_TIERS.items():
+        for model_id in ids:
+            params = _h3_params(model_id, steps)
+            assert not sogni_client.is_minimax_h3_audio_guide_model(model_id)
+            if "_r2v" not in model_id:
+                with pytest.raises(ApiError, match="workflow does not support referenceAudio"):
+                    create_job_request_message(
+                        "h3-audio-other", {**params, "referenceAudio": MP3}, model_options("video")
+                    )
+            with pytest.raises(ApiError, match="audioStart is supported only by the MiniMax H3"):
+                create_job_request_message(
+                    "h3-audio-other", {**params, "audioStart": 1}, model_options("video")
+                )
+            with pytest.raises(ApiError, match="MiniMax H3 has no audioDuration input"):
+                create_job_request_message(
+                    "h3-audio-other", {**params, "audioDuration": 6}, model_options("video")
+                )
+    # The LTX audio workflows keep their own detection and are not audio-guide ids.
+    assert get_video_workflow_type("ltx23-22b-fp8_a2v_distilled") == "a2v"
+    assert get_video_workflow_type("ltx23-22b-fp8_ia2v_distilled") == "ia2v"
+    assert not sogni_client.is_minimax_h3_audio_guide_model("ltx23-22b-fp8_a2v_distilled")
+    assert not is_minimax_h3_model("minimax-h3-fl2va-fp8_ia2v_turbo")
+
+
+def test_minimax_h3_frames_for_audio_duration_is_the_smallest_covering_grid_value() -> None:
+    frames_for = sogni_client.get_minimax_h3_frames_for_audio_duration
+    assert sogni_client.getMinimaxH3FramesForAudioDuration is frames_for
+    for seconds, frames in (
+        (0.5, 124),
+        (5, 124),
+        (124 / 24, 124),
+        (124.01 / 24, 141),
+        (141 / 24, 141),
+        (6, 158),
+        (10, 243),
+        (243 / 24, 243),
+        (362 / 24, 362),
+        (15.1, 362),
+        (60, 362),
+    ):
+        assert frames_for(seconds) == frames, seconds
+    for tenths in range(1, 201):
+        seconds = tenths / 10
+        frames = frames_for(seconds)
+        assert (frames - 124) % 17 == 0 and 124 <= frames <= 362
+        if frames < 362:
+            assert frames >= seconds * 24 - 1e-6
+            assert frames - 17 < 124 or frames - 17 < seconds * 24
+    for bad in (0, -1, float("nan"), float("inf"), None, "5", True):
+        with pytest.raises(ValueError, match="Audio duration must be a finite number"):
+            frames_for(bad)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("phase", ["options", "validation", "assets", "send", "cancel"])

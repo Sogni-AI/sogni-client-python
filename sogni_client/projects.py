@@ -46,6 +46,7 @@ from .utils import (
     is_external_video_model,
     is_happyhorse_model,
     is_ltx_model,
+    is_minimax_h3_audio_guide_model,
     is_minimax_h3_balanced_model,
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
@@ -94,6 +95,15 @@ VIDEO_WORKFLOW_ASSETS: dict[str, dict[str, str]] = {
         "referenceImage": "required",
         "referenceImageEnd": "required",
         "referenceAudio": "forbidden",
+        "referenceAudioIdentity": "forbidden",
+        "referenceVideo": "forbidden",
+        "referenceMask": "forbidden",
+    },
+    "flfa2v": {
+        # MiniMax H3 FastH3 first and last frame + uploaded audio.
+        "referenceImage": "required",
+        "referenceImageEnd": "required",
+        "referenceAudio": "required",
         "referenceAudioIdentity": "forbidden",
         "referenceVideo": "forbidden",
         "referenceMask": "forbidden",
@@ -706,6 +716,37 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
             raise _api_error(
                 "MiniMax H3 dimensions must use a 32px grid, stay at or below 1344px per axis, and fit within 1,032,192 pixels."
             )
+    # The worker derives the audio window from frames/24, so a caller-sent
+    # audioDuration would be ignored.
+    if params.get("audioDuration") is not None:
+        raise _api_error(
+            "MiniMax H3 has no audioDuration input. Set frames or duration; the uploaded audio is trimmed to the video length."
+        )
+    audio_start = params.get("audioStart")
+    if is_minimax_h3_audio_guide_model(params["modelId"]):
+        workflow = get_video_workflow_type(params["modelId"])
+        if params.get("generateAudio") is False:
+            raise _api_error(
+                f"MiniMax H3 {workflow} output always carries the uploaded audio. Omit generateAudio or set it to true."
+            )
+        if audio_start is not None and (
+            isinstance(audio_start, bool)
+            or not isinstance(audio_start, (int, float))
+            or not math.isfinite(audio_start)
+            or audio_start < 0
+        ):
+            raise _api_error(
+                f"MiniMax H3 {workflow} audioStart must be a number of seconds, 0 or greater."
+            )
+        # No LoRA has been qualified on the audio-guide graphs; empty lists send nothing.
+        if params.get("loras") or params.get("loraStrengths"):
+            raise _api_error(
+                f"MiniMax H3 {workflow} does not support LoRAs. Remove loras and loraStrengths."
+            )
+    elif audio_start is not None:
+        raise _api_error(
+            "audioStart is supported only by the MiniMax H3 FastH3 audio-guide workflows (minimax-h3-fastvideo-int8_ia2v_turbo, minimax-h3-fastvideo-int8_flfa2v_turbo, minimax-h3-fastvideo-int8_a2v_turbo and their _2stage ids)."
+        )
 
 
 _VIDEO_UPSCALE_RESOLUTIONS = (1080, 1440)

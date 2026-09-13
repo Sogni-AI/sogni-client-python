@@ -181,8 +181,11 @@ source.
 
 720p, 1080p and 2K MiniMax H3 two-stage output are the FastH3 Two-Stage model
 ids, not a request option: `minimax-h3-fastvideo-int8_t2v_turbo_2stage`,
-`minimax-h3-fastvideo-int8_i2v_turbo_2stage` and
-`minimax-h3-fastvideo-int8_flf2v_turbo_2stage`. Each takes exactly the request of
+`minimax-h3-fastvideo-int8_i2v_turbo_2stage`,
+`minimax-h3-fastvideo-int8_flf2v_turbo_2stage` and the audio-guide
+`minimax-h3-fastvideo-int8_ia2v_turbo_2stage`,
+`minimax-h3-fastvideo-int8_flfa2v_turbo_2stage` and
+`minimax-h3-fastvideo-int8_a2v_turbo_2stage`. Each takes exactly the request of
 its FastH3 Turbo id (canvas, frames, 4 steps, Euler/simple, inputs, LoRAs).
 FastH3 renders the canvas, then the worker enlarges it 2× and refines it, so the
 clip is delivered at exactly twice the canvas width and height with the same
@@ -222,6 +225,48 @@ project = await sogni.projects.create(
     duration=8,
     width=1344,
     height=768,  # delivered at 2688x1536; send 960x544 for 1920x1088, 672x384 for 1344x768
+)
+```
+
+## MiniMax H3 audio guide (image, first/last frame, or audio only)
+
+The FastH3 audio guide drives the video with an uploaded `reference_audio` from
+frame 0 and keeps that audio in the output, trimmed to the video length:
+
+| Model id | Uploads |
+| --- | --- |
+| `minimax-h3-fastvideo-int8_ia2v_turbo` | `reference_image` + `reference_audio` |
+| `minimax-h3-fastvideo-int8_flfa2v_turbo` | `reference_image` + `reference_image_end` + `reference_audio` |
+| `minimax-h3-fastvideo-int8_a2v_turbo` | `reference_audio` only |
+
+Each also has a `_2stage` id that takes the same request and delivers twice the
+canvas. A mode refuses any upload it does not take. The optional `audio_start`
+(seconds, 0 or greater) offsets the audio window; `generate_audio=False`,
+`audio_duration` and LoRAs are refused before anything is sent, and every other
+H3 id refuses `audio_start`. `get_minimax_h3_frames_for_audio_duration(seconds)`
+returns the smallest valid frame count covering the audio (124-362), and
+`is_minimax_h3_audio_guide_model()` recognizes all six ids. The hosted
+`sound_to_video` selectors are `minimax-h3-fasth3-ia2v-turbo`,
+`minimax-h3-fasth3-flfa2v-turbo`, `minimax-h3-fasth3-a2v-turbo` and their
+`-2stage` forms.
+
+```python
+from sogni_client import get_minimax_h3_frames_for_audio_duration
+
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id="minimax-h3-fastvideo-int8_flfa2v_turbo",
+    number_of_media=1,
+    steps=4,
+    positive_prompt="The dancer crosses the studio in time with the music.",
+    reference_image="first.png",
+    reference_image_end="last.png",
+    reference_audio="song.m4a",  # the output keeps this audio
+    audio_start=12,
+    frames=get_minimax_h3_frames_for_audio_duration(audio_seconds - 12),
+    width=1344,
+    height=768,
 )
 ```
 
@@ -492,7 +537,8 @@ schemas.
 
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
-FastH3 `fastvideo-int8` Turbo engine with its Two-Stage 720p/1080p/2K ids), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
+FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
+Two-Stage 720p/1080p/2K ids), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
 segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,
