@@ -137,6 +137,51 @@ async def test_unavailable_saved_storage_falls_back_before_any_transfer(status: 
     )
 
 
+async def test_quota_fallback_suppresses_repeated_automatic_prepare_until_reset() -> None:
+    rest = AssetsRest(
+        prepare=ApiError(
+            409, {"message": "Your saved upload library is full. Remove an upload and try again."}
+        )
+    )
+    uploads = ReusableUploads(rest)
+    binding = {"projectId": "p", "type": "cnImage"}
+
+    assert await uploads.try_bind_file(PNG, "image/png", binding) is False
+    assert await uploads.try_bind_file(PNG, "image/png", binding) is False
+    assert paths(rest).count("POST /v1/assets/prepare") == 1
+
+    rest.auth.emit("updated", False)
+    assert await uploads.try_bind_file(PNG, "image/png", binding) is False
+    assert paths(rest).count("POST /v1/assets/prepare") == 2
+
+    await uploads.remove("asset-1")
+    assert await uploads.try_bind_file(PNG, "image/png", binding) is False
+    assert paths(rest).count("POST /v1/assets/prepare") == 3
+
+
+async def test_quota_fallback_stops_automatic_prepares_queued_behind_active_lanes() -> None:
+    rest = AssetsRest(
+        prepare=ApiError(
+            409, {"message": "Your saved upload library is full. Remove an upload and try again."}
+        )
+    )
+    uploads = ReusableUploads(rest)
+
+    results = await asyncio.gather(
+        *(
+            uploads.try_bind_file(
+                f"image-{index}".encode(),
+                "image/png",
+                {"projectId": f"p-{index}", "type": "cnImage"},
+            )
+            for index in range(8)
+        )
+    )
+
+    assert results == [False] * 8
+    assert paths(rest).count("POST /v1/assets/prepare") <= 2
+
+
 async def test_transfer_failure_after_preparation_surfaces_instead_of_uploading_elsewhere() -> None:
     rest = AssetsRest(
         prepare={

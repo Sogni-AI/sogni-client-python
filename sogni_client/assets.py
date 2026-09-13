@@ -40,10 +40,16 @@ SUPPORTED_SAVED_UPLOAD_TYPES = frozenset(
 # storage could not be prepared. Later failures must surface before submission.
 _FALLBACK_STATUSES = frozenset({400, 403, 404, 409, 410, 503})
 _CAPABILITY_UNAVAILABLE_STATUSES = frozenset({403, 404, 503})
+_QUOTA_RETRY_DELAY_SECONDS = 15 * 60.0
+_QUOTA_MESSAGE = "Your saved upload library is full."
 
 
 def _upload_error(status: int, message: str) -> ApiError:
     return ApiError(status, {"status": "error", "errorCode": 0, "message": message})
+
+
+class _AutomaticSaveBlockedError(Exception):
+    pass
 
 
 class ReusableUploads:
@@ -56,6 +62,7 @@ class ReusableUploads:
         self._lanes = asyncio.Semaphore(2)
         self._session = 0
         self._availability: tuple[float, asyncio.Task[bool]] | None = None
+        self._automatic_save_blocked_until = 0.0
         self._preparation_failures: weakref.WeakSet[BaseException] = weakref.WeakSet()
         auth = getattr(rest, "auth", None)
         if auth is not None and callable(getattr(auth, "on", None)):
@@ -65,12 +72,15 @@ class ReusableUploads:
         self._session += 1
         self._pending.clear()
         self._availability = None
+        self._automatic_save_blocked_until = 0.0
 
     def _assert_session(self, session: int) -> None:
         if session != self._session:
             raise SogniError("The account changed. Select the upload again.")
 
     async def _can_automatically_save(self) -> bool:
+        if self._automatic_save_blocked_until > time.monotonic():
+            return False
         if self._availability and self._availability[0] > time.monotonic():
             return await self._availability[1]
 
@@ -95,6 +105,7 @@ class ReusableUploads:
 
     async def remove(self, asset_id: str) -> None:
         await self._rest.delete(f"/v1/assets/{quote(asset_id, safe='')}")
+        self._automatic_save_blocked_until = 0.0
 
     async def bind(self, asset_id: str, binding: dict[str, Any]) -> None:
         """Copy a saved upload into a project input slot (``projectId``, ``type``, ``id``)."""
@@ -124,11 +135,21 @@ class ReusableUploads:
         self, data: bytes, content_type: str, name: str = "Saved upload"
     ) -> dict[str, Any]:
         """Upload once; the API verifies the file before making it reusable."""
+        return await self._upload_internal(data, content_type, name, automatic=False)
+
+    async def _upload_internal(
+        self, data: bytes, content_type: str, name: str, *, automatic: bool
+    ) -> dict[str, Any]:
         session = self._session
         if not data or len(data) > MAX_SAVED_UPLOAD_BYTES:
             raise _upload_error(400, "Choose a saved upload no larger than 100 MiB.")
         async with self._lanes:
             self._assert_session(session)
+            # Concurrent project helpers can all pass the capability check before
+            # the first quota response arrives. Recheck once this lane reaches the
+            # front so queued automatic saves fall back without hashing or probing.
+            if automatic and self._automatic_save_blocked_until > time.monotonic():
+                raise _AutomaticSaveBlockedError
             sha256 = (
                 await asyncio.to_thread(lambda: hashlib.sha256(data).hexdigest())
                 if len(data) > 8 * 1024 * 1024
@@ -207,14 +228,23 @@ class ReusableUploads:
             return False
         self._assert_session(session)
         try:
-            saved = await self.upload(data, content_type, name)
+            saved = await self._upload_internal(data, content_type, name, automatic=True)
             self._assert_session(session)
             await self.bind(saved["id"], binding)
             return True
+        except _AutomaticSaveBlockedError:
+            return False
         except ApiError as error:
             # Fallback is permitted only before a transfer was prepared. Checksum,
             # storage-access and binding failures must surface before job submission.
             if error in self._preparation_failures and error.status in _FALLBACK_STATUSES:
+                # A full automatic library still permits the ordinary project-upload
+                # path. Avoid hashing and probing every remaining file in the batch;
+                # retry later in case expiry or an explicit removal released space.
+                if error.status == 409 and str(error).startswith(_QUOTA_MESSAGE):
+                    self._automatic_save_blocked_until = (
+                        time.monotonic() + _QUOTA_RETRY_DELAY_SECONDS
+                    )
                 return False
             raise
 
