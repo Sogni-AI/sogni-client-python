@@ -278,13 +278,49 @@ def test_capability_predicates_describe_the_3d_and_segmentation_models() -> None
     assert is_audio_model(SAM3_IMAGE_SEGMENT_MODEL_ID) is False
 
 
+def test_pixal3d_multiview_capability_helpers() -> None:
+    import sogni_client
+
+    multiview = sogni_client.PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID
+    assert multiview == "pixal3d_multiview_int8_i23d"
+    # Left, back and right are the worker's contextImage1/2/3 asset keys.
+    assert sogni_client.PIXAL3D_ORBIT_VIEW_SLOTS == {
+        "leftViewImage": 1,
+        "backViewImage": 2,
+        "rightViewImage": 3,
+    }
+    for model_id in (PIXAL3D_IMAGE_TO_3D_MODEL_ID, multiview):
+        assert sogni_client.is_pixal3d_model(model_id) is True
+        assert is_model_artifact_model(model_id) is True
+        assert requires_starting_image(model_id) is True
+        assert is_segmentation_model(model_id) is False
+        assert is_video_model(model_id) is False
+    assert sogni_client.is_pixal3d_multiview_model(multiview) is True
+    assert sogni_client.is_pixal3d_multiview_model(PIXAL3D_IMAGE_TO_3D_MODEL_ID) is False
+    assert sogni_client.is_pixal3d_model(SAM3_IMAGE_SEGMENT_MODEL_ID) is False
+    assert sogni_client.get_pixal3d_orbit_view_slots(
+        {"rightViewImage": True, "leftViewImage": None}
+    ) == [("rightViewImage", 3, True)]
+    assert sogni_client.isPixal3dModel is sogni_client.is_pixal3d_model
+    assert sogni_client.isPixal3dMultiViewModel is sogni_client.is_pixal3d_multiview_model
+    assert sogni_client.getPixal3dOrbitViewSlots is sogni_client.get_pixal3d_orbit_view_slots
+
+
 def test_capability_surface_is_exported_from_the_package_root() -> None:
     import sogni_client
 
     for name in (
         "PIXAL3D_IMAGE_TO_3D_MODEL_ID",
+        "PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID",
+        "PIXAL3D_ORBIT_VIEW_SLOTS",
         "SAM3_IMAGE_SEGMENT_MODEL_ID",
         "is_model_artifact_model",
+        "is_pixal3d_model",
+        "is_pixal3d_multiview_model",
+        "get_pixal3d_orbit_view_slots",
+        "isPixal3dModel",
+        "isPixal3dMultiViewModel",
+        "getPixal3dOrbitViewSlots",
         "is_segmentation_model",
         "requires_starting_image",
         "is_video_model",

@@ -265,8 +265,25 @@ def is_audio_model(model_id: str) -> bool:
     )
 
 
-#: Canonical id of the prompt-free image-to-3D reconstruction workflow.
+#: Canonical id of the prompt-free single-image (front view only) image-to-3D workflow.
 PIXAL3D_IMAGE_TO_3D_MODEL_ID = "pixal3d_int8_i23d"
+
+#: Canonical id of the multi-view image-to-3D workflow: a required front view
+#: (``startingImage``) plus any of the optional ``leftViewImage``,
+#: ``backViewImage`` and ``rightViewImage`` orbit views.
+PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID = "pixal3d_multiview_int8_i23d"
+
+#: Pixal3D multi-view orbit views and the ``contextImage<slot>`` upload each one
+#: travels in. The slots are the worker's asset keys, so the order is fixed.
+#: Views are named from the subject's own point of view: ``leftViewImage`` is
+#: the subject turned so its own left side faces the camera (it faces
+#: screen-left), ``rightViewImage`` its own right side (it faces screen-right),
+#: ``backViewImage`` the subject seen from behind.
+PIXAL3D_ORBIT_VIEW_SLOTS: dict[str, int] = {
+    "leftViewImage": 1,
+    "backViewImage": 2,
+    "rightViewImage": 3,
+}
 
 #: Canonical id of the SAM 3 interactive image-segmentation workflow.
 SAM3_IMAGE_SEGMENT_MODEL_ID = "sam3_image_segment_bf16"
@@ -297,6 +314,32 @@ def is_segmentation_model(model_id: str) -> bool:
     return model_id in (SAM3_IMAGE_SEGMENT_MODEL_ID, BIREFNET_BACKGROUND_REMOVAL_MODEL_ID)
 
 
+def is_pixal3d_model(model_id: str) -> bool:
+    """Check if a model ID is one of the Pixal3D image-to-3D workflows."""
+
+    return model_id in (PIXAL3D_IMAGE_TO_3D_MODEL_ID, PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID)
+
+
+def is_pixal3d_multiview_model(model_id: str) -> bool:
+    """Check if a model ID is the Pixal3D workflow that accepts orbit views."""
+
+    return model_id == PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID
+
+
+def get_pixal3d_orbit_view_slots(params: dict[str, Any]) -> list[tuple[str, int, Any]]:
+    """The orbit views supplied on a request as ``(view, slot, media)``.
+
+    Accepts camelCase wire keys. Unset (``None``) or empty views are omitted, so
+    any subset keeps its own ``contextImage<slot>`` rather than being renumbered.
+    """
+
+    return [
+        (view, slot, params[view])
+        for view, slot in PIXAL3D_ORBIT_VIEW_SLOTS.items()
+        if params.get(view)
+    ]
+
+
 def requires_starting_image(model_id: str) -> bool:
     """Models that need a starting image because they transform one rather than
     generating from a prompt alone.
@@ -311,6 +354,9 @@ isAudioModel = is_audio_model
 isModelArtifactModel = is_model_artifact_model
 isSegmentationModel = is_segmentation_model
 requiresStartingImage = requires_starting_image
+isPixal3dModel = is_pixal3d_model
+isPixal3dMultiViewModel = is_pixal3d_multiview_model
+getPixal3dOrbitViewSlots = get_pixal3d_orbit_view_slots
 
 
 def calculate_video_frames(

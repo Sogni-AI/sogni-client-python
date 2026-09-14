@@ -38,9 +38,12 @@ from .utils import (
     MINIMAX_H3_MIN_DURATION,
     MINIMAX_H3_MIN_FRAMES,
     PIXAL3D_IMAGE_TO_3D_MODEL_ID,
+    PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID,
+    PIXAL3D_ORBIT_VIEW_SLOTS,
     SAM3_IMAGE_SEGMENT_MODEL_ID,
     calculate_video_frames,
     detect_content_type,
+    get_pixal3d_orbit_view_slots,
     get_video_workflow_type,
     is_audio_model,
     is_external_video_model,
@@ -52,6 +55,8 @@ from .utils import (
     is_minimax_h3_reference_model,
     is_minimax_h3_turbo_model,
     is_model_artifact_model,
+    is_pixal3d_model,
+    is_pixal3d_multiview_model,
     is_seedance25_model,
     is_seedance_model,
     is_segmentation_model,
@@ -1126,6 +1131,7 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
 _SAM3_IMAGE_SEGMENT_WORKFLOW_ID = SAM3_IMAGE_SEGMENT_MODEL_ID
 _BIREFNET_BACKGROUND_REMOVAL_WORKFLOW_ID = BIREFNET_BACKGROUND_REMOVAL_MODEL_ID
 _PIXAL3D_WORKFLOW_ID = PIXAL3D_IMAGE_TO_3D_MODEL_ID
+_PIXAL3D_MULTIVIEW_WORKFLOW_ID = PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID
 _MAX_SAM3_POINTS = 32
 _MAX_SAM3_BOXES = 16
 _MAX_SAM3_TEXT_LENGTH = 240
@@ -1136,9 +1142,10 @@ _SAM3_ROOT_KEYS = frozenset(
 )
 _SAM3_POINT_KEYS = frozenset({"x", "y", "label"})
 _SAM3_BOX_KEYS = frozenset({"x0", "y0", "x1", "y1", "label"})
-# Pixal3D generation options. Four are reduce-only because their maximum is the
-# shipped default. `shapeResolution` is the exception: 1024 is the default and
-# 1536 is the priced maximum-detail step. The socket and worker clamp again.
+# Pixal3D generation options, shared by the single-view and multi-view
+# workflows. Four are reduce-only because their maximum is the shipped default.
+# `shapeResolution` is the exception: 1024 is the default and 1536 is the priced
+# maximum-detail step. The socket and worker clamp again.
 _PIXAL3D_OPTION_LIMITS: dict[str, tuple[int, int]] = {
     "textureSize": (1024, 4096),
     "meshTargetFaces": (5000, 700000),
@@ -1147,7 +1154,8 @@ _PIXAL3D_OPTION_LIMITS: dict[str, tuple[int, int]] = {
     "shapeResolution": (1024, 1536),
 }
 # The sole graph ComfyUI's workflows/image/manifest.json registers under the
-# Pixal3D workflow id. This is a closed list, not a passthrough:
+# single-view Pixal3D workflow id (the multi-view id has one graph and no
+# selector). This is a closed list, not a passthrough:
 # `templateVariant` is the worker's generic template selector, so
 # an open one would let a caller aim a paid job at any graph a worker carries.
 _PIXAL3D_DEFAULT_TEMPLATE_VARIANT = "i23d-birefnet"
@@ -1426,8 +1434,40 @@ def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, A
         raise ValueError(
             f"applyMask is only supported by {_BIREFNET_BACKGROUND_REMOVAL_WORKFLOW_ID}"
         )
-    if params["modelId"] == _PIXAL3D_WORKFLOW_ID and not params.get("startingImage"):
-        raise ValueError("Pixal3D reconstruction requires startingImage")
+    model_id = params["modelId"]
+    if is_pixal3d_model(model_id) and not params.get("startingImage"):
+        raise ValueError(
+            "Pixal3D multi-view reconstruction requires startingImage (the front view)"
+            if is_pixal3d_multiview_model(model_id)
+            else "Pixal3D reconstruction requires startingImage"
+        )
+    # Pixal3D multi-view orbit views travel in fixed contextImage slots (left 1,
+    # back 2, right 3). Any subset is allowed. The single-view graph has no input
+    # for them, so it refuses them rather than charging for images it ignores,
+    # and both Pixal3D ids refuse generic contextImages, whose slots carry no view.
+    if is_pixal3d_model(model_id) and any(params.get("contextImages") or []):
+        raise ValueError(
+            f"{_PIXAL3D_MULTIVIEW_WORKFLOW_ID} takes its orbit views as leftViewImage, "
+            "backViewImage and rightViewImage, not contextImages"
+            if is_pixal3d_multiview_model(model_id)
+            else f"{_PIXAL3D_WORKFLOW_ID} reconstructs from startingImage alone and does not "
+            f"support contextImages; use {_PIXAL3D_MULTIVIEW_WORKFLOW_ID} for more views"
+        )
+    for view in PIXAL3D_ORBIT_VIEW_SLOTS:
+        value = params.get(view)
+        if value is None:
+            continue
+        if not is_pixal3d_multiview_model(model_id):
+            raise ValueError(
+                f"{_PIXAL3D_WORKFLOW_ID} reconstructs from startingImage alone and ignores "
+                f"{view}; use {_PIXAL3D_MULTIVIEW_WORKFLOW_ID} for orbit views"
+                if model_id == _PIXAL3D_WORKFLOW_ID
+                else f"{view} is only supported by {_PIXAL3D_MULTIVIEW_WORKFLOW_ID}"
+            )
+        if not value:
+            raise ValueError(f"{view} must be an image; leave it unset to omit that view")
+    for _view, slot, _media in get_pixal3d_orbit_view_slots(params):
+        keyframe[f"hasContextImage{slot}"] = True
     # Which Pixal3D graph to run. Unset is not the same as naming
     # the default: a worker resolves only the variants its own manifest
     # declares, so an unset field lets each worker run its own shipped default,
@@ -1445,8 +1485,11 @@ def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, A
         requested = params.get(key)
         if requested is None:
             continue
-        if params["modelId"] != _PIXAL3D_WORKFLOW_ID:
-            raise ValueError(f"{key} is only supported by {_PIXAL3D_WORKFLOW_ID}")
+        if not is_pixal3d_model(model_id):
+            raise ValueError(
+                f"{key} is only supported by {_PIXAL3D_WORKFLOW_ID} and "
+                f"{_PIXAL3D_MULTIVIEW_WORKFLOW_ID}"
+            )
         if not _is_safe_integer(requested) or requested < minimum or requested > maximum:
             raise ValueError(f"{key} must be an integer from {minimum} to {maximum}")
         keyframe[key] = requested
@@ -1818,7 +1861,7 @@ def create_job_request_message(
             # No utility workflow has intermediate images to preview:
             # segmentation returns one mask and Pixal3D a 3D reconstruction.
             "previews": 0
-            if is_segmentation_model(params["modelId"]) or params["modelId"] == _PIXAL3D_WORKFLOW_ID
+            if is_segmentation_model(params["modelId"]) or is_pixal3d_model(params["modelId"])
             else params.get("numberOfPreviews", 0)
             if project_type == "image"
             else 0,
@@ -1836,7 +1879,7 @@ def create_job_request_message(
             # will not produce. jpg would quantize a soft matte and flatten a
             # cutout's alpha away.
             "outputFormat": "glb"
-            if params["modelId"] == _PIXAL3D_WORKFLOW_ID
+            if is_pixal3d_model(params["modelId"])
             else "png"
             if is_segmentation_model(params["modelId"])
             else params.get("outputFormat")
@@ -2946,6 +2989,12 @@ class ProjectsApi(EventEmitter):
                 raise _api_error(f"Up to {max_context} context images are supported for this model")
             assets.extend(
                 (f"contextImage{index}", value, False) for index, value in enumerate(contexts, 1)
+            )
+            # Pixal3D multi-view orbit views use fixed contextImage slots (left 1,
+            # back 2, right 3); the request builder already refused them elsewhere.
+            assets.extend(
+                (f"contextImage{slot}", value, False)
+                for _view, slot, value in get_pixal3d_orbit_view_slots(data)
             )
             mask = data.get("gptImageMask")
             if mask and mask is not True:

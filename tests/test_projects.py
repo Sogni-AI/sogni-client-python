@@ -2621,6 +2621,157 @@ def test_pixal3d_template_variant_selects_the_reconstruction_graph() -> None:
         )
 
 
+def pixal3d_multiview_params(**overrides: Any) -> dict[str, Any]:
+    return pixal3d_params(modelId="pixal3d_multiview_int8_i23d", positivePrompt="", **overrides)
+
+
+def context_flags(message: dict[str, Any]) -> list[bool]:
+    keyframe = message["keyFrames"][0]
+    return [keyframe[f"hasContextImage{slot}"] for slot in (1, 2, 3, 4)]
+
+
+def test_pixal3d_multiview_sends_front_and_orbit_views_in_fixed_slots() -> None:
+    views = {"leftViewImage": PNG, "backViewImage": PNG, "rightViewImage": PNG}
+    full = create_job_request_message(
+        "pixal3d-mv-full",
+        pixal3d_multiview_params(
+            **views, numberOfPreviews=4, meshTargetFaces=200000, shapeResolution=1536, seed=7
+        ),
+        model_options("image"),
+    )
+    keyframe = full["keyFrames"][0]
+    assert keyframe["modelID"] == "pixal3d_multiview_int8_i23d"
+    assert full["outputFormat"] == "glb"
+    assert full["previews"] == 0
+    assert keyframe["hasStartingImage"] is True
+    assert context_flags(full) == [True, True, True, False]
+    assert keyframe["meshTargetFaces"] == 200000
+    assert keyframe["shapeResolution"] == 1536
+    assert "templateVariant" not in keyframe
+
+    front_only = create_job_request_message(
+        "pixal3d-mv-front", pixal3d_multiview_params(), model_options("image")
+    )
+    assert context_flags(front_only) == [False, False, False, False]
+
+    # Any subset keeps each view in its own slot rather than renumbering.
+    for view, slot in {"leftViewImage": 1, "backViewImage": 2, "rightViewImage": 3}.items():
+        message = create_job_request_message(
+            f"pixal3d-mv-{view}", pixal3d_multiview_params(**{view: PNG}), model_options("image")
+        )
+        assert context_flags(message) == [index == slot for index in (1, 2, 3, 4)], view
+    assert context_flags(
+        create_job_request_message(
+            "pixal3d-mv-left-right",
+            pixal3d_multiview_params(leftViewImage=PNG, rightViewImage=True, backViewImage=None),
+            model_options("image"),
+        )
+    ) == [True, False, True, False]
+
+
+def test_pixal3d_multiview_refuses_invalid_views_before_upload() -> None:
+    def build(params: dict[str, Any]) -> dict[str, Any]:
+        return create_job_request_message("pixal3d-refusal", params, model_options("image"))
+
+    with pytest.raises(
+        ValueError,
+        match=r"Pixal3D multi-view reconstruction requires startingImage \(the front view\)",
+    ):
+        build(pixal3d_multiview_params(startingImage=None, leftViewImage=PNG))
+    for bad in (False, b"", ""):
+        with pytest.raises(
+            ValueError, match="backViewImage must be an image; leave it unset to omit that view"
+        ):
+            build(pixal3d_multiview_params(backViewImage=bad))
+    with pytest.raises(
+        ValueError,
+        match="pixal3d_multiview_int8_i23d takes its orbit views as leftViewImage, "
+        "backViewImage and rightViewImage, not contextImages",
+    ):
+        build(pixal3d_multiview_params(contextImages=[PNG]))
+    with pytest.raises(ValueError, match="templateVariant is only supported by pixal3d_int8_i23d"):
+        build(pixal3d_multiview_params(templateVariant="i23d-birefnet"))
+    with pytest.raises(ValueError, match="textureSize must be an integer from 1024 to 4096"):
+        build(pixal3d_multiview_params(textureSize=8192))
+
+    # The single-view graph would ignore orbit views; refuse them before billing.
+    for view in ("leftViewImage", "backViewImage", "rightViewImage"):
+        with pytest.raises(
+            ValueError,
+            match=f"pixal3d_int8_i23d reconstructs from startingImage alone and ignores {view}",
+        ):
+            build(pixal3d_params(**{view: PNG}))
+        with pytest.raises(
+            ValueError, match=f"{view} is only supported by pixal3d_multiview_int8_i23d"
+        ):
+            build(pixal3d_params(modelId="krea2_turbo_fp8_scaled", **{view: PNG}))
+    with pytest.raises(
+        ValueError,
+        match="pixal3d_int8_i23d reconstructs from startingImage alone and does not support "
+        "contextImages",
+    ):
+        build(pixal3d_params(contextImages=[PNG]))
+    unset = build(pixal3d_params(leftViewImage=None, backViewImage=None, rightViewImage=None))
+    assert context_flags(unset) == [False, False, False, False]
+    with pytest.raises(
+        ValueError,
+        match="meshTargetFaces is only supported by pixal3d_int8_i23d and "
+        "pixal3d_multiview_int8_i23d",
+    ):
+        build(pixal3d_params(modelId="krea2_turbo_fp8_scaled", meshTargetFaces=5000))
+
+
+@pytest.mark.asyncio
+async def test_pixal3d_multiview_uploads_each_view_to_its_context_slot() -> None:
+    client = FakeClient(
+        [
+            {"data": {"uploadUrl": "https://upload.example/front"}},
+            {"data": {"uploadUrl": "https://upload.example/back"}},
+            {"data": {"uploadUrl": "https://upload.example/right"}},
+        ]
+    )
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+
+    project = await api.create(
+        type="image",
+        model_id="pixal3d_multiview_int8_i23d",
+        positive_prompt="",
+        number_of_media=1,
+        starting_image=PNG,
+        back_view_image=PNG,
+        right_view_image=PNG,
+    )
+
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    assert request["outputFormat"] == "glb"
+    assert context_flags(request) == [False, True, True, False]
+    uploads = [call["params"]["type"] for call in client.rest.calls if call["method"] == "GET"]
+    assert uploads == ["startingImage", "contextImage2", "contextImage3"]
+    assert all(
+        call["params"]["jobId"] == project.id
+        for call in client.rest.calls
+        if call["method"] == "GET"
+    )
+
+    # A refused single-view request uploads nothing and sends nothing.
+    refused_client = FakeClient()
+    refused = ProjectsApi(refused_client)
+    refused.get_model_options = AsyncMock(return_value=model_options("image"))
+    with pytest.raises(ValueError, match="ignores leftViewImage"):
+        await refused.create(
+            type="image",
+            model_id="pixal3d_int8_i23d",
+            positive_prompt="",
+            number_of_media=1,
+            starting_image=PNG,
+            left_view_image=PNG,
+        )
+    assert refused_client.rest.calls == []
+    assert refused_client.socket.sent == []
+
+
 def test_world_generation_receipt_binds_its_stage_model_and_hashes() -> None:
     source = "a" * 64
     selection = "b" * 64

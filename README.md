@@ -474,11 +474,13 @@ Deduplicate on `id`.
 
 ## Segmentation and 3D models
 
-Two workflows transform a source image instead of generating from a prompt, so
+These workflows transform a source image instead of generating from a prompt, so
 each needs a `starting_image`. Ask the SDK rather than hardcoding model ids:
-`requires_starting_image()`, `is_segmentation_model()`, and
-`is_model_artifact_model()`, alongside the `SAM3_IMAGE_SEGMENT_MODEL_ID` and
-`PIXAL3D_IMAGE_TO_3D_MODEL_ID` constants.
+`requires_starting_image()`, `is_segmentation_model()`,
+`is_model_artifact_model()`, `is_pixal3d_model()` and
+`is_pixal3d_multiview_model()`, alongside the `SAM3_IMAGE_SEGMENT_MODEL_ID`,
+`PIXAL3D_IMAGE_TO_3D_MODEL_ID` and `PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID`
+constants.
 
 SAM 3 returns one lossless mask PNG the same size as the source. The request
 carries a bounded `sam3_prompt`: `points` (`label` `positive`/`negative`),
@@ -507,6 +509,43 @@ reduce-only and default to their maximum. `shape_resolution` defaults to 1024
 and can be raised to the priced 1536 maximum-detail step.
 `mesh_target_faces` is the one worth setting: the 700,000-triangle default is
 far heavier than a real-time engine wants.
+
+`pixal3d_int8_i23d` reconstructs from `starting_image` alone.
+`PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID` (`pixal3d_multiview_int8_i23d`) takes
+`starting_image` as the required FRONT view plus any subset of three optional
+orbit views, each uploaded in a fixed slot. The views must show the same object
+at the same height, 90 degrees apart around it at eye level, like a character
+turnaround sheet. Name them from the subject's own point of view, not the
+viewer's:
+
+| Keyword | What the image shows | Upload slot |
+|---------|----------------------|-------------|
+| `starting_image` | Front view (required) | `startingImage` |
+| `left_view_image` | The subject turned so **its own left side** faces the camera (it faces screen-left) | `contextImage1` |
+| `back_view_image` | The subject seen from behind | `contextImage2` |
+| `right_view_image` | The subject turned so **its own right side** faces the camera (it faces screen-right) | `contextImage3` |
+
+Swapping left and right builds a model turned 180 degrees. Some turnaround
+templates label the photo of the subject's right side "left"; follow the table,
+not those labels. The single-view model refuses orbit views, both models refuse
+`context_images`, and only the single-view model accepts `template_variant`.
+Both take the options above.
+
+```python
+from sogni_client import PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID
+
+project = await sogni.projects.create(
+    type="image",
+    model_id=PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID,
+    positive_prompt="",
+    number_of_media=1,
+    starting_image="front.png",
+    left_view_image="left.png",  # optional
+    back_view_image="back.png",  # optional
+    right_view_image="right.png",  # optional
+    mesh_target_faces=200_000,
+)
+```
 
 When a workflow attests its inputs and outputs, `job.provenance` carries the
 worker-signed receipt. Like `job.error` and `project.params`, it is the wire
