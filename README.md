@@ -241,6 +241,18 @@ URI under 50 MB, which is uploaded like `gpt_image_mask`). Transparent mask
 regions are edited. In chat tools, `gpt-image-2.5` and `flare` select Flare;
 `sunburst` selects Sunburst.
 
+## Seedance 2.5 export options
+
+`seedance-2-5` can deliver a MOV container (`output_format="mov"`; video
+defaults to `mp4`) and export a separate image of the final frame
+(`return_last_frame=True`). The frame is available as `job.last_frame_url`, and
+`await job.get_last_frame_url()` mints a fresh signed URL for it, ready to use as
+the first frame of a follow-up clip. Both options are Seedance 2.5 only:
+`projects.create()` raises `ApiError` before sending anything for another model,
+for an output format other than `mp4`/`mov`, or for a non-boolean
+`return_last_frame`. Chat tool results list `lastFrameUrls` when a frame was
+exported.
+
 ## Reusable subscriber uploads
 
 On servers that support saved uploads, eligible subscribers reuse the same image,

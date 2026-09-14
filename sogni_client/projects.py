@@ -529,6 +529,29 @@ def _raw_result_url(data: dict[str, Any]) -> str | None:
     return None
 
 
+_VIDEO_EXPORT_FIELDS = ("lastFrameUrl", "lastFrameKey", "outputFormat")
+
+
+def _video_export_fields(
+    data: dict[str, Any], fields: tuple[str, ...] = _VIDEO_EXPORT_FIELDS
+) -> dict[str, str]:
+    """Seedance 2.5 export fields a job record or result frame carries.
+
+    Read from the record itself, falling back to its worker ``result`` receipt.
+    Absent fields are left out so a later update never erases a known value.
+    """
+
+    result = data.get("result") if isinstance(data.get("result"), dict) else {}
+    fields_found: dict[str, str] = {}
+    for field in fields:
+        value = data.get(field)
+        if not isinstance(value, str):
+            value = result.get(field)
+        if isinstance(value, str) and value:
+            fields_found[field] = value
+    return fields_found
+
+
 def _nested_params(value: Any) -> Any:
     """Normalize Python names in nested public parameter records."""
 
@@ -935,8 +958,25 @@ def _validate_wan3_references(params: dict[str, Any]) -> None:
         raise _api_error("Wan 3 requires a prompt or at least one media, file, or link input.")
 
 
+def _validate_video_export_options(params: dict[str, Any]) -> None:
+    """Seedance 2.5 export options: a MOV container and a separate final-frame image."""
+
+    output_format = params.get("outputFormat")
+    return_last_frame = params.get("returnLastFrame")
+    is_25 = is_seedance25_model(params["modelId"])
+    if output_format is not None and output_format not in {"mp4", "mov"}:
+        raise _api_error("Video outputFormat must be mp4 or mov.")
+    if output_format == "mov" and not is_25:
+        raise _api_error("MOV output is supported only by Seedance 2.5.")
+    if return_last_frame is not None and not isinstance(return_last_frame, bool):
+        raise _api_error("returnLastFrame must be a boolean.")
+    if return_last_frame is True and not is_25:
+        raise _api_error("Last-frame export is supported only by Seedance 2.5.")
+
+
 def _validate_video_assets(params: dict[str, Any]) -> None:
     model_id = params["modelId"]
+    _validate_video_export_options(params)
     for field in ("contextImages", "referenceVideos", "referenceAudios"):
         value = params.get(field)
         if value is not None and (not isinstance(value, list) or any(not item for item in value)):
@@ -1584,6 +1624,7 @@ def create_job_request_message(
             ("promptExtend", "promptExtend"),
             ("watermark", "watermark"),
             ("ratio", "ratio"),
+            ("returnLastFrame", "returnLastFrame"),
             ("seedanceTaskType", "seedanceTaskType"),
         ):
             if params.get(source) is not None:
@@ -1847,6 +1888,30 @@ class Job(DataEntity):
         return self._data.get("resultUrl")
 
     resultUrl = result_url
+
+    @property
+    def last_frame_url(self) -> str | None:
+        """Exported final-frame image URL, when requested (Seedance 2.5 ``returnLastFrame``)."""
+
+        return self._data.get("lastFrameUrl")
+
+    lastFrameUrl = last_frame_url
+
+    async def get_last_frame_url(self) -> str:
+        """Refresh the signed URL for an exported final frame."""
+
+        url = await self._api.media_download_url(
+            {
+                "jobId": self.project_id,
+                "id": self.id,
+                "type": "complete",
+                "artifact": "lastFrame",
+            }
+        )
+        self._update({"lastFrameUrl": url})
+        return url
+
+    getLastFrameUrl = get_last_frame_url
 
     @property
     def provenance(self) -> dict[str, Any] | None:
@@ -2128,6 +2193,7 @@ class Job(DataEntity):
             delta["nsfwSources"] = list(data.get("nsfwSources") or [])
         if data.get("result"):
             delta["provenance"] = data["result"]
+        delta.update(_video_export_fields(data))
         status = _JOB_STATUS_MAP.get(data.get("status"))
         if status:
             delta["status"] = status
@@ -2561,6 +2627,7 @@ class Project(DataEntity):
                     "nsfwDetected": raw.get("nsfwDetected") is True,
                     "nsfwSources": list(raw.get("nsfwSources") or []),
                     "resultUrl": _raw_result_url(raw),
+                    **_video_export_fields(raw),
                     "provenance": raw.get("result"),
                 }
             )
@@ -3321,6 +3388,7 @@ class ProjectsApi(EventEmitter):
                     frame["nsfwDetected"] = job["nsfwDetected"]
                 if isinstance(job.get("nsfwSources"), list):
                     frame["nsfwSources"] = job["nsfwSources"]
+                frame.update(_video_export_fields(job, ("lastFrameUrl", "outputFormat")))
                 if isinstance(job.get("result"), dict):
                     frame.update(_job_provenance_from_result(job["result"]) or {})
                 await self._apply_job_result(frame)
@@ -4296,11 +4364,13 @@ class ProjectsApi(EventEmitter):
         with contextlib.suppress(KeyError, TypeError, ValueError):
             seed = int(data["lastSeed"])
         provenance = _job_provenance_from_result(data)
+        export = _video_export_fields(data)
         if job is not None:
             delta: dict[str, Any] = {
                 "status": "canceled" if canceled else "completed",
                 "seed": seed if seed is not None else job.seed,
                 "resultUrl": url,
+                **export,
                 "isNSFW": nsfw,
                 "nsfwDetected": detected,
                 "nsfwSources": sources,
@@ -4316,6 +4386,11 @@ class ProjectsApi(EventEmitter):
             "projectId": data.get("jobID"),
             "jobId": data.get("imgID"),
             "resultUrl": url,
+            **{
+                field: export[field]
+                for field in ("lastFrameUrl", "outputFormat")
+                if field in export
+            },
             "isNSFW": nsfw,
             "nsfwDetected": detected,
             "nsfwSources": sources,

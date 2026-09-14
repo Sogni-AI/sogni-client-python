@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
@@ -160,6 +161,10 @@ class FakeProjects:
 
 class FakeToolProject(EventEmitter):
     id = "project-1"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.jobs: list[Any] = []
 
     async def wait_for_completion(self, _timeout: float | None = None) -> list[str]:
         self.emit("progress", 75)
@@ -874,6 +879,41 @@ async def test_chat_tools_execute_all_routes_progress_with_python_alias() -> Non
         "completed",
     ]
     assert all(current is call for current, _ in updates)
+
+
+@pytest.mark.asyncio
+async def test_chat_tools_forward_seedance_export_options_and_report_last_frames() -> None:
+    class VideoProjects(FakeProjects):
+        async def wait_for_models(self, _timeout: float) -> list[dict[str, Any]]:
+            return [{"id": "seedance-2-5", "media": "video", "workerCount": 4}]
+
+    projects = VideoProjects()
+    projects.project.jobs = [
+        SimpleNamespace(last_frame_url="https://cdn.example/last-1.png"),
+        SimpleNamespace(last_frame_url=None),
+    ]
+    api = ChatToolsApi(projects)  # type: ignore[arg-type]
+    call = tool_call(
+        "generate_video",
+        '{"prompt":"Harbor at dusk","outputFormat":"mov","returnLastFrame":true}',
+    )
+
+    result = await api.execute(call)
+
+    assert result["success"] is True
+    created = projects.created[0]
+    assert created["outputFormat"] == "mov"
+    assert created["returnLastFrame"] is True
+    assert json.loads(result["content"])["lastFrameUrls"] == [
+        "https://cdn.example/last-1.png",
+        None,
+    ]
+
+    # Without an exported frame the tool result keeps its previous shape.
+    projects.project.jobs = [SimpleNamespace(last_frame_url=None)]
+    plain = await api.execute(tool_call("generate_video", '{"prompt":"Harbor at dusk"}'))
+    assert "returnLastFrame" not in projects.created[1]
+    assert "lastFrameUrls" not in json.loads(plain["content"])
 
 
 @pytest.mark.asyncio

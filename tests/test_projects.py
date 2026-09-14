@@ -560,6 +560,182 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
     assert seedance["seedanceTaskType"] == "reference"
 
 
+def _seedance_request(**overrides: Any) -> dict[str, Any]:
+    return create_job_request_message(
+        "00000000-0000-4000-8000-000000000001",
+        {
+            "type": "video",
+            "modelId": "seedance-2-5",
+            "positivePrompt": "Continue @Video1 after the final frame.",
+            "numberOfMedia": 1,
+            "duration": 5,
+            "width": 1280,
+            "height": 720,
+            **overrides,
+        },
+        model_options("video"),
+    )
+
+
+def test_seedance25_export_options_reach_the_wire_and_are_validated() -> None:
+    exported = _seedance_request(outputFormat="mov", returnLastFrame=True)
+    assert exported["outputFormat"] == "mov"
+    assert exported["keyFrames"][0]["returnLastFrame"] is True
+    assert _seedance_request()["outputFormat"] == "mp4"
+    assert "returnLastFrame" not in _seedance_request()["keyFrames"][0]
+    # An explicit false is forwarded, like the TypeScript SDK.
+    assert _seedance_request(returnLastFrame=False)["keyFrames"][0]["returnLastFrame"] is False
+
+    with pytest.raises(ApiError, match=r"^Video outputFormat must be mp4 or mov\.$") as raised:
+        _seedance_request(outputFormat="avi")
+    assert raised.value.status == 400
+    with pytest.raises(ApiError, match=r"^MOV output is supported only by Seedance 2\.5\.$"):
+        _seedance_request(modelId="seedance-2-0", outputFormat="mov")
+    with pytest.raises(ApiError, match=r"^Last-frame export is supported only by Seedance 2\.5\.$"):
+        _seedance_request(modelId="seedance-2-0", returnLastFrame=True)
+    with pytest.raises(ApiError, match=r"^returnLastFrame must be a boolean\.$"):
+        _seedance_request(returnLastFrame="true")
+    # Other video models keep mp4, which stays valid everywhere.
+    assert _seedance_request(modelId="seedance-2-0", outputFormat="mp4")["outputFormat"] == "mp4"
+
+
+def _seedance_project(api: ProjectsApi) -> Project:
+    project = Project(
+        {
+            "type": "video",
+            "modelId": "seedance-2-5",
+            "positivePrompt": "Harbor at dusk",
+            "numberOfMedia": 1,
+            "outputFormat": "mov",
+            "returnLastFrame": True,
+        },
+        api,
+    )
+    api._projects.append(project)
+    return project
+
+
+@pytest.mark.asyncio
+async def test_seedance25_job_result_carries_the_exported_last_frame() -> None:
+    api = ProjectsApi(FakeClient())
+    project = _seedance_project(api)
+    events: list[dict[str, Any]] = []
+    api.on("job", events.append)
+    api._handle_job_state({"type": "jobStarted", "jobID": project.id, "imgID": "clip-1"})
+
+    await api._apply_job_result(
+        {
+            "jobID": project.id,
+            "imgID": "clip-1",
+            "resultUrl": "https://cdn.example/clip.mov",
+            "lastFrameUrl": "https://cdn.example/clip-last.png",
+            "lastFrameKey": "clip-1/lastFrame.png",
+            "outputFormat": "mov",
+            "triggeredNSFWFilter": False,
+        }
+    )
+
+    job = project.job("clip-1")
+    assert job is not None
+    assert job.last_frame_url == job.lastFrameUrl == "https://cdn.example/clip-last.png"
+    assert job.to_dict()["lastFrameKey"] == "clip-1/lastFrame.png"
+    assert job.to_dict()["outputFormat"] == "mov"
+    completed = [event for event in events if event.get("type") == "completed"]
+    assert completed[-1]["lastFrameUrl"] == "https://cdn.example/clip-last.png"
+    assert completed[-1]["outputFormat"] == "mov"
+    assert "lastFrameKey" not in completed[-1]
+
+    api.media_download_url = AsyncMock(return_value="https://cdn.example/clip-last-fresh.png")
+    assert await job.get_last_frame_url() == "https://cdn.example/clip-last-fresh.png"
+    api.media_download_url.assert_awaited_once_with(
+        {"jobId": project.id, "id": "clip-1", "type": "complete", "artifact": "lastFrame"}
+    )
+    assert job.last_frame_url == "https://cdn.example/clip-last-fresh.png"
+
+    # A result without export fields leaves the job's known values alone.
+    await job._sync_with_rest_data({"imgID": "clip-1", "status": "jobCompleted"})
+    assert job.last_frame_url == "https://cdn.example/clip-last-fresh.png"
+    assert job.to_dict()["outputFormat"] == "mov"
+
+
+@pytest.mark.asyncio
+async def test_seedance25_export_fields_are_read_from_rest_records_and_receipts() -> None:
+    api = ProjectsApi(FakeClient())
+    project = _seedance_project(api)
+    api.get = AsyncMock(
+        return_value={
+            "status": "completed",
+            "imageCount": 1,
+            "completedWorkerJobs": [
+                {
+                    "imgID": "rest-clip",
+                    "status": "jobCompleted",
+                    "worker": {"name": "seedance"},
+                    "resultUrl": "https://cdn.example/rest.mov",
+                    "result": {
+                        "lastFrameUrl": "https://cdn.example/rest-last.png",
+                        "lastFrameKey": "rest-clip/lastFrame.png",
+                        "outputFormat": "mov",
+                    },
+                },
+            ],
+        }
+    )
+
+    await project._sync_to_server()
+
+    job = project.job("rest-clip")
+    assert job is not None
+    assert job.last_frame_url == "https://cdn.example/rest-last.png"
+    assert job.to_dict()["lastFrameKey"] == "rest-clip/lastFrame.png"
+    assert job.to_dict()["outputFormat"] == "mov"
+
+    # A top-level field wins over the receipt.
+    await job._sync_with_rest_data(
+        {
+            "imgID": "rest-clip",
+            "status": "jobCompleted",
+            "lastFrameUrl": "https://cdn.example/top-level-last.png",
+            "result": {"lastFrameUrl": "https://cdn.example/receipt-last.png"},
+        }
+    )
+    assert job.last_frame_url == "https://cdn.example/top-level-last.png"
+
+
+@pytest.mark.asyncio
+async def test_seedance25_replayed_completion_carries_the_exported_last_frame() -> None:
+    api = ProjectsApi(FakeClient())
+    project = _seedance_project(api)
+    events: list[dict[str, Any]] = []
+    api.on("job", events.append)
+
+    await api._replay_raw_project(
+        project,
+        {
+            "completedWorkerJobs": [
+                {
+                    "imgID": "replayed-clip",
+                    "status": "jobCompleted",
+                    "resultUrl": "https://cdn.example/replayed.mov",
+                    "result": {
+                        "lastFrameUrl": "https://cdn.example/replayed-last.png",
+                        "outputFormat": "mov",
+                    },
+                }
+            ]
+        },
+        False,
+    )
+
+    completed = [event for event in events if event.get("type") == "completed"]
+    assert completed[-1]["jobId"] == "replayed-clip"
+    assert completed[-1]["lastFrameUrl"] == "https://cdn.example/replayed-last.png"
+    assert completed[-1]["outputFormat"] == "mov"
+    job = project.job("replayed-clip")
+    assert job is not None
+    assert job.last_frame_url == "https://cdn.example/replayed-last.png"
+
+
 @pytest.mark.asyncio
 async def test_queue_eta_liveness_and_eta_confidence_are_observable() -> None:
     client = FakeClient()

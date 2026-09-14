@@ -645,6 +645,10 @@ class ChatToolsApi:
                 if compression is not None:
                     project_params["gptImageOutputCompression"] = compression
             if media == "video":
+                # Seedance 2.5 export options; projects.create validates them.
+                return_last_frame = args.get("returnLastFrame", args.get("return_last_frame"))
+                if return_last_frame is not None:
+                    project_params["returnLastFrame"] = return_last_frame
                 project_params.setdefault("fps", 30 if is_wan3_model(model_id) else 24)
                 project_params.setdefault("duration", 6 if is_minimax_h3_model(model_id) else 5)
                 project_params.setdefault("width", 768)
@@ -667,15 +671,11 @@ class ChatToolsApi:
             urls = await project.wait_for_completion(timeout)
             if callable(on_progress):
                 on_progress({"status": "completed", "percent": 100, "resultUrls": urls})
-            content = json.dumps(
-                {
-                    "success": True,
-                    "media_type": media,
-                    "urls": urls,
-                    "model": model_id,
-                    "prompt": args.get("prompt", ""),
-                }
-            )
+            result: dict[str, Any] = {"success": True, "media_type": media, "urls": urls}
+            if any(job.last_frame_url for job in project.jobs):
+                result["lastFrameUrls"] = [job.last_frame_url for job in project.jobs]
+            result.update({"model": model_id, "prompt": args.get("prompt", "")})
+            content = json.dumps(result)
             return {
                 "toolCallId": tool_call.get("id"),
                 "toolName": name,
