@@ -44,6 +44,29 @@ SEND_READY_TIMEOUT_SECONDS = 30.0
 # silent this long, send anyway rather than stall on an older server.
 AUTHENTICATED_FALLBACK_SECONDS = 10.0
 READY_POLL_SECONDS = 0.1
+PLAIN_TEXT_ERROR_MAX_LENGTH = 500
+ERROR_BODY_EXCERPT_LENGTH = 200
+
+
+def _non_json_error_message(response: httpx.Response, text: str) -> str:
+    """Message for a non-2xx response whose body is not a JSON object.
+
+    A plain-text body is the server's own explanation (sogni-socket answers a held
+    model with "MiniMax H3 Latent Upscaler (Community) will be available soon."), so
+    it is the message. The HTTP reason phrase only labels an empty body or a
+    gateway's HTML error page, which gets a short excerpt instead. Matches the
+    TypeScript SDK's RestClient.
+    """
+
+    body = " ".join(text.split())
+    status = response.reason_phrase or f"HTTP {response.status_code}"
+    if not body:
+        return status
+    if not body.startswith("<"):
+        if len(body) > PLAIN_TEXT_ERROR_MAX_LENGTH:
+            return f"{body[:PLAIN_TEXT_ERROR_MAX_LENGTH]}…"
+        return body
+    return f"{status}: {body[:ERROR_BODY_EXCERPT_LENGTH]}"
 
 
 def _is_not_recoverable(code: int) -> bool:
@@ -153,13 +176,9 @@ class RestClient:
             if isinstance(parsed, dict):
                 payload = parsed
             else:
-                excerpt = " ".join(text[:200].split())
-                message = response.reason_phrase or f"HTTP {response.status_code}"
-                if excerpt:
-                    message = f"{message}: {excerpt}"
                 payload = {
                     "status": "error",
-                    "message": message,
+                    "message": _non_json_error_message(response, text),
                     "errorCode": response.status_code,
                 }
             raise ApiError(response.status_code, payload)

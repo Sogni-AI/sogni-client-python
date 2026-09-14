@@ -161,6 +161,35 @@ async def test_rest_client_non_json_error_preserves_status_and_body_excerpt() ->
     assert "upstream unavailable" in str(raised.value)
 
 
+HOLD_MESSAGE = "MiniMax H3 Latent Upscaler (Community) will be available soon."
+
+
+async def _rest_error(status: int, text: str) -> ApiError:
+    fake = FakeHttpClient([response(status, text=text)])
+    client = RestClient("https://api.sogni.ai", ApiKeyAuthManager(), http_client=fake)
+    with pytest.raises(ApiError) as raised:
+        await client.get("/api/v1/job-video/estimate/spark/minimax-h3/672/384/124/24/4/1")
+    return raised.value
+
+
+@pytest.mark.asyncio
+async def test_rest_client_plain_text_error_body_is_the_message() -> None:
+    # The socket refuses a held model with plain text; "Bad Request" must not lead it.
+    error = await _rest_error(400, f"{HOLD_MESSAGE}\n")
+
+    assert str(error) == HOLD_MESSAGE
+    assert error.payload == {"status": "error", "message": HOLD_MESSAGE, "errorCode": 400}
+
+
+@pytest.mark.asyncio
+async def test_rest_client_non_json_error_message_rules() -> None:
+    html = f"<html><head><title>502 Bad Gateway</title></head><body>{'x' * 1000}</body></html>"
+
+    assert str(await _rest_error(503, "")) == "Service Unavailable"
+    assert str(await _rest_error(502, html)) == f"Bad Gateway: {html[:200]}"
+    assert str(await _rest_error(400, "y" * 900)) == f"{'y' * 500}…"
+
+
 @pytest.mark.asyncio
 async def test_rest_client_clears_authentication_on_401_before_raising() -> None:
     auth = ApiKeyAuthManager()
