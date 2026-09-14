@@ -88,7 +88,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_video",
       "sdkToolName": "generate_video",
-      "hostedSchemaSha256": "306686b563063d0c39f02664b36123f03a99220a176d8523c5e4a3176b7947b1",
+      "hostedSchemaSha256": "ce630a28d212484ee9f78370fd68ee4f31c0d2bd5065757385b5e6f5fe8667cb",
       "hostedRequired": [
         "prompt"
       ],
@@ -114,7 +114,9 @@
         "aspectRatio",
         "voicePersonaName",
         "loras",
-        "loraStrengths"
+        "loraStrengths",
+        "outputFormat",
+        "returnLastFrame"
       ],
       "argumentAliasTargets": [
         "prompt",
@@ -137,7 +139,7 @@
       "executionMode": "direct",
       "hostedToolName": "animate_photo",
       "sdkToolName": "animate_photo",
-      "hostedSchemaSha256": "72b9cbea1e63910fea4ac1086185768ec25424ab3f6ccc60b032da8a6b9549aa",
+      "hostedSchemaSha256": "f32c6c9e94bbd704d12579c8b2a6ce73320b628e4be9c0c081772036f910ba7a",
       "hostedRequired": [
         "prompt"
       ],
@@ -186,7 +188,7 @@
       "executionMode": "direct",
       "hostedToolName": "sound_to_video",
       "sdkToolName": "sound_to_video",
-      "hostedSchemaSha256": "66bb9fb390dee61b2dac27679e89fb3a18c6c5ab4b69510b387f14ba0615fa6b",
+      "hostedSchemaSha256": "6f6adb87499b191fadae9872bb216a755426f25eb4de3c76c81191427df1f6ec",
       "hostedRequired": [
         "prompt"
       ],
@@ -206,7 +208,9 @@
         "generateAudio",
         "numberOfVariations",
         "targetResolution",
-        "aspectRatio"
+        "aspectRatio",
+        "outputFormat",
+        "returnLastFrame"
       ],
       "argumentAliasTargets": [
         "prompt",
@@ -227,7 +231,7 @@
       "executionMode": "direct",
       "hostedToolName": "video_to_video",
       "sdkToolName": "video_to_video",
-      "hostedSchemaSha256": "e59293e3a56dc6a0620fb05f72a8be8efb37a536d9bb9237602f1be7b1b04014",
+      "hostedSchemaSha256": "2f062f23263972ff719990ff0b99b594980f2c8f844abf743a2bc97187f88980",
       "hostedRequired": [
         "prompt"
       ],
@@ -245,7 +249,9 @@
         "outpaintAspectRatio",
         "maskImageIndex",
         "duration",
-        "numberOfVariations"
+        "numberOfVariations",
+        "outputFormat",
+        "returnLastFrame"
       ],
       "argumentAliasTargets": [
         "prompt",
