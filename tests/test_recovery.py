@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from sogni_client.errors import ApiError
+from sogni_client.errors import ApiError, ProjectError
 from sogni_client.events import EventEmitter
 from sogni_client.projects import Project, ProjectsApi
 from sogni_client.recovery import (
@@ -349,6 +349,113 @@ async def test_a_project_the_socket_lists_is_not_looked_up_again() -> None:
 
     assert await api.resolve_missing(["LATE"]) == {"LATE": {"state": "active"}}
     assert [call["path"] for call in client.rest.calls] == ["/v1/projects/LATE"]
+
+
+@pytest.mark.parametrize("status", ["failed", "canceled"])
+async def test_missing_project_accepts_confirmed_terminal_status(status: str) -> None:
+    snapshot = {"id": "P", "status": status, "finished": True}
+    client = FakeClient(
+        [ApiError(404, {}), {"data": {"project": snapshot}}],
+        {"/api/v1/artist/projects/active": {"projects": []}},
+    )
+    api = ProjectsApi(client)
+
+    assert await api.resolve_missing(["P"], attempts=1) == {
+        "P": {"state": "terminal", "project": snapshot}
+    }
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    [
+        ({"id": "P", "status": "completed", "finished": True}, "unknown"),
+        ({"id": "P", "status": "failed", "finished": False}, "lost"),
+        ({"id": "P", "status": "canceled", "finished": False}, "lost"),
+        ({"id": "OTHER", "status": "failed", "finished": True}, "lost"),
+        ({"id": "P", "status": "processing", "finished": False}, "active"),
+    ],
+)
+async def test_missing_project_requires_matching_confirmed_terminal_status(
+    snapshot: dict[str, Any], expected: str
+) -> None:
+    client = FakeClient(
+        [ApiError(404, {}), {"data": {"project": snapshot}}],
+        {"/api/v1/artist/projects/active": {"projects": []}},
+    )
+    api = ProjectsApi(client)
+    assert (await api.resolve_missing(["P"], attempts=1))["P"]["state"] == expected
+
+
+@pytest.mark.parametrize("status", ["failed", "canceled"])
+@pytest.mark.parametrize("compact", [True, False])
+async def test_terminal_recovery_settles_known_jobs_and_preserves_results(
+    status: str, compact: bool
+) -> None:
+    client = FakeClient(socket_responses={"/api/v1/artist/projects/active": {"projects": []}})
+    api = ProjectsApi(client)
+    api._recovery_tuning["missing_project_attempts"] = 1
+    api._recovery_tuning["recently_created_grace_seconds"] = 0
+    project = Project({"type": "image", "modelId": "m", "numberOfMedia": 4}, api, id="P")
+    api._projects.append(project)
+    for index, job_status in enumerate(["completed", "pending", "initiating", "processing"]):
+        job = project._add_job({"id": f"J{index}", "projectId": "P", "status": "pending"})
+        job._update({"status": job_status})
+    delivered = project.jobs[0]
+    delivered._update({"resultUrl": "https://cdn.example/result.png"})
+    project._update({"status": "processing"})
+    job_events: list[dict[str, Any]] = []
+    project_events: list[dict[str, Any]] = []
+    api.on("job", job_events.append)
+    api.on("project", project_events.append)
+    waiting = asyncio.create_task(project.wait_for_completion())
+    await asyncio.sleep(0)
+    snapshot = {"id": "P", "status": status, "finished": True, "reason": "allJobsCompleted"}
+    if compact:
+        client.rest.responses.extend([ApiError(404, {}), {"data": {"project": snapshot}}])
+    else:
+        client.rest.responses.append(
+            {
+                "data": {
+                    "project": {
+                        **snapshot,
+                        "status": "errored" if status == "failed" else "cancelled",
+                    }
+                }
+            }
+        )
+
+    try:
+        result = await api._reconcile({}, "manual", time.time() + 1)
+        assert result["completed"] == ["P"]
+        assert result["unverified"] == []
+        assert project.status == status
+        assert [job.status for job in project.jobs] == ["completed", status, status, status]
+        assert project.result_urls == ["https://cdn.example/result.png"]
+        assert all(job._runtime_timeout is None for job in project.jobs)
+        assert project._timeout_handle is None
+        assert [event["jobId"] for event in job_events] == ["J1", "J2", "J3"]
+        expected_code = "genfailure" if status == "failed" else "artistCanceled"
+        assert all(event["error"]["originalCode"] == expected_code for event in job_events)
+        assert project_events[-1]["error"]["originalCode"] == expected_code
+        with pytest.raises(ProjectError):
+            await asyncio.wait_for(asyncio.shield(waiting), timeout=0.1)
+
+        count = len(job_events)
+        await api._reconcile({}, "manual", time.time() + 2)
+        assert len(job_events) == count
+        for job in project.jobs:
+            client.socket.emit("jobError", {"jobID": "P", "imgID": job.id, "error": "late"})
+        assert [job.status for job in project.jobs] == ["completed", status, status, status]
+        assert project.result_urls == ["https://cdn.example/result.png"]
+    finally:
+        waiting.cancel()
+        with contextlib.suppress(asyncio.CancelledError, ProjectError):
+            await waiting
+        if project._completion.done() and not project._completion.cancelled():
+            project._completion.exception()
+        stop_timers(api)
+        for job in project.jobs:
+            job._stop_runtime_timeout()
 
 
 async def test_get_status_reads_the_live_lookup_and_get_keeps_its_v1_path() -> None:
