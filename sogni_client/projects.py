@@ -3206,12 +3206,14 @@ class ProjectsApi(EventEmitter):
         a request that was only registered after the snapshot was taken.
 
         Each id resolves to one of ``{"state": "finished", "project": ...}``,
+        ``{"state": "terminal", "project": ...}`` for a confirmed failure or
+        cancellation whose full result record is absent,
         ``{"state": "active"}``, ``{"state": "lost"}``, or
         ``{"state": "unknown", "error": ...}`` when a transport error prevented a
         verdict (nothing is changed in that case). Before an id is declared lost
         the owner-scoped live lookup (:meth:`get_status`) is asked too: a pending,
-        queued or processing answer makes it ``active``, and a finished answer
-        whose record is not stored yet makes it ``unknown``.
+        queued or processing answer makes it ``active``, and a successful answer
+        whose result record is not stored yet makes it ``unknown``.
         """
 
         max_attempts = max(1, attempts or int(self._recovery_tuning["missing_project_attempts"]))
@@ -3244,9 +3246,9 @@ class ProjectsApi(EventEmitter):
             # the list could not be fetched.
             live = await self._list_active_project_ids()
             # Before failing anything, ask the owner-scoped live lookup. It can
-            # only rescue a project: a positive in-flight answer means "active",
-            # and a finished answer whose full record has not reached the
-            # terminal REST store yet stays unverified for the next sync.
+            # confirm an active project or a terminal failure/cancellation.
+            # A successful completion still needs its full result record and
+            # stays unverified until that record arrives.
             # Anything else, including an unauthenticated client or an older API
             # without the lookup, keeps the "lost" verdict.
             unlisted = [project_id for project_id in pending if not (live and project_id in live)]
@@ -3273,6 +3275,8 @@ class ProjectsApi(EventEmitter):
             return None
         if not project.get("finished") and project.get("status") in _IN_FLIGHT_LOOKUP_STATUSES:
             return {"state": "active"}
+        if project.get("finished") is True and project.get("status") in {"failed", "canceled"}:
+            return {"state": "terminal", "project": project}
         if project.get("finished") is True:
             return {
                 "state": "unknown",
@@ -3386,6 +3390,17 @@ class ProjectsApi(EventEmitter):
                 state = resolution.get("state")
                 if state == "finished":
                     await self._replay_raw_project(project, resolution["project"], False)
+                    result["completed"].append(project.id)
+                elif state == "terminal":
+                    terminal = resolution["project"]
+                    await self._replay_raw_project(
+                        project,
+                        {
+                            **terminal,
+                            "status": "errored" if terminal["status"] == "failed" else "cancelled",
+                        },
+                        False,
+                    )
                     result["completed"].append(project.id)
                 elif state == "active":
                     project._keep_alive()
@@ -3547,7 +3562,21 @@ class ProjectsApi(EventEmitter):
             self._handle_job_state({"type": "jobCompleted", "jobID": project_id})
         elif status == "errored":
             reason = raw.get("reason") if isinstance(raw.get("reason"), str) else ""
-            reason = reason or "genfailure"
+            reason = reason if reason and reason != "allJobsCompleted" else "genfailure"
+            # Compact status snapshots omit jobs. Settle every known unfinished
+            # attempt before the parent, preserving already delivered results.
+            for job in project.jobs:
+                if job.finished:
+                    continue
+                self._handle_job_error(
+                    {
+                        "jobID": project_id,
+                        "imgID": job.id,
+                        "isFromWorker": True,
+                        "error": reason,
+                        "error_message": reason,
+                    }
+                )
             self._handle_job_error(
                 {
                     "jobID": project_id,
@@ -3557,6 +3586,19 @@ class ProjectsApi(EventEmitter):
                 }
             )
         elif status == "cancelled":
+            for job in project.jobs:
+                if job.finished:
+                    continue
+                job._update({"status": "canceled", "error": None})
+                self._handle_job_error(
+                    {
+                        "jobID": project_id,
+                        "imgID": job.id,
+                        "isFromWorker": False,
+                        "error": "artistCanceled",
+                        "error_message": "artistCanceled",
+                    }
+                )
             # Route through the regular error path so API-level listeners learn
             # about the cancellation too, then settle the instance on `canceled`.
             self._handle_job_error(
@@ -4549,7 +4591,7 @@ class ProjectsApi(EventEmitter):
             project._update({"status": "failed", "error": error})
             return
         _, job = self._ensure_job(data)
-        if not job:
+        if not job or job.finished:
             return
         job._update({"status": "failed", "error": error})
         all_started = len(project.jobs) >= project.params.get("numberOfMedia", 1)
