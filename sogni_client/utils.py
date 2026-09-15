@@ -62,9 +62,6 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
     "minimax-h3-fastvideo-int8_i2v_turbo_2stage",
     "minimax-h3-fastvideo-int8_flf2v_turbo_2stage",
-    "minimax-h3-fastvideo-int8_t2v_turbo_2stage_720p",
-    "minimax-h3-fastvideo-int8_i2v_turbo_2stage_720p",
-    "minimax-h3-fastvideo-int8_flf2v_turbo_2stage_720p",
     "minimax-h3-fastvideo-int8_ia2v_turbo",
     "minimax-h3-fastvideo-int8_flfa2v_turbo",
     "minimax-h3-fastvideo-int8_a2v_turbo",
@@ -79,7 +76,7 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
 }
 _MINIMAX_H3_TURBO_PATTERN = re.compile(
     r"^minimax-h3-(?:fl2va-fp8_(?:t2v|i2v|flf2v)_turbo"
-    r"|fastvideo-int8_(?:t2v|i2v|flf2v)_turbo(?:_2stage(?:_720p)?)?"
+    r"|fastvideo-int8_(?:t2v|i2v|flf2v)_turbo(?:_2stage)?"
     r"|fastvideo-int8_(?:ia2v|flfa2v|a2v)_turbo(?:_2stage)?)$"
 )
 _MINIMAX_H3_BALANCED_PATTERN = re.compile(r"^minimax-h3-fl2va-fp8_(?:t2v|i2v|flf2v)_balanced$")
@@ -190,11 +187,12 @@ def is_minimax_h3_turbo_model(model_id: str) -> bool:
     ia2v/flfa2v/a2v audio guide; Ref2VA uses its dedicated r2v Turbo LoRA.
     FastH3 has no r2v mode. The FastH3 Two-Stage ids
     (``..._turbo_2stage``) share FastH3's 4-step sampling and request; they
-    deliver the clip at twice the canvas width and height. The FastH3 Two-Stage
-    720p ids (``..._turbo_2stage_720p``) are the half-size 384 px canvas render of
-    768p output: the socket records 384 px ``_2stage`` requests (and, once
-    two-stage is open, ordinary 768p FastH3) under them; callers do not need to
-    send them.
+    deliver the clip at twice the canvas width and height, and one ``_2stage``
+    id per workflow serves every canvas class (672x384 for 720p, 960x544 for
+    1080p, 1344x768 for 2K). Only a ``_2stage`` id renders two-stage: a base
+    FastH3 id always runs one-stage at the canvas it sends. The short-lived
+    ``..._turbo_2stage_720p`` spellings were retired by the socket on
+    2026-09-14 and are not MiniMax H3 ids.
     """
 
     return bool(_MINIMAX_H3_TURBO_PATTERN.match(model_id)) or (

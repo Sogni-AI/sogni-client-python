@@ -1590,22 +1590,13 @@ _MINIMAX_H3_TWO_STAGE_IDS = {
         "minimax-h3-fastvideo-int8_flf2v_turbo",
     ),
 }
-# The socket records 384 px two-stage renders under these ids; the SDK knows them
-# as FastH3-class H3 video ids so their projects and results are handled.
-_MINIMAX_H3_TWO_STAGE_720P_IDS = {
-    "t2v": (
-        "minimax-h3-fastvideo-int8_t2v_turbo_2stage_720p",
-        "minimax-h3-fastvideo-int8_t2v_turbo",
-    ),
-    "i2v": (
-        "minimax-h3-fastvideo-int8_i2v_turbo_2stage_720p",
-        "minimax-h3-fastvideo-int8_i2v_turbo",
-    ),
-    "flf2v": (
-        "minimax-h3-fastvideo-int8_flf2v_turbo_2stage_720p",
-        "minimax-h3-fastvideo-int8_flf2v_turbo",
-    ),
-}
+# Retired by the socket on 2026-09-14: one ``_2stage`` id per workflow serves
+# every canvas class, so these spellings are not MiniMax H3 ids any more.
+_MINIMAX_H3_RETIRED_720P_IDS = (
+    "minimax-h3-fastvideo-int8_t2v_turbo_2stage_720p",
+    "minimax-h3-fastvideo-int8_i2v_turbo_2stage_720p",
+    "minimax-h3-fastvideo-int8_flf2v_turbo_2stage_720p",
+)
 _MINIMAX_H3_TIERS = {
     20: (
         "minimax-h3-fl2va-fp8_t2v",
@@ -1625,7 +1616,6 @@ _MINIMAX_H3_TIERS = {
         "minimax-h3-fl2va-fp8_flf2v_turbo",
         "minimax-h3-ref2va-fp8_r2v_turbo",
         *(ids for pair in _MINIMAX_H3_TWO_STAGE_IDS.values() for ids in pair),
-        *(model_id for model_id, _base_id in _MINIMAX_H3_TWO_STAGE_720P_IDS.values()),
     ),
 }
 
@@ -1705,27 +1695,12 @@ def test_minimax_h3_two_stage_ids_are_fasth3_requests_delivered_at_twice_the_can
             )
 
 
-def test_minimax_h3_two_stage_720p_ids_are_fasth3_class_video_ids() -> None:
-    for workflow, (model_id, base_id) in _MINIMAX_H3_TWO_STAGE_720P_IDS.items():
-        assert is_video_model(model_id)
-        assert is_minimax_h3_model(model_id)
-        assert is_minimax_h3_turbo_model(model_id)
+def test_minimax_h3_retired_720p_two_stage_ids_are_not_h3_ids() -> None:
+    for model_id in _MINIMAX_H3_RETIRED_720P_IDS:
+        assert not is_minimax_h3_model(model_id)
+        assert not is_minimax_h3_turbo_model(model_id)
         assert not is_minimax_h3_balanced_model(model_id)
         assert not is_minimax_h3_reference_model(model_id)
-        assert get_video_workflow_type(model_id) == workflow
-        assert calculate_video_frames(model_id, 6, 24) == calculate_video_frames(base_id, 6, 24)
-        sent = create_job_request_message(
-            "h3-2stage-720p",
-            _h3_params(model_id, 4, width=672, height=384),
-            model_options("video"),
-        )["keyFrames"][0]
-        base = create_job_request_message(
-            "h3-fasth3",
-            _h3_params(base_id, 4, width=672, height=384),
-            model_options("video"),
-        )["keyFrames"][0]
-        assert sent["modelID"] == model_id
-        assert {**sent, "modelID": base_id} == base
 
 
 _RETIRED_OUTPUT_SCALE = (
@@ -1753,7 +1728,7 @@ def test_minimax_h3_requests_refuse_the_retired_output_scale() -> None:
                     )
                 assert raised.value.status == 400
             covered += 1
-    assert covered == 21
+    assert covered == 18
 
     # The retired field is refused on every video model, not only on MiniMax H3.
     with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):
