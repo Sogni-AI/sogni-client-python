@@ -4079,13 +4079,12 @@ class ProjectsApi(EventEmitter):
             model_id = data.get("modelId")
             return {
                 **catalog,
-                "loras": catalog["loras"] + [
-                    row for row in personal["loras"]
-                    if not model_id or model_id in row["modelIds"]
-                ],
-                "models": sorted(set(catalog["models"]) | {
-                    model for row in personal["loras"] for model in row["modelIds"]
-                }),
+                "loras": catalog["loras"]
+                + [row for row in personal["loras"] if not model_id or model_id in row["modelIds"]],
+                "models": sorted(
+                    set(catalog["models"])
+                    | {model for row in personal["loras"] for model in row["modelIds"]}
+                ),
             }
         model_id = data.get("modelId")
         cache_key = model_id or ""

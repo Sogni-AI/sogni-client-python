@@ -58,15 +58,12 @@ class PersonalLoras:
         """Remove an owned entry, including after a subscription lapses."""
         await self._rest.delete(f"/v1/loras/personal/{quote(lora_id, safe='')}")
 
-    async def catalog(
-        self, params: dict[str, Any] | None = None, **kwargs: Any
-    ) -> dict[str, Any]:
+    async def catalog(self, params: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
         """Read ready imports, compatibility, and strength ranges; requires entitlement."""
         model_id = normalize_params(params, **kwargs).get("modelId")
         payload = await self._read("/v1/loras/personal/catalog")
         return {
             "loras": [
-                row for row in payload["loras"]
-                if not model_id or model_id in row["modelIds"]
+                row for row in payload["loras"] if not model_id or model_id in row["modelIds"]
             ]
         }

@@ -26,14 +26,21 @@ async def test_library_crud_preserves_consent_and_encodes_identifiers():
     rest.get.assert_awaited_with("/v1/loras/personal")
     rest.post.return_value = {"data": {"id": "personal-one", "status": "queued"}}
     imported = await library.import_lora(
-        url="https://example.com/model.safetensors", name="My style",
-        model_id="krea", rights_confirmed=True,
+        url="https://example.com/model.safetensors",
+        name="My style",
+        model_id="krea",
+        rights_confirmed=True,
     )
     assert imported["status"] == "queued"
-    rest.post.assert_awaited_with("/v1/loras/personal", {
-        "url": "https://example.com/model.safetensors", "name": "My style",
-        "modelId": "krea", "rightsConfirmed": True,
-    })
+    rest.post.assert_awaited_with(
+        "/v1/loras/personal",
+        {
+            "url": "https://example.com/model.safetensors",
+            "name": "My style",
+            "modelId": "krea",
+            "rightsConfirmed": True,
+        },
+    )
     rest.get.return_value = {"data": {"id": "personal/one?", "status": "ready"}}
     assert (await library.get("personal/one?"))["status"] == "ready"
     rest.get.assert_awaited_with("/v1/loras/personal/personal%2Fone%3F")
@@ -73,12 +80,14 @@ async def test_account_change_rejects_inflight_private_result(method):
 async def test_private_discovery_never_enters_public_catalog_cache():
     public = {"loraId": "public-one", "modelIds": ["krea"]}
     private = {"loraId": "personal-one", "modelIds": ["qwen"]}
-    client = FakeClient([
-        {"data": {"loras": [public], "models": ["krea"]}},
-        {"data": {"loras": [private]}},
-        {"data": {"loras": []}},
-        {"data": {"loras": [private]}},
-    ])
+    client = FakeClient(
+        [
+            {"data": {"loras": [public], "models": ["krea"]}},
+            {"data": {"loras": [private]}},
+            {"data": {"loras": []}},
+            {"data": {"loras": [private]}},
+        ]
+    )
     projects = ProjectsApi(client)
     assert projects.personal_loras is projects.personalLoras
     merged = await projects.available_loras(include_personal=True)
@@ -91,9 +100,11 @@ async def test_private_discovery_never_enters_public_catalog_cache():
 
 
 async def test_private_errors_surface_without_falling_back_to_public_catalog():
-    client = FakeClient([
-        {"data": {"loras": [], "models": []}},
-        ApiError(403, {"message": "An active subscription is required."}),
-    ])
+    client = FakeClient(
+        [
+            {"data": {"loras": [], "models": []}},
+            ApiError(403, {"message": "An active subscription is required."}),
+        ]
+    )
     with pytest.raises(ApiError, match="active subscription"):
         await ProjectsApi(client).available_loras(include_personal=True)
