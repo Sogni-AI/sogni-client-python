@@ -320,6 +320,30 @@ is available for callers that manage project input slots directly. Project histo
 may include `byolUsed`, `personalLoras` (public-source snapshots) and
 `reusedAssetCount`; missing fields on older projects mean unknown, not zero.
 
+## Personal LoRAs
+
+Personal imports belong to the authenticated account. Discover compatible models
+and limits through the library instead of hard-coding them:
+
+```python
+library = await sogni.projects.personal_loras.list()
+catalog = await sogni.projects.available_loras(include_personal=True)
+ready = await sogni.projects.personal_loras.catalog(model_id="krea2_turbo_fp8_scaled")
+```
+
+Use `personal_loras.import_lora(url=..., name=..., model_id=...,
+rights_confirmed=True)` only after confirming permission to use the file. Imports
+are asynchronous: poll `personal_loras.get(imported["id"])` until the status is
+`ready`, `rejected`, or `revoked`. Remove an entry with
+`personal_loras.remove(imported["id"])`.
+
+Use ready catalog IDs with their listed model compatibility and strength ranges.
+The private catalog is fetched afresh and never enters the public catalog cache.
+Importing, ready-catalog discovery, and generation require the server's active
+subscription entitlement; library inspection and removal remain available after
+it lapses. JavaScript-style `personalLoras` and `includePersonal` aliases are also
+supported; Python uses `import_lora` because `import` is a language keyword.
+
 ## Chat
 
 Socket-backed completion:
@@ -568,7 +592,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the current TypeScript source at `5.42.0`. The
+This release tracks the TypeScript SDK at `5.51.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 27 hosted-tool

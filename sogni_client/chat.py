@@ -39,6 +39,9 @@ TRANSPORT_LOST_MESSAGE = (
 )
 
 HOSTED_TOOL_NAMES = (
+    "image_to_3d",
+    "remove_background",
+    "segment_image",
     "generate_image",
     "generate_video",
     "generate_music",
@@ -107,6 +110,9 @@ def _tool_definition(name: str) -> dict[str, Any]:
 
 class _SogniTools:
     _aliases = {
+        "imageTo3d": "image_to_3d",
+        "removeBackground": "remove_background",
+        "segmentImage": "segment_image",
         "generateImage": "generate_image",
         "editImage": "edit_image",
         "generateVideo": "generate_video",

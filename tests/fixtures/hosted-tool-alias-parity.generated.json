@@ -13,7 +13,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_image",
       "sdkToolName": "generate_image",
-      "hostedSchemaSha256": "c0c2c0f18bd647df280f674cdd53318c36d0185f428cff7961a925ee4d0207fe",
+      "hostedSchemaSha256": "ac2645c0eef5494095e51cc5e42c52842c2604beca1febdd6bb67828edc63663",
       "hostedRequired": [
         "prompt"
       ],
@@ -32,7 +32,9 @@
         "outputFormat",
         "aspectRatio",
         "gptImageBackground",
-        "gptImageOutputCompression"
+        "gptImageOutputCompression",
+        "loras",
+        "loraStrengths"
       ],
       "argumentAliasTargets": [
         "prompt",
@@ -51,7 +53,7 @@
       "executionMode": "direct",
       "hostedToolName": "edit_image",
       "sdkToolName": "edit_image",
-      "hostedSchemaSha256": "18ae75cd68747582f16566cbfe035727e4769dc190574c029dfa3c9a644b3549",
+      "hostedSchemaSha256": "62a10bb6e4323418485669dd83272ed221077966531a01a4f507188ce5fdd23b",
       "hostedRequired": [
         "prompt"
       ],
@@ -68,7 +70,9 @@
         "personaName",
         "gptImageBackground",
         "gptImageOutputCompression",
-        "mask_image_url"
+        "mask_image_url",
+        "loras",
+        "loraStrengths"
       ],
       "argumentAliasTargets": [
         "prompt",
@@ -88,7 +92,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_video",
       "sdkToolName": "generate_video",
-      "hostedSchemaSha256": "ce630a28d212484ee9f78370fd68ee4f31c0d2bd5065757385b5e6f5fe8667cb",
+      "hostedSchemaSha256": "0e4fb27110bd04abc428d90684617a07a85ecf4b23303d29cd9337afb8be143d",
       "hostedRequired": [
         "prompt"
       ],
@@ -139,7 +143,7 @@
       "executionMode": "direct",
       "hostedToolName": "animate_photo",
       "sdkToolName": "animate_photo",
-      "hostedSchemaSha256": "f32c6c9e94bbd704d12579c8b2a6ce73320b628e4be9c0c081772036f910ba7a",
+      "hostedSchemaSha256": "004a5a3489c9f738a9e9f3e47cd3e5790d0ad5de12a38c798f6558ac14341af6",
       "hostedRequired": [
         "prompt"
       ],

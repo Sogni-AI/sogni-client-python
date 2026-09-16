@@ -37,6 +37,7 @@ from .errors import (
     isSubscriptionLimitError,
 )
 from .events import DataEntity, EventEmitter
+from .personal_loras import PersonalLoras
 from .projects import (
     VIDEO_WORKFLOW_ASSETS,
     Job,
@@ -96,7 +97,7 @@ from .workflows import (
     CreativeWorkflowTemplatesApi,
 )
 
-__version__ = "5.50.1"
+__version__ = "5.51.0"
 
 __all__ = [
     "BIREFNET_BACKGROUND_REMOVAL_MODEL_ID",
@@ -130,6 +131,7 @@ __all__ = [
     "DataEntity",
     "EventEmitter",
     "Job",
+    "PersonalLoras",
     "Project",
     "ProjectError",
     "ProjectsApi",

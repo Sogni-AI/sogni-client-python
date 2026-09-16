@@ -185,12 +185,15 @@ def tool_call(
 def test_sogni_tools_expose_all_canonical_names_and_helpers() -> None:
     definitions = SogniTools.all
 
-    assert len(definitions) == len(HOSTED_TOOL_NAMES) == 27
+    assert len(definitions) == len(HOSTED_TOOL_NAMES) == 30
     assert {item["function"]["name"] for item in definitions} == set(HOSTED_TOOL_NAMES)
     assert SogniTools.generateImage["function"]["name"] == "generate_image"
     assert SogniTools.upscaleImage["function"]["name"] == "upscale_image"
     assert SogniTools.upscaleVideo["function"]["name"] == "upscale_video"
     assert SogniTools.generateSpeech["function"]["name"] == "generate_speech"
+    assert SogniTools.imageTo3d["function"]["name"] == "image_to_3d"
+    assert SogniTools.removeBackground["function"]["name"] == "remove_background"
+    assert SogniTools.segmentImage["function"]["name"] == "segment_image"
     assert SogniTools.compose_workflow["function"]["name"] == "compose_workflow"
     video_to_video = next(
         item for item in definitions if item["function"]["name"] == "video_to_video"

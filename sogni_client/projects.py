@@ -19,6 +19,7 @@ from .assets import ReusableUploads
 from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ProjectError
 from .events import DataEntity, EventEmitter
+from .personal_loras import PersonalLoras
 from .recovery import (
     PROJECT_LOST_ERROR,
     is_llm_recovered_project,
@@ -2765,6 +2766,7 @@ class ProjectsApi(EventEmitter):
         self._cancellation_requests: dict[str, asyncio.Task[None]] = {}
         self._lora_catalog_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._assets: ReusableUploads | None = None
+        self._personal_loras: PersonalLoras | None = None
         self._transport_disconnected = False
         self._connected_at = 0.0
         self._authenticated_timer: asyncio.TimerHandle | None = None
@@ -2808,6 +2810,15 @@ class ProjectsApi(EventEmitter):
         client.on("connecting", self._handle_transport_lost)
         client.on("disconnected", self._handle_disconnect)
         client.on("connected", self._handle_connect)
+
+    @property
+    def personal_loras(self) -> PersonalLoras:
+        """Manage the authenticated account's private LoRA library."""
+        if self._personal_loras is None:
+            self._personal_loras = PersonalLoras(self.client.rest)
+        return self._personal_loras
+
+    personalLoras = personal_loras
 
     @property
     def available_models(self) -> list[dict[str, Any]]:
@@ -4020,6 +4031,20 @@ class ProjectsApi(EventEmitter):
         self, params: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         data = normalize_params(params, **kwargs)
+        if data.get("includePersonal"):
+            catalog = await self.available_loras({**data, "includePersonal": False})
+            personal = await self.personal_loras.catalog()
+            model_id = data.get("modelId")
+            return {
+                **catalog,
+                "loras": catalog["loras"] + [
+                    row for row in personal["loras"]
+                    if not model_id or model_id in row["modelIds"]
+                ],
+                "models": sorted(set(catalog["models"]) | {
+                    model for row in personal["loras"] for model in row["modelIds"]
+                }),
+            }
         model_id = data.get("modelId")
         cache_key = model_id or ""
         cached = self._lora_catalog_cache.get(cache_key)
@@ -4058,7 +4083,11 @@ class ProjectsApi(EventEmitter):
     availableLoras = available_loras
 
     async def get_lora(self, lora_id: str) -> dict[str, Any] | None:
-        catalog = await self.available_loras()
+        catalog = (
+            await self.personal_loras.catalog()
+            if lora_id.startswith("personal-")
+            else await self.available_loras()
+        )
         return next((item for item in catalog["loras"] if item.get("loraId") == lora_id), None)
 
     getLora = get_lora

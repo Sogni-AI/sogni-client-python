@@ -46,7 +46,7 @@
                 "pony-faetality",
                 "dreamshaper-xl"
               ],
-              "description": "DO NOT SET THIS PARAMETER unless the user names a specific model, asks for a very complex image render, asks for a video storyboard/storyboard sheet/contact sheet/panel layout image, asks for anime without naming a model, requests permitted NSFW/nudity content, or explicitly asks for Z-image/Z-image Turbo/Krea 2 Turbo image-to-image. The app auto-selects based on quality settings. Set \"gpt-image-2\" when the user asks for a ChatGPT, OpenAI, GPT, GPT-2, GPT Image, or gpt-image-2 image/model, when they explicitly request very strong text rendering, or by default for complex single-image renders that need dense labels, crisp typography, multi-panel composition, timing notes, foley notes, professional storyboard-sheet layout, or a comprehensive character/mascot/model sheet with turnarounds, expressions, accessories, palette swatches, and brand notes. Set \"one-obsession-v22\" when the user asks for an anime or anime-style image and has not named a specific image model. Set \"z-turbo\" when the user asks for Z-image Turbo; set \"z-image\" when they ask for Z-image without Turbo. Set \"krea-2-turbo\" when the user asks for Krea 2 Turbo. If the user names another image model, honor that requested model instead. A model preference usually does not change which tool to use; the Z-image and Krea 2 Turbo image-to-image exception uses sourceImageIndex plus starting_image_strength on this tool. NSFW rule: \"gpt-image-2\"/Qwen image models CANNOT do nudity. For permitted NSFW/nudity content, prefer \"dark-beast-krea2\", then \"dark-beast-z-turbo\"; \"chroma1-hd\", \"pony-v7\", \"chroma-detail\", \"chroma-v46-flash\", and \"z-turbo\" are compatible fallbacks. GPT Image 2.5 adds two distinct models: use \"gpt-image-2.5-sunburst\" for an explicit Sunburst request and \"gpt-image-2.5-flare\" for an explicit Flare request. For GPT Image 2.5 without a named variant, use Flare. Preserve explicit GPT Image 2.0 as \"gpt-image-2\". Sunburst is positioned for difficult images and precise edits; Flare for faster everyday generation. Both generate and edit. Model choice is independent of rendering quality."
+              "description": "DO NOT SET THIS PARAMETER unless the user names a specific model, asks for a very complex image render, asks for a video storyboard/storyboard sheet/contact sheet/panel layout image, asks for anime without naming a model, requests permitted NSFW/nudity content, or explicitly asks for Z-image/Z-image Turbo/Krea 2 Turbo image-to-image. The app auto-selects based on quality settings. Set \"gpt-image-2\" when the user explicitly asks for legacy GPT Image 2. Set \"gpt-image-2.5-sunburst\" by default for complex single-image renders that need very strong text rendering, dense labels, crisp typography, multi-panel composition, timing notes, foley notes, professional storyboard-sheet layout, or a comprehensive character/mascot/model sheet with turnarounds, expressions, accessories, palette swatches, and brand notes. Set \"one-obsession-v22\" when the user asks for an anime or anime-style image and has not named a specific image model. Set \"z-turbo\" when the user asks for Z-image Turbo; set \"z-image\" when they ask for Z-image without Turbo. Set \"krea-2-turbo\" when the user asks for Krea 2 Turbo. If the user names another image model, honor that requested model instead. A model preference usually does not change which tool to use; the Z-image and Krea 2 Turbo image-to-image exception uses sourceImageIndex plus starting_image_strength on this tool. NSFW rule: \"gpt-image-2\"/Qwen image models CANNOT do nudity. For permitted NSFW/nudity content, prefer \"dark-beast-krea2\", then \"dark-beast-z-turbo\"; \"chroma1-hd\", \"pony-v7\", \"chroma-detail\", \"chroma-v46-flash\", and \"z-turbo\" are compatible fallbacks. GPT Image 2.5 adds two distinct models: use \"gpt-image-2.5-sunburst\" for an explicit Sunburst request and \"gpt-image-2.5-flare\" for an explicit Flare request. For GPT Image 2.5 without a named variant, use Flare. Preserve explicit GPT Image 2.0 as \"gpt-image-2\". Sunburst is positioned for difficult images and precise edits; Flare for faster everyday generation. Both generate and edit. Model choice is independent of rendering quality."
             },
             "width": {
               "type": "number",
@@ -121,6 +121,25 @@
               "minimum": 0,
               "maximum": 100,
               "description": "Optional GPT Image JPEG/WebP output compression, from 0 to 100. Omit for PNG."
+            },
+            "loras": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Ordered LoRA IDs to apply to a compatible image model. Use only when the user explicitly requests LoRAs or asks for an effect one of these names directly. Stack up to 8 in one request; order matters because the adapters apply in sequence and do not commute. Keep this array positionally aligned with loraStrengths. The first render with an uncached LoRA takes longer to start while the worker downloads it.\n\nAccepted only by the five Krea 2 based models: krea2_turbo_fp8_scaled (text-to-image), krea2_identity_edit_v1_2 and krea2_identity_edit_sogni_v0_3_alpha (identity edit), and the dark_beast_krea2_fp8 / dark_beast_krea2_identity_edit_v1_2 community variants.\n\nBipolar sliders — each id names its POSITIVE direction, a negative strength applies the opposite, and 0 disables it: krea2-detail-enhancer, krea2-scene-complexity, krea2-realism (+ = photoreal), krea2-amateur, krea2-candid, krea2-zoom (+ = zoomed in), krea2-skin-detail, krea2-wetness, krea2-age, krea2-height, krea2-weight, krea2-hourglass-figure, krea2-breast, krea2-chest-firmness, krea2-nipple-projection, krea2-warm-light, krea2-afterlight (+ = golden), krea2-skin-tone (+ = darker), krea2-purple-grainy (+ = grainy and muted). Positive-only fine-tunes: krea2-realism-engine (photographic realism), krea2-bloomgirls (polished influencer look), krea2-mystic-x (uncensored adult), krea2-aberrant (industrial body horror), krea2-filter-bypass-2 and krea2-filter-bypass-3 (restore expressions, anatomy and poses the base model flattens; try the 2-vector first). Exact per-LoRA ranges, maturity flags and the full contract: GET /v1/loras/comfy?modelId=<model>. Personal imports use authenticated GET /v1/loras/personal/catalog: use an owned ready personal- id, its modelIds, strength range and requirements. Never invent ids or silently omit a requested personal LoRA."
+            },
+            "loraStrengths": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "number"
+              },
+              "description": "Strength for each LoRA in loras, in the same order. Omitting the array uses 1.0 for every LoRA, which is not each LoRA's catalog default — krea2-chest-firmness, krea2-nipple-projection and krea2-height default to 0 (no effect) — so prefer explicit values. Do NOT clamp to 0-1: most Krea 2 LoRAs are bipolar, so krea2-warm-light warms the grade at 2 and cools it at -2. Usable bands vary per LoRA — roughly -2..5 for krea2-detail-enhancer, -3..3 for krea2-warm-light, 3..9 for krea2-candid, 0.5..1 for krea2-realism-engine, 1..2 for the filter-bypass pair. Scale the magnitude to how strongly the user asked; the server clamps out-of-range values, and pushing past a LoRA's recommended band costs image quality rather than adding effect. Preserve explicit user values. Example: loras=[\"krea2-detail-enhancer\",\"krea2-amateur\"], loraStrengths=[3,-2]."
             }
           },
           "required": [
@@ -133,7 +152,7 @@
       "type": "function",
       "function": {
         "name": "generate_video",
-        "description": "Generate a video from text or Seedance multimodal references. LTX 2.5 is the default and generates audio natively; LTX 2.3 remains available as rollback and also generates audio natively (dialogue, sounds, ambient music) — describe audio in the prompt. If the user provides exact speech, include it in double quotes; if they only imply speech, describe the performance and voice without inventing quoted words. Never use placeholders such as \"while speaking\", \"dialogue begins\", \"explaining\", or \"final line lands\". PERSONA VOICE: Only when the user explicitly asks to use/clone a registered persona voice clip, call resolve_personas first, then set voicePersonaName to select which persona's voice clip to use. Do not set voicePersonaName for ordinary character dialogue or inferred voices; describe those voices in the prompt for native LTX audio. For cross-persona narration (e.g. David narrates a video of Aleyna), resolve both personas and set voicePersonaName to the narrator only if that registered voice was requested. Persona voice requires ltx23 because LTX 2.5 has no compatible ID-LoRA and WAN 2.2 does not support voice identity. For non-Seedance syncing to a specific song or audio track, use sound_to_video instead. For non-Seedance animation from a locked source photo, use animate_photo. Do NOT use for My Personas unless generating a Seedance reference-based video — standard persona videos use resolve_personas → edit_image → animate_photo. SEEDANCE DEFAULT: For seedance2, seedance2-mini, or seedance2-5, default to exactly one video (4-15s on 2.0/Mini, 4-30s on seedance2-5) unless the user explicitly asks for multiple separate outputs. Multiple beats, shots, or scene descriptions in one up-to-15s Seedance prompt are still one video. If the user requests one continuous Seedance video longer than 15s, prefer seedance2-5, which renders up to 30s in a single call; beyond 30s (or on 2.0/Mini) preserve the requested total duration in the prompt/context and let chat orchestration split it into supported segment renders and stitch them instead of clamping it to a short excerpt. Uploaded/generated storyboard, shot-sheet, or trailer-concept images used as Seedance references should become one Seedance generate_video call by default; do not extract panels with edit_image and do not animate the storyboard sheet with LTX unless the user explicitly asks for separate non-Seedance clips. Seedance loose image, video, and audio references go through this tool; do not use animate_photo sourceImageIndex/frameRole/endImageIndex for Seedance. If an uploaded video is the source clip to transform, upscale, enhance, restyle, or remaster, use video_to_video with controlMode=\"seedance-v2v\" instead of generate_video referenceVideoIndices. If the uploaded audio is the primary sync target, lip-sync target, or requested as sound-to-video/audio-sync, use sound_to_video with videoModel=\"seedance2-mini\" instead of this tool unless the user asks for full Seedance. Use referenceAudioIndices here only when audio is a loose reference under an image/video-anchored Seedance shot. For Seedance, every image — first frame, last frame, or loose reference — is passed through referenceImageIndices (auto-uploaded as referenceImageUrls). Anchor frame intent in the prompt with @Image tags such as \"Use @Image1 as the opening shot reference. Begin the video with a composition, subject placement, lighting, mood, and camera framing that closely match @Image1.\" (or @Image2 as the final shot reference). For seamless-loop or \"first frame and last frame identical\" requests with a single uploaded image, anchor it explicitly as both: \"Use @Image1 as both the first frame and last frame so the video loops cleanly back to the opening composition.\" Assign each useful @Image/@Video/@Audio tag a role. APPROVED STORYBOARD PRODUCTION: When the user asks for a production workflow from an approved storyboard, the chat orchestrator should use the durable CampaignStoryboard contract: render the composite board, audit it, generate per-scene GPT Image 2 keyframes, then render Seedance scene clips and stitch them. Do not replace that with a generic storyboard-reference video unless the user asks for a fast draft. PARTIAL VIDEO EDITS: Do NOT call generate_video to re-render an existing rendered/uploaded video just to change part of it (the bumper, the intro, the end card, a single scene, the last few seconds, etc.). Use replace_video_segment for that — it preserves the unchanged portion, keeps the original audio outside the replaced window, and costs far less. Likewise use extend_video to add new time to the end without rewriting the rest. If the request is vague, ask about vision/mood/style first. Only call once you have clear creative intent. WAN 3 uses the exact selector wan3.0-video: use this tool for text-to-video or loose Image 1/Video 1/Audio 1 references; use animate_photo for native first/last frames and sound_to_video when audio drives timing. A Wan 3 video reference conditions a new generation; it does not invoke a provider-backed edit or extend mode. Wan 3.0 Enhanced uses Sogni selector wan3.0-spicy-video and MuleRouter provider ID w3.0-video; use this tool for prompt-only or loose-reference generation, and never combine loose references with frame anchors.",
+        "description": "Generate a video from text or Seedance multimodal references. LTX 2.5 is the default and generates audio natively; LTX 2.3 remains available as rollback and also generates audio natively (dialogue, sounds, ambient music) — describe audio in the prompt. If the user provides exact speech, include it in double quotes; if they only imply speech, describe the performance and voice without inventing quoted words. Never use placeholders such as \"while speaking\", \"dialogue begins\", \"explaining\", or \"final line lands\". PERSONA VOICE: Only when the user explicitly asks to use/clone a registered persona voice clip, call resolve_personas first, then set voicePersonaName to select which persona's voice clip to use. Do not set voicePersonaName for ordinary character dialogue or inferred voices; describe those voices in the prompt for native LTX audio. For cross-persona narration (e.g. David narrates a video of Aleyna), resolve both personas and set voicePersonaName to the narrator only if that registered voice was requested. Persona voice requires ltx23 because LTX 2.5 has no compatible ID-LoRA and WAN 2.2 does not support voice identity. For non-Seedance syncing to a specific song or audio track, use sound_to_video instead. For non-Seedance animation from a locked source photo, use animate_photo. Do NOT use for My Personas unless generating a Seedance reference-based video — standard persona videos use resolve_personas → edit_image → animate_photo. SEEDANCE DEFAULT: For seedance2, seedance2-mini, or seedance2-5, default to exactly one video (4-15s on 2.0/Mini, 4-30s on seedance2-5) unless the user explicitly asks for multiple separate outputs. Multiple beats, shots, or scene descriptions in one up-to-15s Seedance prompt are still one video. If the user requests one continuous Seedance video longer than 15s, prefer seedance2-5, which renders up to 30s in a single call; beyond 30s (or on 2.0/Mini) preserve the requested total duration in the prompt/context and let chat orchestration split it into supported segment renders and stitch them instead of clamping it to a short excerpt. Uploaded/generated storyboard, shot-sheet, or trailer-concept images used as Seedance references should become one Seedance 2.5 generate_video call at targetResolution=1080 by default; preserve an explicitly requested model or resolution, and use Seedance 2.0 for 4K because Seedance 2.5 supports up to 1080p. Do not extract panels with edit_image and do not animate the storyboard sheet with LTX unless the user explicitly asks for separate non-Seedance clips. Seedance loose image, video, and audio references go through this tool; do not use animate_photo sourceImageIndex/frameRole/endImageIndex for Seedance. If an uploaded video is the source clip to transform, upscale, enhance, restyle, or remaster, use video_to_video with controlMode=\"seedance-v2v\" instead of generate_video referenceVideoIndices. If the uploaded audio is the primary sync target, lip-sync target, or requested as sound-to-video/audio-sync, use sound_to_video with videoModel=\"seedance2-mini\" instead of this tool unless the user asks for full Seedance. Use referenceAudioIndices here only when audio is a loose reference under an image/video-anchored Seedance shot. For Seedance, every image — first frame, last frame, or loose reference — is passed through referenceImageIndices (auto-uploaded as referenceImageUrls). Anchor frame intent in the prompt with @Image tags such as \"Use @Image1 as the opening shot reference. Begin the video with a composition, subject placement, lighting, mood, and camera framing that closely match @Image1.\" (or @Image2 as the final shot reference). For seamless-loop or \"first frame and last frame identical\" requests with a single uploaded image, anchor it explicitly as both: \"Use @Image1 as both the first frame and last frame so the video loops cleanly back to the opening composition.\" Assign each useful @Image/@Video/@Audio tag a role. APPROVED STORYBOARD PRODUCTION: When the user asks for a production workflow from an approved storyboard, the chat orchestrator should use the durable CampaignStoryboard contract: render and audit the composite board, generate one scene reference still per approved scene with GPT Image 2.5 Sunburst, render each scene as a Seedance 2.5 video segment at targetResolution=1080, then stitch the segments. Preserve an explicit alternate model or resolution. Do not replace that with a generic storyboard-reference video unless the user asks for a fast draft. PARTIAL VIDEO EDITS: Do NOT call generate_video to re-render an existing rendered/uploaded video just to change part of it (the bumper, the intro, the end card, a single scene, the last few seconds, etc.). Use replace_video_segment for that — it preserves the unchanged portion, keeps the original audio outside the replaced window, and costs far less. Likewise use extend_video to add new time to the end without rewriting the rest. If the request is vague, ask about vision/mood/style first. Only call once you have clear creative intent. WAN 3 uses the exact selector wan3.0-video: use this tool for text-to-video or loose Image 1/Video 1/Audio 1 references; use animate_photo for native first/last frames and sound_to_video when audio drives timing. A Wan 3 video reference conditions a new generation; it does not invoke a provider-backed edit or extend mode. Wan 3.0 Enhanced uses Sogni selector wan3.0-spicy-video and MuleRouter provider ID w3.0-video; use this tool for prompt-only or loose-reference generation, and never combine loose references with frame anchors.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -210,7 +229,7 @@
                 "minimax-h3-t2v-balanced",
                 "minimax-h3-r2v-balanced"
               ],
-              "description": "\"ltx25\" (default): LTX 2.5 with native audio; Fast, HQ, and Pro currently use the release-validated official Distilled INT8 workflow. The Dev checkpoints are not publicly routed until upstream publishes and Sogni validates an official ComfyUI Dev recipe. Video model. \"ltx23\": LTX 2.3 rollback with native audio. \"wan22\": quick simple motion without audio. \"minimax-h3-t2v\": standard 20-step MiniMax H3 text-to-video; \"minimax-h3-t2v-turbo\": the existing 4-step LightX2V Turbo text-to-video; \"minimax-h3-fasth3-t2v-turbo\": the separate FastVideo VSA four-step FastH3 engine, about 2x faster and fixed to Euler/simple; \"minimax-h3-fasth3-t2v-turbo-2stage\": the two-stage FastH3 engine: FastH3 renders the canvas, then the worker enlarges it 2x and refines it, so the clip is delivered at twice the canvas width and height with the same length and audio. targetResolution picks the delivered class: 1080 renders a 544px short-edge canvas (960x544 is delivered at 1920x1088) for 10 Spark per second, 1440 or omitted renders the 768p canvas for 2K (1344x768 is delivered at 2688x1536) for 16 Spark per second, and 720 renders a 384px canvas (672x384 is delivered at 1344x768) for the regular FastH3 price of 4 Spark per second. The estimate prices every request. It takes the same inputs, durations and LoRAs as \"minimax-h3-fasth3-t2v-turbo\". Choose it when the user asks for 1080p, 1440p or 2K MiniMax H3 output, for two-stage output, or for the sharpest/best H3 quality; for ordinary 768p FastH3 output keep the regular FastH3 selector at targetResolution 768. All use native audio, fixed 24fps, 5.17-15.08s, and a 768p-class 32px-grid canvas; use animate_photo for H3 image-conditioned modes. Base and Turbo T2V/I2V/FLF2V prompts use the exact ordered fields integrated_multimodal_description, overall_soundscape, and non_diegetic_music; I2V/FLF2V prepend the official alignment line. \"minimax-h3-r2v\": standard 20-step MiniMax H3 reference-to-video; \"minimax-h3-r2v-turbo\": the dedicated LightX2V 4-step Ref2VA Turbo workflow using Euler/simple and a 960x544 default. FastH3 has no R2V mode. Both R2V selectors accept up to 9 images, 3 videos, and 3 audios (12 files total); at least one visual reference (image or video) is required and audio alone is invalid. Select references with referenceImageIndices/referenceVideoIndices/referenceAudioIndices and address them with the official <Subject N>/<Picture N>/<Video N>/<Audio N> semantics. Seedance quality is selected only by model: use \"seedance2-mini\" for Seedance 2.0 Mini or faster/lower-cost 720p iteration, and use \"seedance2\" for the full Seedance 2.0 model, explicit full-quality requests, 1080p/4K requests, or generated/uploaded storyboard images unless the user explicitly asks for a draft or Mini. Do not use Default Media Quality Fast/HQ/Pro or targetResolution to represent Seedance quality. \"seedance2-5\": Seedance 2.5, the newest Seedance generation — 480p, 720p, and 1080p (4K is unsupported), 4-30s per clip at a fixed 24 fps, native audio, first-and-last-frame conditioning, and a much larger reference budget than the 2.0 family: up to 30 images, 10 videos, and 10 audios, with up to 50 reference media files total, subject to those per-modality caps. Choose \"seedance2-5\" when the user asks for Seedance 2.5, wants a single continuous Seedance clip longer than 15s (2.5 renders up to 30s in one call instead of being split and stitched), or wants a first-and-last-frame Seedance transition. Keep \"seedance2\" for 4K requests; Seedance 2.5 supports up to 1080p. Seedance supports multimodal loose reference assets: images (up to 9), videos (up to 3), and audios (up to 3), with no more than 12 asset files total. Use @Image1/@Video1/@Audio1 style references in creative briefs when assigning roles. Assign every useful reference asset a role and prefer positive preservation constraints. If an uploaded video is the source clip to transform, upscale, enhance, restyle, or remaster, use video_to_video with controlMode=\"seedance-v2v\" instead of generate_video referenceVideoIndices. Alibaba HappyHorse 1.1 video models (third-party vendor — requires Premium Spark). Select by mode: \"happyhorse-1.1-t2v\" for text-to-video, \"happyhorse-1.1-i2v\" for image-to-video from one first-frame image, and \"happyhorse-1.1-r2v\" for reference-to-video with up to 9 reference images. Resolutions 720P and 1080P; duration 3-15 seconds at 24 fps; native synchronized audio is always generated (do not set generateAudio or negativePrompt). Supported aspect ratios: 16:9, 9:16, 1:1, 4:3, 3:4, 4:5, 5:4, 9:21, 21:9. HappyHorse 1.1 takes image references only and renders a native synchronized audio track (always on; do not set generateAudio or a negative prompt). Pick the model by mode: happyhorse-1.1-t2v for text-to-video (no reference image), happyhorse-1.1-i2v for image-to-video from a single first frame, and happyhorse-1.1-r2v for reference-to-video with 1 to 9 reference images. For r2v, tag the images in the prompt as [Image 1]…[Image 9] and assign each a clear role. HappyHorse does not accept reference videos or reference audios. \"wan3.0-video\" is Alibaba Wan 3 and \"wan3.0-spicy-video\" is MuleRouter w3.0-video. Both render 2-30s at fixed 30 fps with optional native audio, provider prompt expansion, 480p/720p/1080p, adaptive/fixed ratios, first/last frames, and up to 10 image/5 video/5 audio references. Only Alibaba wan3.0-video accepts document/web context and watermark. Frame anchors and loose references are mutually exclusive. Do not send negativePrompt; video references are loose conditioning for a new result, not source-video editing or extension. MiniMax H3 Balanced uses the LightX2V 8-step 768p accelerator for FL2VA and Larry v4 step-600 EMA for Ref2VA, between 4-step Turbo and 20-step Standard; use \"minimax-h3-balanced\" or \"minimax-h3-t2v-balanced\" for FL2VA text-to-video and \"minimax-h3-r2v-balanced\" for Ref2VA reference-to-video. Sources: https://huggingface.co/lightx2v/Minimax-h3-Turbo/tree/f3d9da6dac47dcb985684ca150f02893f619a171 and https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/tree/7b7ac96b0616100db75ea285090210c3ddf37c04. MiniMax H3 FastH3 Turbo is the separate FastVideo VSA four-step engine, qualified only with Euler/simple; use \"minimax-h3-fasth3-turbo\" or \"minimax-h3-fasth3-t2v-turbo\" for text-to-video. Existing \"minimax-h3-turbo\" selectors remain LightX2V Turbo. FastH3 has no R2V mode. MiniMax H3 FastH3 Two-Stage renders the FastH3 canvas, then enlarges it 2x and refines it, delivering twice the canvas with the same length and audio; use \"minimax-h3-fasth3-turbo-2stage\" or \"minimax-h3-fasth3-t2v-turbo-2stage\" for two-stage text-to-video. Its targetResolution names the delivered class: 1080 (544px canvas, 960x544 delivers 1920x1088), 1440 or omitted for 2K (768p canvas, 1344x768 delivers 2688x1536), or 720 (384px canvas, 672x384 delivers 1344x768)."
+              "description": "\"ltx25\" (default): LTX 2.5 with native audio; Fast, HQ, and Pro currently use the release-validated official Distilled INT8 workflow. The Dev checkpoints are not publicly routed until upstream publishes and Sogni validates an official ComfyUI Dev recipe. Video model. \"ltx23\": LTX 2.3 rollback with native audio. \"wan22\": quick simple motion without audio. \"minimax-h3-t2v\": standard 20-step MiniMax H3 text-to-video; \"minimax-h3-t2v-turbo\": the existing 4-step LightX2V Turbo text-to-video; \"minimax-h3-fasth3-t2v-turbo\": the separate FastVideo VSA four-step FastH3 engine, about 2x faster and fixed to Euler/simple; \"minimax-h3-fasth3-t2v-turbo-2stage\": the two-stage FastH3 engine: FastH3 renders the canvas, then the worker enlarges it 2x and refines it, so the clip is delivered at twice the canvas width and height with the same length and audio. targetResolution picks the delivered class: 1080 renders a 544px short-edge canvas (960x544 is delivered at 1920x1088) for 10 Spark per second, 1440 or omitted renders the 768p canvas for 2K (1344x768 is delivered at 2688x1536) for 16 Spark per second, and 720 renders a 384px canvas (672x384 is delivered at 1344x768) for the regular FastH3 price of 4 Spark per second. The estimate prices every request. It takes the same inputs, durations and LoRAs as \"minimax-h3-fasth3-t2v-turbo\". Choose it when the user asks for 1080p, 1440p or 2K MiniMax H3 output, for two-stage output, or for the sharpest/best H3 quality; for ordinary 768p FastH3 output keep the regular FastH3 selector at targetResolution 768. All use native audio, fixed 24fps, 5.17-15.08s, and a 768p-class 32px-grid canvas; use animate_photo for H3 image-conditioned modes. Base and Turbo T2V/I2V/FLF2V prompts use the exact ordered fields integrated_multimodal_description, overall_soundscape, and non_diegetic_music; I2V/FLF2V prepend the official alignment line. \"minimax-h3-r2v\": standard 20-step MiniMax H3 reference-to-video; \"minimax-h3-r2v-turbo\": the dedicated LightX2V 4-step Ref2VA Turbo workflow using Euler/simple and a 960x544 default. FastH3 has no R2V mode. Both R2V selectors accept up to 9 images, 3 videos, and 3 audios (12 files total); at least one visual reference (image or video) is required and audio alone is invalid. Select references with referenceImageIndices/referenceVideoIndices/referenceAudioIndices and address them with the official <Subject N>/<Picture N>/<Video N>/<Audio N> semantics. Seedance quality is selected only by model: use \"seedance2-mini\" for Seedance 2.0 Mini or faster/lower-cost 720p iteration, use \"seedance2-5\" at targetResolution=1080 for generated/uploaded storyboard images and current high-quality Seedance generation unless the user explicitly requests another model or resolution, and use \"seedance2\" for Seedance 2.0 or 4K requests because Seedance 2.5 supports up to 1080p. Do not use Default Media Quality Fast/HQ/Pro to represent Seedance quality. \"seedance2-5\": Seedance 2.5, the newest Seedance generation — 480p, 720p, and 1080p (4K is unsupported), 4-30s per clip at a fixed 24 fps, native audio, first-and-last-frame conditioning, and a much larger reference budget than the 2.0 family: up to 30 images, 10 videos, and 10 audios, with up to 50 reference media files total, subject to those per-modality caps. Choose \"seedance2-5\" when the user asks for Seedance 2.5, wants a single continuous Seedance clip longer than 15s (2.5 renders up to 30s in one call instead of being split and stitched), or wants a first-and-last-frame Seedance transition. Keep \"seedance2\" for 4K requests; Seedance 2.5 supports up to 1080p. Seedance supports multimodal loose reference assets. Seedance 2.0 and Mini accept up to 9 images, 3 videos, and 3 audios, with no more than 12 asset files total. Seedance 2.5 accepts up to 30 images, 10 videos, and 10 audios, with up to 50 reference media files total, subject to those per-modality caps. Use @Image1/@Video1/@Audio1 style references in creative briefs when assigning roles. Assign every useful reference asset a role and prefer positive preservation constraints. If an uploaded video is the source clip to transform, upscale, enhance, restyle, or remaster, use video_to_video with controlMode=\"seedance-v2v\" instead of generate_video referenceVideoIndices. Alibaba HappyHorse 1.1 video models (third-party vendor — requires Premium Spark). Select by mode: \"happyhorse-1.1-t2v\" for text-to-video, \"happyhorse-1.1-i2v\" for image-to-video from one first-frame image, and \"happyhorse-1.1-r2v\" for reference-to-video with up to 9 reference images. Resolutions 720P and 1080P; duration 3-15 seconds at 24 fps; native synchronized audio is always generated (do not set generateAudio or negativePrompt). Supported aspect ratios: 16:9, 9:16, 1:1, 4:3, 3:4, 4:5, 5:4, 9:21, 21:9. HappyHorse 1.1 takes image references only and renders a native synchronized audio track (always on; do not set generateAudio or a negative prompt). Pick the model by mode: happyhorse-1.1-t2v for text-to-video (no reference image), happyhorse-1.1-i2v for image-to-video from a single first frame, and happyhorse-1.1-r2v for reference-to-video with 1 to 9 reference images. For r2v, tag the images in the prompt as [Image 1]…[Image 9] and assign each a clear role. HappyHorse does not accept reference videos or reference audios. \"wan3.0-video\" is Alibaba Wan 3 and \"wan3.0-spicy-video\" is MuleRouter w3.0-video. Both render 2-30s at fixed 30 fps with optional native audio, provider prompt expansion, 480p/720p/1080p, adaptive/fixed ratios, first/last frames, and up to 10 image/5 video/5 audio references. Only Alibaba wan3.0-video accepts document/web context and watermark. Frame anchors and loose references are mutually exclusive. Do not send negativePrompt; video references are loose conditioning for a new result, not source-video editing or extension. MiniMax H3 Balanced uses the LightX2V 8-step 768p accelerator for FL2VA and Larry v4 step-600 EMA for Ref2VA, between 4-step Turbo and 20-step Standard; use \"minimax-h3-balanced\" or \"minimax-h3-t2v-balanced\" for FL2VA text-to-video and \"minimax-h3-r2v-balanced\" for Ref2VA reference-to-video. Sources: https://huggingface.co/lightx2v/Minimax-h3-Turbo/tree/f3d9da6dac47dcb985684ca150f02893f619a171 and https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora/tree/7b7ac96b0616100db75ea285090210c3ddf37c04. MiniMax H3 FastH3 Turbo is the separate FastVideo VSA four-step engine, qualified only with Euler/simple; use \"minimax-h3-fasth3-turbo\" or \"minimax-h3-fasth3-t2v-turbo\" for text-to-video. Existing \"minimax-h3-turbo\" selectors remain LightX2V Turbo. FastH3 has no R2V mode. MiniMax H3 FastH3 Two-Stage renders the FastH3 canvas, then enlarges it 2x and refines it, delivering twice the canvas with the same length and audio; use \"minimax-h3-fasth3-turbo-2stage\" or \"minimax-h3-fasth3-t2v-turbo-2stage\" for two-stage text-to-video. Its targetResolution names the delivered class: 1080 (544px canvas, 960x544 delivers 1920x1088), 1440 or omitted for 2K (768p canvas, 1344x768 delivers 2688x1536), or 720 (384px canvas, 672x384 delivers 1344x768)."
             },
             "generateAudio": {
               "type": "boolean",
@@ -271,7 +290,7 @@
                 "type": "string",
                 "minLength": 1
               },
-              "description": "Ordered LoRA IDs to apply to a MiniMax H3 render. Use only when the user explicitly asks for a LoRA or for an effect one of these names describes. Stack up to 8 in one request; order matters because the adapters apply in sequence and do not commute. Keep this array positionally aligned with loraStrengths. The first render with an uncached LoRA takes longer to start while the worker downloads it.\n\nAccepted only when videoModel is one of \"minimax-h3-t2v\", \"minimax-h3-t2v-turbo\", \"minimax-h3-fasth3-t2v-turbo\", \"minimax-h3-fasth3-t2v-turbo-2stage\", \"minimax-h3-t2v-balanced\", \"minimax-h3-r2v\", \"minimax-h3-r2v-turbo\", \"minimax-h3-r2v-balanced\", \"minimax-h3-turbo\", \"minimax-h3-fasth3-turbo\", \"minimax-h3-fasth3-turbo-2stage\", \"minimax-h3-balanced\". Every other video model on this tool loads no LoRAs and silently ignores these arrays, so set videoModel to an H3 mode in the same call when the user asks for one.\n\nFive LoRAs are published for MiniMax H3 today and the set differs by mode, so GET /v1/loras/comfy?modelId=<model> is authoritative for the mode in hand and carries exact ranges, maturity flags, and anything published since. h3-realism-people (fal) is a realism pass trained on live-action footage of people: it restores skin texture and pores, stray hairs, fabric weave and a fine sensor grain that the base model smooths away, and holds up in close-up. It is the only one gated on a trigger word — put r34l1sm near the FRONT of the prompt, or the render comes back as ordinary H3 with no error. h3-vbvr-video-reasoning is a prompt-adherence pass that holds the model to what was asked instead of improvising. h3-natural-face-speech (AdaptiveVision) makes people talking on camera look and sound more natural: cheeks, brows, jaw and lips move together as in real speech, and spoken English comes through clearer; use it for talking-head shots such as vlogs, podcasts, interviews and presenters. h3-better-motion (AdaptiveVision) gives people more natural, consistent body movement — weight shifts, strides, turns and gestures that follow through — for dance, sport, walking and other full-body shots. Both AdaptiveVision LoRAs work best with short, simple prompt sentences and are not validated on reference-to-video. h3-mystic-xxx-v4 is an uncensored adult fine-tune. Do not invent ids."
+              "description": "Ordered LoRA IDs to apply to a MiniMax H3 render. Use only when the user explicitly asks for a LoRA or for an effect one of these names describes. Stack up to 8 in one request; order matters because the adapters apply in sequence and do not commute. Keep this array positionally aligned with loraStrengths. The first render with an uncached LoRA takes longer to start while the worker downloads it.\n\nAccepted only when videoModel is one of \"minimax-h3-t2v\", \"minimax-h3-t2v-turbo\", \"minimax-h3-fasth3-t2v-turbo\", \"minimax-h3-fasth3-t2v-turbo-2stage\", \"minimax-h3-t2v-balanced\", \"minimax-h3-r2v\", \"minimax-h3-r2v-turbo\", \"minimax-h3-r2v-balanced\", \"minimax-h3-turbo\", \"minimax-h3-fasth3-turbo\", \"minimax-h3-fasth3-turbo-2stage\", \"minimax-h3-balanced\". Every other video model on this tool loads no LoRAs and silently ignores these arrays, so set videoModel to an H3 mode in the same call when the user asks for one.\n\nFive LoRAs are published for MiniMax H3 today and the set differs by mode, so GET /v1/loras/comfy?modelId=<model> is authoritative for the mode in hand and carries exact ranges, maturity flags, and anything published since. h3-realism-people (fal) is a realism pass trained on live-action footage of people: it restores skin texture and pores, stray hairs, fabric weave and a fine sensor grain that the base model smooths away, and holds up in close-up. It is the only one gated on a trigger word — put r34l1sm near the FRONT of the prompt, or the render comes back as ordinary H3 with no error. h3-vbvr-video-reasoning is a prompt-adherence pass that holds the model to what was asked instead of improvising. h3-natural-face-speech (AdaptiveVision) makes people talking on camera look and sound more natural: cheeks, brows, jaw and lips move together as in real speech, and spoken English comes through clearer; use it for talking-head shots such as vlogs, podcasts, interviews and presenters. h3-better-motion (AdaptiveVision) gives people more natural, consistent body movement — weight shifts, strides, turns and gestures that follow through — for dance, sport, walking and other full-body shots. Both AdaptiveVision LoRAs work best with short, simple prompt sentences and are not validated on reference-to-video. h3-mystic-xxx-v4 is an uncensored adult fine-tune. Personal imports are discovered through authenticated GET /v1/loras/personal/catalog; use only owned ready ids with the selected model in modelIds, and respect their strength range and requirements. Do not invent ids."
             },
             "loraStrengths": {
               "type": "array",
@@ -377,7 +396,7 @@
           "properties": {
             "prompt": {
               "type": "string",
-              "description": "The exact words to be spoken, verbatim. This is NOT a description of the audio: whatever is written here is read aloud character for character. \"a calm woman reading the news\" would be spoken as those seven words — put that in voiceDescription instead and write the actual news copy here.\n\nLITERAL PROMPT OVERRIDE: If the user explicitly says not to modify the prompt, or to use it exactly/verbatim/as-is, copy the identified prompt text verbatim instead of applying these construction rules unless a hard requirement is missing.\n\nPunctuation is prosody: full stops, commas, question marks and ellipses control pauses and intonation, so keep them. Write numbers, dates, currency and abbreviations the way they should be said (\"nineteen eighty-four\", \"twelve dollars fifty\", \"Doctor Chen\") when the plain form would be ambiguous. Line breaks are not pauses; use punctuation.\n\nLimit 4096 characters, roughly five minutes of speech. A longer script is refused rather than cut off mid-sentence, so split it across several calls at a natural break.",
+              "description": "The exact words to be spoken, verbatim. This is NOT a description of the audio: whatever is written here is read aloud character for character. \"a calm woman reading the news\" would be spoken as those seven words — put that in voiceDescription instead and write the actual news copy here.\n\nLITERAL PROMPT OVERRIDE: If the user explicitly says not to modify the prompt, or to use it exactly/verbatim/as-is, copy the identified prompt text verbatim instead of applying these construction rules unless a hard requirement is missing.\n\nPunctuation is prosody: full stops, commas, question marks and ellipses control pauses and intonation, so keep them. Write numbers, dates, currency and abbreviations the way they should be said (\"nineteen eighty-four\", \"twelve dollars fifty\", \"Doctor Chen\") when the plain form would be ambiguous. Line breaks are not pauses; use punctuation.\n\nIf the user asks for a script rather than supplying one — \"read me a poem about the sea\", \"record an intro for my podcast\" — write the words first and pass them here. compose_script is for longer or structured pieces; a sentence or two you can simply write.\n\nLimit 4096 characters, roughly five minutes of speech. A longer script is refused rather than cut off mid-sentence, so split it across several calls at a natural break.",
               "maxLength": 4096
             },
             "model": {
@@ -413,6 +432,10 @@
               "type": "number",
               "description": "Which audio holds the voice to clone, using the same numbering every other tool uses for audio: negative indices are uploads (-1 = first/primary upload, -2 = second upload, and so on) and 0-based non-negative indices are audio generated earlier in this conversation. A clip the user just uploaded is -1. Required when model=\"clone\" and ignored otherwise. The clip should be three to thirty seconds of one person speaking cleanly, with no music, no second speaker and no heavy room echo; anything past thirty seconds is trimmed."
             },
+            "voice_source_url": {
+              "type": "string",
+              "description": "REST alternative to voiceSourceIndex: retrievable original recording for clone mode."
+            },
             "voiceTranscript": {
               "type": "string",
               "description": "The exact words spoken in the uploaded clip, when model=\"clone\". Supplying it lets the model condition on the recording itself rather than on a speaker fingerprint alone, which is markedly closer to the source — set it whenever the user tells you what the clip says or the transcript is otherwise known. Omitting it still produces a recognisable clone, just a looser one. Limit 1024 characters.",
@@ -434,6 +457,27 @@
                 "italian"
               ],
               "description": "Language of the script. Default \"auto\", which infers it from the text and is the only setting that reads a code-switched line correctly. Pin a language only when auto mis-reads a name, a loanword, or a passage that is ambiguous between two of them. Cloning is cross-lingual: an English reference clip can read Japanese in the same voice."
+            },
+            "creativity": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 2,
+              "description": "Speech delivery variation from 0.1 to 2; default 0.9."
+            },
+            "outputFormat": {
+              "type": "string",
+              "enum": [
+                "wav",
+                "mp3",
+                "flac"
+              ],
+              "description": "Audio file format; default wav."
+            },
+            "seed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295,
+              "description": "Optional seed for reproducible delivery."
             },
             "numberOfVariations": {
               "type": "number",
@@ -471,7 +515,7 @@
                 "krea-identity-edit",
                 "dark-beast-krea2-identity-edit"
               ],
-              "description": "The app auto-selects Fast→Qwen Lightning and HQ/Pro→full Qwen only for ordinary identity-neutral edits. REQUIRED IDENTITY DEFAULT: set \"krea-identity-edit\" whenever an edit of a referenced person or character must keep likeness or character identity while changing clothing, hair or makeup, pose or position, face/head/body, background, lighting, or visual style. Infer that semantic intent in any language; never route from keyword or regex matching. Also use it for a non-Pro single-character sheet. This default applies even when the user did not name Krea; an explicitly requested model always wins. Set \"dark-beast-krea2-identity-edit\" only when the user explicitly requests that model, its uncensored/community variant, or dark_beast_krea2_identity_edit_v1_2. Set \"gpt-image-2\" when the user explicitly names GPT/OpenAI/ChatGPT Image, or when precise typography, dense labels, or a professional multi-panel layout is the primary requirement; Pro character sheets may retain GPT Image 2. If GPT Image 2 is unavailable for detail-critical layout work, fall back to full \"qwen\", never \"qwen-lightning\". Krea identity edit models require at least one reference image, accept up to two context images, and work best at 512-2048px. Let the model tier and worker choose current steps, guidance, sampler, scheduler, grounding, and reference-boost defaults; do not send a negative prompt. When Krea is selected, override the generic prompt-length guidance with a concise 1-4 sentence delta instruction; name only the requested change and details that must remain fixed. Put the base scene/image first and an optional person/detail reference second. Z-image, Z-image Turbo, and base Krea 2 Turbo are generate_image img2img models, not edit_image selectors. If the user names another edit/image model, honor it. GPT Image 2 always processes input images at high fidelity; do not set input_fidelity. GPT Image 2.5 adds two distinct models: use \"gpt-image-2.5-sunburst\" for an explicit Sunburst request and \"gpt-image-2.5-flare\" for an explicit Flare request. For GPT Image 2.5 without a named variant, use Flare. Preserve explicit GPT Image 2.0 as \"gpt-image-2\". Sunburst is positioned for difficult images and precise edits; Flare for faster everyday generation. Both generate and edit. Model choice is independent of rendering quality."
+              "description": "The app auto-selects Fast→Qwen Lightning and HQ/Pro→full Qwen only for ordinary identity-neutral edits. REQUIRED IDENTITY DEFAULT: set \"krea-identity-edit\" whenever an edit of a referenced person or character must keep likeness or character identity while changing clothing, hair or makeup, pose or position, face/head/body, background, lighting, or visual style. Infer that semantic intent in any language; never route from keyword or regex matching. Also use it for a non-Pro single-character sheet. This default applies even when the user did not name Krea; an explicitly requested model always wins. Set \"dark-beast-krea2-identity-edit\" only when the user explicitly requests that model, its uncensored/community variant, or dark_beast_krea2_identity_edit_v1_2. Set \"gpt-image-2\" when the user explicitly names legacy GPT Image 2. Set \"gpt-image-2.5-sunburst\" when precise typography, dense labels, or a professional multi-panel layout is the primary requirement; Pro character sheets may use Sunburst. If GPT Image 2.5 Sunburst is unavailable for detail-critical layout work, fall back to full \"qwen\", never \"qwen-lightning\". Krea identity edit models require at least one reference image, accept up to two context images, and work best at 512-2048px. Let the model tier and worker choose current steps, guidance, sampler, scheduler, grounding, and reference-boost defaults; do not send a negative prompt. When Krea is selected, override the generic prompt-length guidance with a concise 1-4 sentence delta instruction; name only the requested change and details that must remain fixed. Put the base scene/image first and an optional person/detail reference second. Z-image, Z-image Turbo, and base Krea 2 Turbo are generate_image img2img models, not edit_image selectors. If the user names another edit/image model, honor it. GPT Image 2 always processes input images at high fidelity; do not set input_fidelity. GPT Image 2.5 adds two distinct models: use \"gpt-image-2.5-sunburst\" for an explicit Sunburst request and \"gpt-image-2.5-flare\" for an explicit Flare request. For GPT Image 2.5 without a named variant, use Flare. Preserve explicit GPT Image 2.0 as \"gpt-image-2\". Sunburst is positioned for difficult images and precise edits; Flare for faster everyday generation. Both generate and edit. Model choice is independent of rendering quality."
             },
             "sourceImageIndex": {
               "type": "number",
@@ -538,6 +582,25 @@
             "mask_image_url": {
               "type": "string",
               "description": "Optional GPT Image edit mask URL or inline data:image/png;base64 URI. Requires a PNG alpha mask matching the first source reference dimensions; the source itself may be JPEG, PNG or WebP. Transparent mask regions identify edits; opaque regions are preserved as guidance. With multiple references the mask applies only to the first image."
+            },
+            "loras": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Ordered LoRA IDs for the edit. Public Krea sliders work with model=\"krea-identity-edit\" or model=\"dark-beast-krea2-identity-edit\". Ready personal imports also work on their listed compatible edit models, including Qwen; discover them through authenticated GET /v1/loras/personal/catalog and preserve their exact personal- IDs. GPT Image models do not support LoRAs. Use when the user asks to shift a trait such as age, build, skin, lighting or grain. Stack up to 8 in one request; order matters because the adapters apply in sequence and do not commute. Keep this array positionally aligned with loraStrengths. The first render with an uncached LoRA takes longer to start while the worker downloads it.\n\nBipolar sliders — each id names its POSITIVE direction, a negative strength applies the opposite, and 0 disables it: krea2-detail-enhancer, krea2-scene-complexity, krea2-realism (+ = photoreal), krea2-amateur, krea2-candid, krea2-zoom (+ = zoomed in), krea2-skin-detail, krea2-wetness, krea2-age, krea2-height, krea2-weight, krea2-hourglass-figure, krea2-breast, krea2-chest-firmness, krea2-nipple-projection, krea2-warm-light, krea2-afterlight (+ = golden), krea2-skin-tone (+ = darker), krea2-purple-grainy (+ = grainy and muted). Positive-only fine-tunes: krea2-realism-engine (photographic realism), krea2-bloomgirls (polished influencer look), krea2-mystic-x (uncensored adult), krea2-aberrant (industrial body horror), krea2-filter-bypass-2 and krea2-filter-bypass-3 (restore expressions, anatomy and poses the base model flattens; try the 2-vector first). Exact per-LoRA ranges, maturity flags and the full contract: GET /v1/loras/comfy?modelId=<model>. Personal imports use authenticated GET /v1/loras/personal/catalog: use an owned ready personal- id, its modelIds, strength range and requirements. Never invent ids or silently omit a requested personal LoRA."
+            },
+            "loraStrengths": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "number"
+              },
+              "description": "Strength for each LoRA in loras, in the same order. Omitting the array uses 1.0 for every LoRA, which is not each LoRA's catalog default — krea2-chest-firmness, krea2-nipple-projection and krea2-height default to 0 (no effect) — so prefer explicit values. Do NOT clamp to 0-1: most Krea 2 LoRAs are bipolar, so krea2-warm-light warms the grade at 2 and cools it at -2. Usable bands vary per LoRA — roughly -2..5 for krea2-detail-enhancer, -3..3 for krea2-warm-light, 3..9 for krea2-candid, 0.5..1 for krea2-realism-engine, 1..2 for the filter-bypass pair. Scale the magnitude to how strongly the user asked; the server clamps out-of-range values, and pushing past a LoRA's recommended band costs image quality rather than adding effect. Preserve explicit user values. Example: loras=[\"krea2-detail-enhancer\",\"krea2-amateur\"], loraStrengths=[3,-2]."
             }
           },
           "required": [
@@ -896,7 +959,7 @@
                 "type": "string",
                 "minLength": 1
               },
-              "description": "Ordered LoRA IDs to apply to a MiniMax H3 render. Use only when the user explicitly asks for a LoRA or for an effect one of these names describes. Stack up to 8 in one request; order matters because the adapters apply in sequence and do not commute. Keep this array positionally aligned with loraStrengths. The first render with an uncached LoRA takes longer to start while the worker downloads it.\n\nAccepted only when videoModel is one of \"minimax-h3-i2v\", \"minimax-h3-i2v-turbo\", \"minimax-h3-fasth3-i2v-turbo\", \"minimax-h3-fasth3-i2v-turbo-2stage\", \"minimax-h3-i2v-balanced\", \"minimax-h3-flf2v\", \"minimax-h3-flf2v-turbo\", \"minimax-h3-fasth3-flf2v-turbo\", \"minimax-h3-fasth3-flf2v-turbo-2stage\", \"minimax-h3-flf2v-balanced\". Every other video model on this tool loads no LoRAs and silently ignores these arrays, so set videoModel to an H3 mode in the same call when the user asks for one.\n\nFive LoRAs are published for MiniMax H3 today and the set differs by mode, so GET /v1/loras/comfy?modelId=<model> is authoritative for the mode in hand and carries exact ranges, maturity flags, and anything published since. h3-realism-people (fal) is a realism pass trained on live-action footage of people: it restores skin texture and pores, stray hairs, fabric weave and a fine sensor grain that the base model smooths away, and holds up in close-up. It is the only one gated on a trigger word — put r34l1sm near the FRONT of the prompt, or the render comes back as ordinary H3 with no error. h3-vbvr-video-reasoning is a prompt-adherence pass that holds the model to what was asked instead of improvising. h3-natural-face-speech (AdaptiveVision) makes people talking on camera look and sound more natural: cheeks, brows, jaw and lips move together as in real speech, and spoken English comes through clearer; use it for talking-head shots such as vlogs, podcasts, interviews and presenters. h3-better-motion (AdaptiveVision) gives people more natural, consistent body movement — weight shifts, strides, turns and gestures that follow through — for dance, sport, walking and other full-body shots. Both AdaptiveVision LoRAs work best with short, simple prompt sentences and are not validated on reference-to-video. h3-mystic-xxx-v4 is an uncensored adult fine-tune. Do not invent ids."
+              "description": "Ordered LoRA IDs to apply to a MiniMax H3 render. Use only when the user explicitly asks for a LoRA or for an effect one of these names describes. Stack up to 8 in one request; order matters because the adapters apply in sequence and do not commute. Keep this array positionally aligned with loraStrengths. The first render with an uncached LoRA takes longer to start while the worker downloads it.\n\nAccepted only when videoModel is one of \"minimax-h3-i2v\", \"minimax-h3-i2v-turbo\", \"minimax-h3-fasth3-i2v-turbo\", \"minimax-h3-fasth3-i2v-turbo-2stage\", \"minimax-h3-i2v-balanced\", \"minimax-h3-flf2v\", \"minimax-h3-flf2v-turbo\", \"minimax-h3-fasth3-flf2v-turbo\", \"minimax-h3-fasth3-flf2v-turbo-2stage\", \"minimax-h3-flf2v-balanced\". Every other video model on this tool loads no LoRAs and silently ignores these arrays, so set videoModel to an H3 mode in the same call when the user asks for one.\n\nFive LoRAs are published for MiniMax H3 today and the set differs by mode, so GET /v1/loras/comfy?modelId=<model> is authoritative for the mode in hand and carries exact ranges, maturity flags, and anything published since. h3-realism-people (fal) is a realism pass trained on live-action footage of people: it restores skin texture and pores, stray hairs, fabric weave and a fine sensor grain that the base model smooths away, and holds up in close-up. It is the only one gated on a trigger word — put r34l1sm near the FRONT of the prompt, or the render comes back as ordinary H3 with no error. h3-vbvr-video-reasoning is a prompt-adherence pass that holds the model to what was asked instead of improvising. h3-natural-face-speech (AdaptiveVision) makes people talking on camera look and sound more natural: cheeks, brows, jaw and lips move together as in real speech, and spoken English comes through clearer; use it for talking-head shots such as vlogs, podcasts, interviews and presenters. h3-better-motion (AdaptiveVision) gives people more natural, consistent body movement — weight shifts, strides, turns and gestures that follow through — for dance, sport, walking and other full-body shots. Both AdaptiveVision LoRAs work best with short, simple prompt sentences and are not validated on reference-to-video. h3-mystic-xxx-v4 is an uncensored adult fine-tune. Personal imports are discovered through authenticated GET /v1/loras/personal/catalog; use only owned ready ids with the selected model in modelIds, and respect their strength range and requirements. Do not invent ids."
             },
             "loraStrengths": {
               "type": "array",
@@ -2248,6 +2311,231 @@
               "description": "Optional full WorkflowTemplate JSON the caller wants the planner to edit. When supplied, the planner treats the supplied template as the starting point and the brief as the modification request: it preserves unchanged stages and inputs, applies the requested edits, bumps the template version, and keeps stage ids stable unless the brief explicitly renames them. Use for 'add a music step', 'switch the storyboard model to GPT Image 2', 'make this 9:16 instead of 16:9' style edits."
             }
           }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "image_to_3d",
+        "description": "Reconstruct a textured 3D model with Pixal3D from an original front image, optionally with left, back and right views of the same subject. Returns a downloadable binary GLB model, not an image or video. Takes no prompt. Use original stills with consistent framing and height; never substitute screenshots or invented views.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sourceImageIndex": {
+              "type": "integer",
+              "description": "Front image: negative indices select uploads (-1 is the first), non-negative indices select generated images. Omit to use the latest image."
+            },
+            "source_image_url": {
+              "type": "string",
+              "description": "REST alternative to sourceImageIndex: retrievable front image URL."
+            },
+            "leftViewImageIndex": {
+              "type": "integer",
+              "description": "Subject own LEFT side facing the camera (subject faces screen-left). Any subset of orbit views enables multi-view reconstruction."
+            },
+            "backViewImageIndex": {
+              "type": "integer",
+              "description": "Same subject seen from behind."
+            },
+            "rightViewImageIndex": {
+              "type": "integer",
+              "description": "Subject own RIGHT side facing the camera (subject faces screen-right). Do not swap left and right."
+            },
+            "left_view_image_url": {
+              "type": "string",
+              "description": "REST alternative for the left view."
+            },
+            "back_view_image_url": {
+              "type": "string",
+              "description": "REST alternative for the back view."
+            },
+            "right_view_image_url": {
+              "type": "string",
+              "description": "REST alternative for the right view."
+            },
+            "meshTargetFaces": {
+              "type": "integer",
+              "minimum": 5000,
+              "maximum": 700000,
+              "description": "Triangle budget. Default 700000; choose a lower budget for real-time use."
+            },
+            "textureSize": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 4096,
+              "description": "Base-colour texture and UV atlas size. Default 4096."
+            },
+            "normalMapSize": {
+              "type": "integer",
+              "minimum": 512,
+              "maximum": 2048,
+              "description": "Normal map size. Default 2048."
+            },
+            "ambientOcclusionSize": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 1024,
+              "description": "Ambient occlusion map size. Default 1024."
+            },
+            "shapeResolution": {
+              "type": "integer",
+              "enum": [
+                1024,
+                1536
+              ],
+              "description": "Shape resolution. Default 1024; 1536 costs more."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "remove_background",
+        "description": "Remove an image background with BiRefNet while preserving the original foreground. Returns a transparent PNG cutout by default, or a soft foreground mask. Uses the original source image without generative repainting; takes no prompt.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sourceImageIndex": {
+              "type": "integer",
+              "description": "Original source image: negative indices select uploads (-1 is the first), non-negative indices select generated images. Omit to use the latest image."
+            },
+            "source_image_url": {
+              "type": "string",
+              "description": "REST alternative to sourceImageIndex: retrievable source image URL."
+            },
+            "applyMask": {
+              "type": "boolean",
+              "description": "True (default) returns a transparent cutout; false returns the soft mask."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "segment_image",
+        "description": "Select objects in an original image with SAM 3. Returns a PNG mask or transparent cutout without repainting the source. Coordinates refer to the original image, normalized 0–1. Supply an object description, a positive point, or a box. Text can combine with boxes; points can combine with at most one box, never with text.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sourceImageIndex": {
+              "type": "integer",
+              "description": "Original source: negative indices select uploads (-1 is the first), non-negative indices select generated images. Omit to use the latest image."
+            },
+            "source_image_url": {
+              "type": "string",
+              "description": "REST alternative: retrievable original image URL."
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240,
+              "description": "Object or concept to select, such as the red suitcase."
+            },
+            "points": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "y": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "positive",
+                      "negative"
+                    ]
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "label"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "boxes": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "x0": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "y0": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "x1": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "y1": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "label": {
+                    "type": "string",
+                    "enum": [
+                      "positive",
+                      "negative"
+                    ],
+                    "description": "Optional inclusion/exclusion label; defaults to positive. Negative boxes require a text prompt."
+                  }
+                },
+                "required": [
+                  "x0",
+                  "y0",
+                  "x1",
+                  "y1"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "maxInstances": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16,
+              "description": "Keep only the strongest N selections. Omit to keep every selection above threshold."
+            },
+            "threshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Minimum object confidence. Default 0.5."
+            },
+            "multimask": {
+              "type": "boolean",
+              "description": "Return multiple candidate masks for point selection. Default true for points."
+            },
+            "applyMask": {
+              "type": "boolean",
+              "description": "Return the original foreground with transparency instead of the binary mask. Default false."
+            }
+          },
+          "required": []
         }
       }
     }
