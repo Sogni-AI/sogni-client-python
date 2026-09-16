@@ -6,7 +6,7 @@ import asyncio
 import base64
 import json
 import mimetypes
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from copy import deepcopy
 from importlib.resources import files
 from pathlib import Path
@@ -793,6 +793,13 @@ class _Runs:
     async def confirm_cost(
         self, run_id: str, params: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
+        """Confirm or cancel a run paused for cost approval.
+
+        Accepts ``tool_call_id``, ``decision`` (``"confirm"`` or ``"cancel"``),
+        ``accepted_cost_preview`` (required by the server to confirm),
+        ``overrides``, ``reason``, and ``idempotency_key``; the JavaScript-style
+        names are accepted too. See ``ChatApi.confirm_chat_run_cost``.
+        """
         return await self._api.confirm_chat_run_cost(run_id, normalize_params(params, **kwargs))
 
     confirmCost = confirm_cost
@@ -1168,15 +1175,36 @@ class ChatApi(EventEmitter):
         return response["data"]["run"]
 
     async def confirm_chat_run_cost(self, run_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Resume a durable chat run paused for cost approval.
+
+        To confirm, pass ``accepted_cost_preview``: the preview the user approved,
+        read from ``run["waiting"]["details"]["costApprovalPreview"]`` or from
+        ``event["payload"]["details"]["costApprovalPreview"]`` on the
+        ``run_waiting_for_user`` event, sent back unchanged. The server rejects a
+        confirm without it (HTTP 400) or with an expired or changed preview
+        (HTTP 409). The client never fills it in for you. Cancelling needs no
+        preview. ``idempotency_key`` is sent as the ``Idempotency-Key`` header.
+        """
+        body: dict[str, Any] = {
+            "tool_call_id": params["toolCallId"],
+            "decision": params["decision"],
+            "overrides": params.get("overrides"),
+            "reason": params.get("reason"),
+        }
+        accepted_cost_preview = params.get("acceptedCostPreview")
+        if accepted_cost_preview is not None:
+            body["acceptedCostPreview"] = (
+                dict(accepted_cost_preview)
+                if isinstance(accepted_cost_preview, Mapping)
+                else accepted_cost_preview
+            )
+        idempotency_key = params.get("idempotencyKey")
+        headers = {"Idempotency-Key": str(idempotency_key)} if idempotency_key else None
         response = await self._run_request(
             "POST",
             f"/v1/chat/runs/{quote(run_id, safe='')}/confirm-cost",
-            {
-                "tool_call_id": params["toolCallId"],
-                "decision": params["decision"],
-                "overrides": params.get("overrides"),
-                "reason": params.get("reason"),
-            },
+            body,
+            headers,
         )
         return response["data"]["run"]
 

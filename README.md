@@ -368,6 +368,45 @@ result = await sogni.chat.hosted.create(
 For streaming socket chat, pass `stream=True` and iterate over the returned
 `ChatStream` with `async for`.
 
+## Durable chat runs and cost approval
+
+`sogni.chat.runs` (`create`, `get`, `cancel`, `confirm_cost`, `stream_events`)
+wraps `/v1/chat/runs`, where the server drives the LLM and tool loop. A run can
+pause before paid tool calls with `status == "waiting_for_user"` and
+`waiting["reason"] == "cost_approval_required"`. The pause carries the paused
+`toolCallId` and a `costApprovalPreview` in `run["waiting"]["details"]`, and in
+`event["payload"]["details"]` on the `run_waiting_for_user` event. Show that
+preview to the user, then pass it back unchanged:
+
+```python
+run = await sogni.chat.runs.get(run_id)
+waiting = run.get("waiting") or {}
+details = waiting.get("details") or {}
+
+if waiting.get("reason") == "cost_approval_required" and details.get("toolCallId"):
+    preview = details.get("costApprovalPreview")
+    if preview and user_approved(preview):  # user_approved is your UI
+        await sogni.chat.runs.confirm_cost(
+            run_id,
+            tool_call_id=details["toolCallId"],
+            decision="confirm",
+            accepted_cost_preview=preview,
+            idempotency_key=f"confirm-{details['toolCallId']}",
+        )
+    else:
+        # Declining needs no preview.
+        await sogni.chat.runs.confirm_cost(
+            run_id, tool_call_id=details["toolCallId"], decision="cancel"
+        )
+```
+
+The server rejects a confirm without `accepted_cost_preview` (HTTP 400), and one
+whose preview has expired or no longer matches (HTTP 409); read the run again
+and ask the user to approve the new preview. The client never fills in the
+preview for you. `idempotency_key` is sent as the `Idempotency-Key` header, so
+reuse it for duplicate submissions of the same decision. `overrides` and
+`reason` are also accepted.
+
 ## Durable workflows
 
 ```python

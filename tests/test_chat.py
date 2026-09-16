@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
@@ -812,6 +812,107 @@ async def test_durable_run_requests_use_canonical_wire_fields_and_encoded_ids() 
         "overrides": {"number_of_variations": 2},
         "reason": "approved",
     }
+    assert rest.calls[3]["headers"] is None
+
+
+_COST_APPROVAL_PREVIEW = {
+    "totalEstimatedCapacityUnits": 42.5,
+    "tokenType": "spark",
+    "validityUntil": "2026-09-16T20:05:00.000Z",
+    "perToolBreakdown": [
+        {"toolCallId": "call-1", "toolName": "generate_video", "capacityUnits": 42.5}
+    ],
+}
+
+
+def _sent_fields(call: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in call["body"].items() if value is not None}
+
+
+@pytest.mark.asyncio
+async def test_durable_run_confirm_cost_sends_accepted_preview_and_idempotency_key() -> None:
+    running = {"runId": "run / 1", "status": "running"}
+    rest = FakeRest([{"data": {"run": running}}])
+    api = ChatApi(FakeClient(rest=rest), FakeProjects())
+
+    result = await api.runs.confirm_cost(
+        "run / 1",
+        tool_call_id="call-1",
+        decision="confirm",
+        accepted_cost_preview=_COST_APPROVAL_PREVIEW,
+        overrides={"duration": 5},
+        reason="approved in modal",
+        idempotency_key="confirm-call-1",
+    )
+
+    assert result is running
+    assert len(rest.calls) == 1, "confirm must not read the run to find a preview"
+    call = rest.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/v1/chat/runs/run%20%2F%201/confirm-cost"
+    assert call["headers"] == {"Idempotency-Key": "confirm-call-1"}
+    assert _sent_fields(call) == {
+        "tool_call_id": "call-1",
+        "decision": "confirm",
+        "acceptedCostPreview": _COST_APPROVAL_PREVIEW,
+        "overrides": {"duration": 5},
+        "reason": "approved in modal",
+    }
+
+
+@pytest.mark.asyncio
+async def test_durable_run_confirm_cost_accepts_js_style_names_and_mapping_preview() -> None:
+    rest = FakeRest([{"data": {"run": {"status": "running"}}}])
+    api = ChatApi(FakeClient(rest=rest), FakeProjects())
+
+    await api.runs.confirmCost(
+        "run-2",
+        {
+            "toolCallId": "call-2",
+            "decision": "confirm",
+            "acceptedCostPreview": MappingProxyType(dict(_COST_APPROVAL_PREVIEW)),
+            "idempotencyKey": "confirm-call-2",
+        },
+    )
+
+    call = rest.calls[0]
+    assert call["headers"] == {"Idempotency-Key": "confirm-call-2"}
+    assert isinstance(call["body"]["acceptedCostPreview"], dict)
+    assert _sent_fields(call) == {
+        "tool_call_id": "call-2",
+        "decision": "confirm",
+        "acceptedCostPreview": _COST_APPROVAL_PREVIEW,
+    }
+
+
+@pytest.mark.asyncio
+async def test_durable_run_cancel_cost_needs_no_preview() -> None:
+    rest = FakeRest([{"data": {"run": {"status": "running"}}}])
+    api = ChatApi(FakeClient(rest=rest), FakeProjects())
+
+    await api.runs.confirm_cost("run-3", tool_call_id="call-3", decision="cancel")
+
+    call = rest.calls[0]
+    assert call["headers"] is None
+    assert _sent_fields(call) == {"tool_call_id": "call-3", "decision": "cancel"}
+
+
+@pytest.mark.asyncio
+async def test_durable_run_confirm_without_preview_surfaces_server_rejection() -> None:
+    rejection = ApiError(
+        400,
+        {"status": "error", "message": 'acceptedCostPreview is required for decision="confirm"'},
+    )
+    rest = FakeRest([rejection])
+    api = ChatApi(FakeClient(rest=rest), FakeProjects())
+
+    with pytest.raises(ApiError) as raised:
+        await api.runs.confirm_cost("run-4", tool_call_id="call-4", decision="confirm")
+
+    assert raised.value.status == 400
+    assert "acceptedCostPreview is required" in str(raised.value)
+    assert len(rest.calls) == 1, "the client must not fetch and accept a preview on its own"
+    assert "acceptedCostPreview" not in rest.calls[0]["body"]
 
 
 @pytest.mark.asyncio
