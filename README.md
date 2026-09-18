@@ -185,9 +185,13 @@ ids, not a request option: `minimax-h3-fastvideo-int8_t2v_turbo_2stage`,
 `minimax-h3-fastvideo-int8_flf2v_turbo_2stage` and the audio-guide
 `minimax-h3-fastvideo-int8_ia2v_turbo_2stage`,
 `minimax-h3-fastvideo-int8_flfa2v_turbo_2stage` and
-`minimax-h3-fastvideo-int8_a2v_turbo_2stage`. Each takes exactly the request of
-its FastH3 Turbo id (canvas, frames, 4 steps, Euler/simple, inputs, LoRAs).
-FastH3 renders the canvas, then the worker enlarges it 2× and refines it, so the
+`minimax-h3-fastvideo-int8_a2v_turbo_2stage`, plus the Ref2VA Two-Stage ids
+`minimax-h3-ref2va-fp8_r2v_2stage` (Standard, 20 steps) and
+`minimax-h3-ref2va-fp8_r2v_balanced_2stage` (Balanced, 8 steps). Each FastH3 id
+takes exactly the request of its FastH3 Turbo id (canvas, frames, 4 steps,
+Euler/simple, inputs, LoRAs), and each Ref2VA id the request of its one-stage
+R2V id (canvas, frames, steps, sampling, references, LoRAs).
+The tier renders the canvas, then the worker enlarges it 2× and refines it, so the
 clip is delivered at exactly twice the canvas width and height with the same
 frame count, 24 fps timing and audio. Keep `width`/`height` on the normal H3 grid
 and pick the canvas for the delivery you want:
@@ -210,7 +214,8 @@ answers them with "Model not found". Only a `_2stage` id renders two-stage: a ba
 FastH3 id always runs one-stage at the canvas it sends. Hosted chat tools select these ids with
 `minimax-h3-fasth3-turbo-2stage` (text or first frame),
 `minimax-h3-fasth3-t2v-turbo-2stage`, `minimax-h3-fasth3-i2v-turbo-2stage` and
-`minimax-h3-fasth3-flf2v-turbo-2stage`; on those selectors `targetResolution`
+`minimax-h3-fasth3-flf2v-turbo-2stage`, and Ref2VA Two-Stage with
+`minimax-h3-r2v-2stage` and `minimax-h3-r2v-balanced-2stage`; on those selectors `targetResolution`
 names the delivered class (`720` renders the 384 px canvas, `1080` the 544 px
 canvas, `1440` or omitted the 768p canvas for 2K).
 

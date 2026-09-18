@@ -1603,12 +1603,14 @@ _MINIMAX_H3_TIERS = {
         "minimax-h3-fl2va-fp8_i2v",
         "minimax-h3-fl2va-fp8_flf2v",
         "minimax-h3-ref2va-fp8_r2v",
+        "minimax-h3-ref2va-fp8_r2v_2stage",
     ),
     8: (
         "minimax-h3-fl2va-fp8_t2v_balanced",
         "minimax-h3-fl2va-fp8_i2v_balanced",
         "minimax-h3-fl2va-fp8_flf2v_balanced",
         "minimax-h3-ref2va-fp8_r2v_balanced",
+        "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
     ),
     4: (
         "minimax-h3-fl2va-fp8_t2v_turbo",
@@ -1695,6 +1697,70 @@ def test_minimax_h3_two_stage_ids_are_fasth3_requests_delivered_at_twice_the_can
             )
 
 
+# Two-stage reference-to-video: the Standard (20-step) or Balanced (8-step) R2V
+# request on its own id, rendered on the half canvas and delivered at 2x.
+_MINIMAX_H3_R2V_TWO_STAGE_IDS = {
+    20: ("minimax-h3-ref2va-fp8_r2v_2stage", "minimax-h3-ref2va-fp8_r2v"),
+    8: ("minimax-h3-ref2va-fp8_r2v_balanced_2stage", "minimax-h3-ref2va-fp8_r2v_balanced"),
+}
+
+
+def test_minimax_h3_two_stage_r2v_ids_are_their_tier_requests_delivered_at_twice_the_canvas() -> (
+    None
+):
+    for steps, (model_id, base_id) in _MINIMAX_H3_R2V_TWO_STAGE_IDS.items():
+        assert is_video_model(model_id)
+        assert is_minimax_h3_model(model_id)
+        assert not is_minimax_h3_turbo_model(model_id)
+        assert is_minimax_h3_balanced_model(model_id) is (steps == 8)
+        assert is_minimax_h3_reference_model(model_id)
+        assert get_video_workflow_type(model_id) == "r2v"
+        for duration in (1, 5, 6, 10, 15.08, 30):
+            assert calculate_video_frames(model_id, duration, 24) == calculate_video_frames(
+                base_id, duration, 24
+            )
+        for width, height in (
+            (1344, 768),
+            (768, 1344),
+            (960, 544),
+            (544, 960),
+            (672, 384),
+            (384, 672),
+        ):
+            sent = create_job_request_message(
+                "h3-r2v-2stage",
+                _h3_params(model_id, steps, width=width, height=height),
+                model_options("video"),
+            )["keyFrames"][0]
+            base = create_job_request_message(
+                "h3-r2v",
+                _h3_params(base_id, steps, width=width, height=height),
+                model_options("video"),
+            )["keyFrames"][0]
+            # The request is the tier's R2V request with only the model id changed.
+            assert sent["modelID"] == model_id
+            assert {**sent, "modelID": base_id} == base
+            assert (sent["width"], sent["height"], sent["steps"], sent["frames"]) == (
+                width,
+                height,
+                steps,
+                141,
+            )
+        with pytest.raises(ApiError, match="steps are fixed at"):
+            create_job_request_message(
+                "h3-r2v-2stage-steps",
+                _h3_params(model_id, 8 if steps == 20 else 20),
+                model_options("video"),
+            )
+        # The delivered size is not a canvas.
+        with pytest.raises(ApiError, match="MiniMax H3 dimensions must use a 32px grid"):
+            create_job_request_message(
+                "h3-r2v-2stage-size",
+                _h3_params(model_id, steps, width=1920, height=1088),
+                model_options("video"),
+            )
+
+
 def test_minimax_h3_retired_720p_two_stage_ids_are_not_h3_ids() -> None:
     for model_id in _MINIMAX_H3_RETIRED_720P_IDS:
         assert not is_minimax_h3_model(model_id)
@@ -1728,7 +1794,7 @@ def test_minimax_h3_requests_refuse_the_retired_output_scale() -> None:
                     )
                 assert raised.value.status == 400
             covered += 1
-    assert covered == 18
+    assert covered == 20
 
     # The retired field is refused on every video model, not only on MiniMax H3.
     with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):

@@ -73,6 +73,8 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-fl2va-fp8_i2v_balanced",
     "minimax-h3-fl2va-fp8_flf2v_balanced",
     "minimax-h3-ref2va-fp8_r2v_balanced",
+    "minimax-h3-ref2va-fp8_r2v_2stage",
+    "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
 }
 _MINIMAX_H3_TURBO_PATTERN = re.compile(
     r"^minimax-h3-(?:fl2va-fp8_(?:t2v|i2v|flf2v)_turbo"
@@ -192,7 +194,9 @@ def is_minimax_h3_turbo_model(model_id: str) -> bool:
     1080p, 1344x768 for 2K). Only a ``_2stage`` id renders two-stage: a base
     FastH3 id always runs one-stage at the canvas it sends. The short-lived
     ``..._turbo_2stage_720p`` spellings were retired by the socket on
-    2026-09-14 and are not MiniMax H3 ids.
+    2026-09-14 and are not MiniMax H3 ids. The Ref2VA two-stage ids
+    (``..._r2v_2stage``, ``..._r2v_balanced_2stage``) keep their Standard or
+    Balanced tier and are never Turbo.
     """
 
     return bool(_MINIMAX_H3_TURBO_PATTERN.match(model_id)) or (
@@ -217,11 +221,13 @@ def is_minimax_h3_audio_guide_model(model_id: str) -> bool:
 def is_minimax_h3_balanced_model(model_id: str) -> bool:
     """One of the 8-step MiniMax H3 Balanced workflows.
 
-    FL2VA covers t2v/i2v/flf2v; Ref2VA uses its matching Larry v4 adapter for r2v.
+    FL2VA covers t2v/i2v/flf2v; Ref2VA uses its matching Larry v4 adapter for
+    r2v, on its one-stage and two-stage (``..._r2v_balanced_2stage``) ids alike.
     """
 
     return bool(_MINIMAX_H3_BALANCED_PATTERN.match(model_id)) or (
         model_id == "minimax-h3-ref2va-fp8_r2v_balanced"
+        or model_id == "minimax-h3-ref2va-fp8_r2v_balanced_2stage"
     )
 
 

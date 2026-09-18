@@ -256,6 +256,13 @@ def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -
     assert i2v("minimax-h3-flf2v-balanced") == "minimax-h3-fl2va-fp8_flf2v_balanced"
     assert t2v("minimax-h3-r2v-balanced") == "minimax-h3-ref2va-fp8_r2v_balanced"
 
+    # Two-stage reference-to-video keeps its Standard or Balanced tier and, like
+    # every R2V selector, resolves on both the text and the image-conditioned tables.
+    assert t2v("minimax-h3-r2v-2stage") == "minimax-h3-ref2va-fp8_r2v_2stage"
+    assert t2v("minimax-h3-r2v-balanced-2stage") == "minimax-h3-ref2va-fp8_r2v_balanced_2stage"
+    assert i2v("minimax-h3-r2v-2stage") == "minimax-h3-ref2va-fp8_r2v_2stage"
+    assert i2v("minimax-h3-r2v-balanced-2stage") == "minimax-h3-ref2va-fp8_r2v_balanced_2stage"
+
     # FastH3 has no r2v mode, and t2v-only aliases must not leak into the
     # image-conditioned table.
     assert i2v("minimax-h3-t2v-turbo") == "minimax-h3-t2v-turbo"
