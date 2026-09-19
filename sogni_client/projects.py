@@ -2782,6 +2782,13 @@ class ProjectsApi(EventEmitter):
         # When each resubmitted project was last sent (epoch seconds), for the
         # recently-created grace.
         self._resubmitted_at: dict[str, float] = {}
+        # Bumped on every transport loss; tells a frame sent before a drop from
+        # one sent after.
+        self._transport_generation = 0
+        # The transport generation each request was written on, for requests
+        # whose send completed. A request written on a connection that has since
+        # dropped and that the server never saw died with that connection.
+        self._sent_on_generation: dict[str, int] = {}
         # Renders the server announced it moved to another worker (`jobRetry`),
         # still waiting for that worker's first frame. Only consulted when a
         # frame arrives with no `jobIndex` to match on; see
@@ -2973,10 +2980,12 @@ class ProjectsApi(EventEmitter):
             # A refusal can arrive as soon as send yields to the transport.
             self._unadmitted_requests[project.id] = request
             await self.client.socket.send("jobRequest", request)
+            self._sent_on_generation[project.id] = self._transport_generation
             self._projects.append(project)
             return project
         except BaseException:
             self._unadmitted_requests.pop(project.id, None)
+            self._sent_on_generation.pop(project.id, None)
             project._dispose()
             raise
 
@@ -3270,9 +3279,69 @@ class ProjectsApi(EventEmitter):
             for project_id in pending:
                 if live and project_id in live:
                     result[project_id] = {"state": "active"}
-                else:
-                    result[project_id] = checks.get(project_id) or {"state": "lost"}
+                    continue
+                check = checks.get(project_id)
+                if check:
+                    result[project_id] = check
+                    continue
+                # Nothing on the server knows it. A request that died with a
+                # dropped connection is sent again; one just (re)sent is still
+                # being admitted.
+                resent = await self._resend_undelivered(project_id)
+                result[project_id] = (
+                    {"state": "active"}
+                    if resent or self._recently_resubmitted(project_id)
+                    else {"state": "lost"}
+                )
         return result
+
+    async def _resend_undelivered(self, project_id: str) -> bool:
+        """Send a request again, once, when it was written on a connection that
+        then dropped and no server frame, snapshot or lookup has ever mentioned it.
+
+        A frame written into a dead socket can never arrive later, so this cannot
+        run the generation twice.
+        """
+
+        request = self._unadmitted_requests.get(project_id)
+        sent_on = self._sent_on_generation.get(project_id)
+        project = self._project(project_id)
+        if (
+            request is None
+            or sent_on is None
+            or sent_on >= self._transport_generation
+            or self._transport_disconnected
+            or project_id in self._resubmitted_at
+            or project_id in self._awaiting_resubmit
+            or (project is not None and project.finished)
+        ):
+            return False
+        # Claimed before the await so a concurrent lookup cannot send it twice.
+        self._resubmitted_at[project_id] = time.time()
+        self._sent_on_generation.pop(project_id, None)
+        _LOGGER.info(
+            "Project %s was sent on a connection that dropped before the server "
+            "received it; resubmitting",
+            project_id,
+        )
+        try:
+            await self.client.socket.send("jobRequest", request)
+        except Exception:
+            _LOGGER.warning("Resubmitting project %s failed", project_id, exc_info=True)
+            return False
+        self._resubmitted_at[project_id] = time.time()
+        self._sent_on_generation[project_id] = self._transport_generation
+        if project is not None:
+            project._keep_alive()
+        self._schedule_recheck(float(self._recovery_tuning["recently_created_grace_seconds"]))
+        return True
+
+    def _recently_resubmitted(self, project_id: str) -> bool:
+        """Resubmitted within the recently-created grace: the server may not list it yet."""
+
+        at = self._resubmitted_at.get(project_id)
+        grace = float(self._recovery_tuning["recently_created_grace_seconds"])
+        return at is not None and time.time() - at < grace
 
     async def _lookup_unlisted_project(self, project_id: str) -> dict[str, Any] | None:
         """Second opinion for a project neither the terminal REST record nor the
@@ -3926,6 +3995,12 @@ class ProjectsApi(EventEmitter):
                 cost["estimatedRenderSeconds"] = render
             if total is not None:
                 cost["estimatedTotalSeconds"] = total
+        # Share of the signed-in subscriber's daily fair-use capacity the project
+        # would draw. Sent only when the plan covers it on Fast; absent for
+        # guests, premium-vendor models, token billing, trials and Relaxed.
+        fair_use = response.get("dailyFairUse")
+        if isinstance(fair_use, dict) and fair_use.get("pct") is not None:
+            cost["dailyFairUsePct"] = fair_use["pct"]
         return cost
 
     async def estimate_cost(
@@ -3959,7 +4034,11 @@ class ProjectsApi(EventEmitter):
             path.extend(
                 [data.get("guidance", 0), data.get("sampler", "_"), data.get("contextImages", 0)]
             )
-        query = {key: data[key] for key in ("gptImageQuality", "outputFormat") if data.get(key)}
+        query = {
+            key: data[key]
+            for key in ("gptImageQuality", "outputFormat", "billingMode")
+            if data.get(key)
+        }
         response = await self.client.socket.get(
             f"/api/v{version}/job/estimate/" + "/".join(map(str, path)), query
         )
@@ -4045,6 +4124,10 @@ class ProjectsApi(EventEmitter):
                     and data["referenceVideoDurationSeconds"] >= 0
                     else None
                 ),
+                # Unpinned, the job renders on the connection's network, so
+                # quote that one.
+                "network": data.get("network") or self._current_network(),
+                "billingMode": data.get("billingMode"),
             },
         )
         return self._cost(response)
@@ -4063,7 +4146,13 @@ class ProjectsApi(EventEmitter):
             data["numberOfMedia"],
         ]
         response = await self.client.socket.get(
-            "/api/v1/job-audio/estimate/" + "/".join(quote(str(item)) for item in path)
+            "/api/v1/job-audio/estimate/" + "/".join(quote(str(item)) for item in path),
+            {
+                # Unpinned, the job renders on the connection's network, so
+                # quote that one.
+                "network": data.get("network") or self._current_network(),
+                "billingMode": data.get("billingMode"),
+            },
         )
         return self._cost(response)
 
@@ -4648,6 +4737,7 @@ class ProjectsApi(EventEmitter):
         # project back on reconnect, so hold the projects alive and quiet until
         # then.
         self._transport_disconnected = True
+        self._transport_generation += 1
         self._clear_authenticated_timer()
         for project in self._projects:
             if not project.finished:
@@ -4660,6 +4750,7 @@ class ProjectsApi(EventEmitter):
     def _forget_submission(self, project_id: str) -> None:
         self._unadmitted_requests.pop(project_id, None)
         self._resubmitted_at.pop(project_id, None)
+        self._sent_on_generation.pop(project_id, None)
 
     def _resubmit_after_reconnect(self, project_id: str, message: Any) -> bool:
         """The socket refused this project because it was shutting down.

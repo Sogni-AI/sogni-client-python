@@ -690,3 +690,40 @@ async def test_a_project_too_new_to_judge_is_rechecked_after_its_grace() -> None
     assert [e["projectId"] for e in events if e["type"] == "error"] == [project.id]
     settle(project)
     stop_timers(api)
+
+
+@pytest.mark.parametrize("dropped", [True, False])
+async def test_a_request_lost_to_a_socket_drop_is_resent_once(dropped: bool) -> None:
+    # A request written on a connection that dropped before the server read it
+    # is unknown everywhere after the reconnect. It is sent again, once, instead
+    # of failing as lost; a second disappearance does fail. With no drop in
+    # between, absence still means lost and nothing is resent.
+    api, client, _events, _synced = restart_harness()
+    project = track(api)
+    request = {"jobID": project.id, "keyFrames": [{"modelID": "flux1-schnell-fp8"}]}
+    # What create() records once the send completes.
+    api._unadmitted_requests[project.id] = request
+    api._sent_on_generation[project.id] = api._transport_generation
+    if dropped:
+        client.emit("connecting", {"network": "fast"})
+        client.emit("connected", {"network": "fast"})
+        api._clear_authenticated_timer()
+    # Two REST attempts, then the owner-scoped live lookup, all empty.
+    client.rest.responses.extend([ApiError(404, {"message": "not found"})] * 3)
+
+    first = await api.resolve_missing([project.id])
+
+    if not dropped:
+        assert first[project.id] == {"state": "lost"}
+        assert client.socket.sent == [], "no drop: nothing is resent"
+        stop_timers(api)
+        return
+    assert first[project.id] == {"state": "active"}, "a dropped request is not lost"
+    assert client.socket.sent == [{"type": "jobRequest", "data": request}], "resent once"
+    assert api._recheck_timer is not None, "the resent project is re-checked after its grace"
+
+    client.rest.responses.extend([ApiError(404, {"message": "not found"})] * 3)
+    second = await api.resolve_missing([project.id])
+    assert second[project.id] == {"state": "lost"}, "a resent request that vanishes is lost"
+    assert len(client.socket.sent) == 1, "only one resend per project"
+    stop_timers(api)

@@ -3362,3 +3362,69 @@ def test_video_request_accepts_an_explicit_control_net_of_none() -> None:
         model_options("video"),
     )
     assert "hasReferenceMask" not in message["keyFrames"][0]
+
+
+async def test_estimates_return_daily_fair_use_share_and_quote_the_render_network() -> None:
+    quote = {
+        "quote": {
+            "project": {
+                "costInToken": "1",
+                "costInUSD": "0.1",
+                "costInSpark": "2",
+                "costInSogni": "4",
+            }
+        },
+        "dailyFairUse": {"pct": 0.4},
+    }
+
+    class QuoteSocket(FakeSocket):
+        async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+            self.get_calls.append((path, params))
+            return quote
+
+    client = FakeClient()
+    client.socket = QuoteSocket()
+    api = ProjectsApi(client)
+    api._current_network_type = "fast"
+
+    video = await api.estimate_video_cost(
+        {
+            "tokenType": "spark",
+            "model": "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
+            "width": 1344,
+            "height": 768,
+            "duration": 6,
+            "fps": 24,
+            "steps": 4,
+            "numberOfMedia": 1,
+            "billingMode": "tokens",
+        }
+    )
+    audio = await api.estimate_audio_cost(
+        {
+            "tokenType": "spark",
+            "model": "ace_step_1.5_turbo",
+            "duration": 30,
+            "steps": 8,
+            "numberOfMedia": 1,
+            "network": "relaxed",
+        }
+    )
+    assert video["dailyFairUsePct"] == 0.4 and audio["dailyFairUsePct"] == 0.4
+    sent = [
+        {key: value for key, value in (query or {}).items() if value is not None}
+        for _path, query in client.socket.get_calls
+    ]
+    assert sent == [{"network": "fast", "billingMode": "tokens"}, {"network": "relaxed"}]
+
+    del quote["dailyFairUse"]
+    plain = await api.estimate_audio_cost(
+        {
+            "tokenType": "spark",
+            "model": "ace_step_1.5_turbo",
+            "duration": 30,
+            "steps": 8,
+            "numberOfMedia": 1,
+        }
+    )
+    assert "dailyFairUsePct" not in plain
