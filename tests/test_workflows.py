@@ -327,6 +327,34 @@ async def test_workflow_resume_and_reseed_use_encoded_ids_and_snake_wire_fields(
 
 
 @pytest.mark.asyncio
+async def test_workflow_reseed_sends_the_idempotency_key_and_reports_a_replay() -> None:
+    first_take = {"workflowId": "wf-take-1", "status": "running"}
+    reseed = {"cloned_from_run_id": "wf-src", "steps": [{"stepId": "image", "newSeed": 777}]}
+    rest = FakeRest(
+        [
+            {"data": {"workflow": first_take, "reseed": reseed}},
+            {"data": {"workflow": first_take, "idempotent": True, "reseed": reseed}},
+            {"data": {"workflow": first_take, "idempotent": "yes", "reseed": reseed}},
+        ]
+    )
+    api = CreativeWorkflowsApi(fake_client(rest))
+
+    started = await api.reseed("wf-src", idempotency_key="take-1")
+    replayed = await api.reseed("wf-src", {"idempotencyKey": "take-1"})
+    without_key = await api.reseed("wf-src")
+
+    assert started == {"workflow": first_take, "reseed": reseed}
+    assert replayed == {"workflow": first_take, "idempotent": True, "reseed": reseed}
+    # Only a literal true is a replay, and no key means no header.
+    assert "idempotent" not in without_key
+    assert rest.calls[0]["headers"]["Idempotency-Key"] == "take-1"
+    assert rest.calls[1]["headers"]["Idempotency-Key"] == "take-1"
+    assert "Idempotency-Key" not in (rest.calls[2]["headers"] or {})
+    # The key travels as a header only, never in the billed request body.
+    assert all("idempotency" not in key.lower() for call in rest.calls for key in call["body"])
+
+
+@pytest.mark.asyncio
 async def test_workflow_list_get_events_and_cancel_unwrap_envelopes() -> None:
     workflows = [{"workflowId": "wf-1"}]
     workflow = workflows[0]

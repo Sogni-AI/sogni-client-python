@@ -97,8 +97,16 @@ class FakeSocketFactory:
         return self.socket
 
 
-def response(status: int, *, json_body: Any = None, text: str | None = None) -> httpx.Response:
+def response(
+    status: int,
+    *,
+    json_body: Any = None,
+    text: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
     kwargs: dict[str, Any] = {"request": httpx.Request("GET", "https://api.sogni.ai/test")}
+    if headers is not None:
+        kwargs["headers"] = headers
     if text is not None:
         kwargs["text"] = text
     elif json_body is not None:
@@ -159,6 +167,38 @@ async def test_rest_client_non_json_error_preserves_status_and_body_excerpt() ->
     assert raised.value.status == 502
     assert raised.value.error_code == 502
     assert "upstream unavailable" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_rest_client_error_carries_the_wait_from_the_body_or_the_header() -> None:
+    limited = {
+        "status": "error",
+        "errorCode": 126,
+        "message": "Creative workflow start rate limit exceeded.",
+        "retryAfter": 1837,
+        "details": {"retryAfterSeconds": 1837},
+    }
+    fake = FakeHttpClient(
+        [
+            response(429, json_body=limited, headers={"Retry-After": "9999"}),
+            response(503, text="restarting", headers={"Retry-After": "10"}),
+            response(409, json_body={"status": "error", "message": "busy", "errorCode": 102}),
+        ]
+    )
+    client = RestClient("https://api.sogni.ai", ApiKeyAuthManager(), http_client=fake)
+
+    with pytest.raises(ApiError) as from_body:
+        await client.post("/v1/creative-agent/workflows", {"input": {"steps": []}})
+    with pytest.raises(ApiError) as from_header:
+        await client.get("/v1/anything")
+    with pytest.raises(ApiError) as without_wait:
+        await client.get("/v1/anything")
+
+    assert from_body.value.retry_after == 1837
+    assert from_body.value.details == {"retryAfterSeconds": 1837}
+    assert from_header.value.retry_after == 10
+    assert from_header.value.details is None
+    assert without_wait.value.retry_after is None
 
 
 HOLD_MESSAGE = "MiniMax H3 Latent Upscaler (Community) will be available soon."

@@ -172,7 +172,11 @@ class TokenAuthManager(AuthManager):
             }
         if not response.is_success:
             self.clear()
-            raise ApiError(response.status_code, body if isinstance(body, dict) else None)
+            raise ApiError(
+                response.status_code,
+                body if isinstance(body, dict) else None,
+                response.headers.get("retry-after"),
+            )
         data = body.get("data", {})
         token = data.get("token")
         refresh_token = data.get("refreshToken")
