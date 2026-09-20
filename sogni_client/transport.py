@@ -181,7 +181,7 @@ class RestClient:
                     "message": _non_json_error_message(response, text),
                     "errorCode": response.status_code,
                 }
-            raise ApiError(response.status_code, payload)
+            raise ApiError(response.status_code, payload, response.headers.get("retry-after"))
         if parse_error is not None:
             raise ValueError(
                 f"Failed to parse response body (HTTP {response.status_code}): {parse_error}"

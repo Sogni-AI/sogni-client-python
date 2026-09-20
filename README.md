@@ -435,6 +435,46 @@ The client also exposes:
 Python `snake_case` arguments are preferred. Common JavaScript-style aliases
 remain accepted to simplify migration.
 
+### Retrying safely: `retry_after`, `details`, and idempotency keys
+
+A refused REST request raises `ApiError` with the HTTP `status`, the server's
+message, and the error body as `payload`. When the server says how long to
+wait (a `429`, or a `503` while it restarts), `error.retry_after` carries that
+wait **in seconds**, read from the response body or, failing that, the
+`Retry-After` header. `error.details` carries any structured context the server
+attached, such as the active-workflow count behind a `409`. Both are `None`
+when the server sent neither. A REST chat error raised as `ChatJobError`
+carries the same two attributes.
+
+Wait at least `retry_after` seconds before trying again; a request sent sooner
+is refused again. A `409` for too many active workflows clears when one of your
+workflows finishes, so wait for a completion (`stream_events()` or `get()`)
+rather than re-sending the start.
+
+Pass `idempotency_key` to `start()` and `reseed()` and reuse it when you retry
+a request that timed out or lost its connection. The retry returns the workflow
+the first request created instead of starting, and billing, another one. A
+reseed mints new random seeds, so use a new key for each take you actually
+want; a replayed reseed comes back with `"idempotent": True`.
+
+```python
+import asyncio
+import uuid
+
+from sogni_client import ApiError
+
+
+async def start_with_retry(sogni, attempts=5, **params):
+    idempotency_key = str(uuid.uuid4())
+    for attempt in range(1, attempts + 1):
+        try:
+            return await sogni.workflows.start(idempotency_key=idempotency_key, **params)
+        except ApiError as error:
+            if error.retry_after is None or attempt == attempts:
+                raise
+            await asyncio.sleep(error.retry_after)
+```
+
 ## Resuming projects after a reconnect
 
 Generation keeps running on the Supernet while your socket is down. A dropped

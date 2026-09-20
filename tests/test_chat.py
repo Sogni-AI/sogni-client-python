@@ -743,6 +743,8 @@ async def test_hosted_completion_converts_recognized_api_errors_only() -> None:
     assert raised.value.code == "4081"
     assert raised.value.subscription_limit is True
     assert raised.value.required_plans == ["unlimited"]
+    assert raised.value.retry_after is None
+    assert raised.value.details is None
 
     with pytest.raises(ApiError) as reraised:
         await api.hosted.create(params)
@@ -902,6 +904,38 @@ async def test_durable_run_cancel_cost_needs_no_preview() -> None:
     call = rest.calls[0]
     assert call["headers"] is None
     assert _sent_fields(call) == {"tool_call_id": "call-3", "decision": "cancel"}
+
+
+@pytest.mark.asyncio
+async def test_rest_chat_errors_keep_the_servers_wait_and_details() -> None:
+    # An OpenAI-style envelope becomes a ChatJobError; a plain Sogni error body
+    # stays an ApiError. Either way the caller must still see how long to wait.
+    enveloped = ApiError(
+        429,
+        {
+            "error": {"message": "Slow down", "type": "rate_limit_error", "code": "126"},
+            "retryAfter": 20,
+            "details": {"scope": "account"},
+        },
+    )
+    plain = ApiError(
+        429,
+        {"status": "error", "errorCode": 126, "message": "Chat run start rate limit exceeded."},
+        "1800",
+    )
+    rest = FakeRest([enveloped, plain])
+    api = ChatApi(FakeClient(rest=rest), FakeProjects())
+
+    with pytest.raises(ChatJobError) as converted:
+        await api.hosted.create({"model": "model", "messages": [{"role": "user", "content": "Hi"}]})
+    with pytest.raises(ApiError) as passed_through:
+        await api.runs.confirm_cost("run-5", tool_call_id="call-5", decision="cancel")
+
+    assert converted.value.status == 429
+    assert converted.value.retry_after == converted.value.retryAfter == 20
+    assert converted.value.details == {"scope": "account"}
+    assert passed_through.value is plain
+    assert passed_through.value.retry_after == 1800
 
 
 @pytest.mark.asyncio

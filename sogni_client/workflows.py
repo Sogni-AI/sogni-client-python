@@ -381,15 +381,22 @@ class CreativeWorkflowsApi:
         seed_overrides = _pick(values, "seed_overrides", "seedOverrides", default=_MISSING)
         if seed_overrides is not _MISSING and seed_overrides is not None:
             body["seed_overrides"] = seed_overrides
+        headers = _attribution_headers(
+            self.client,
+            app_source,
+            _pick(values, "attribution", default=None),
+            new_id(),
+        )
+        # A reseed mints fresh random seeds, so a retried request without a key
+        # starts a second, different take. With a key, a retry returns the take
+        # the first request started (``idempotent: True``).
+        idempotency_key = _pick(values, "idempotency_key", "idempotencyKey", default=None)
+        if idempotency_key:
+            headers["Idempotency-Key"] = str(idempotency_key)
         response = await self.client.rest.post(
             f"/v1/creative-agent/workflows/{quote(str(workflow_id), safe='')}/reseed",
             body,
-            headers=_attribution_headers(
-                self.client,
-                app_source,
-                _pick(values, "attribution", default=None),
-                new_id(),
-            ),
+            headers=headers,
         )
         data = _workflow_data(response)
         if "workflow" not in data:
@@ -397,13 +404,14 @@ class CreativeWorkflowsApi:
         reseed = data.get("reseed") if isinstance(data.get("reseed"), Mapping) else {}
         cloned_from = reseed.get("cloned_from_run_id")
         steps = reseed.get("steps") if isinstance(reseed.get("steps"), list) else []
-        return {
-            "workflow": data["workflow"],
-            "reseed": {
-                "cloned_from_run_id": cloned_from if isinstance(cloned_from, str) else "",
-                "steps": steps,
-            },
+        result: dict[str, Any] = {"workflow": data["workflow"]}
+        if data.get("idempotent") is True:
+            result["idempotent"] = True
+        result["reseed"] = {
+            "cloned_from_run_id": cloned_from if isinstance(cloned_from, str) else "",
+            "steps": steps,
         }
+        return result
 
     async def list(
         self,

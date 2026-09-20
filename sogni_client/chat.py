@@ -1095,6 +1095,8 @@ class ChatApi(EventEmitter):
                     str(error),
                     status=error.status,
                     payload=error.payload,
+                    retry_after=error.retry_after,
+                    details=error.details,
                     **{key: value for key, value in extracted.items() if key != "message"},
                 ) from error
             raise
@@ -1134,6 +1136,8 @@ class ChatApi(EventEmitter):
                     str(error),
                     status=error.status,
                     payload=error.payload,
+                    retry_after=error.retry_after,
+                    details=error.details,
                     **{key: value for key, value in extracted.items() if key != "message"},
                 ) from error
             raise

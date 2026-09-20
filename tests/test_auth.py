@@ -197,6 +197,26 @@ async def test_refresh_http_error_raises_api_error_and_clears_authentication() -
 
 
 @pytest.mark.asyncio
+async def test_refresh_http_error_carries_the_retry_after_header() -> None:
+    now = time.time()
+    limited = httpx.Response(
+        429,
+        json={"status": "error", "message": "Too many requests", "errorCode": 126},
+        headers={"Retry-After": "45"},
+        request=httpx.Request("POST", "https://api.sogni.ai/v1/account/refresh-token"),
+    )
+    auth = TokenAuthManager("https://api.sogni.ai", refresh_client=FakeRefreshClient(limited))
+    await auth.authenticate(token=make_jwt(now + 3600), refresh_token=make_jwt(now + 7200))
+    auth._token_expires_at = 0
+
+    with pytest.raises(ApiError) as raised:
+        await auth.headers()
+
+    assert raised.value.status == 429
+    assert raised.value.retry_after == 45
+
+
+@pytest.mark.asyncio
 async def test_non_json_refresh_failure_keeps_real_http_status() -> None:
     now = time.time()
     access = make_jwt(now + 3600)
