@@ -72,6 +72,10 @@ fail on its first call. It is an 8-step model, hence `steps=8`.
 
 ## Edit an image with Krea 2 Identity Edit
 
+Worker image projects accept `output_format="png"`, `"jpg"`, or `"webp"`.
+Set `embed_prompt_metadata=False` to omit embedded prompt and generation settings.
+Image strength and seed values of `0` are preserved.
+
 Pass one or two local reference images through `context_images`. For two-image
 edits, place the base scene first and the identity or detail reference second.
 

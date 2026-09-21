@@ -1585,7 +1585,15 @@ def create_job_request_message(
                 {
                     "hasStartingImage": True,
                     "strengthIsEnabled": True,
-                    "strength": 1 - (float(params.get("startingImageStrength") or 0.5)),
+                    "strength": 1
+                    - _validate_number(
+                        params["startingImageStrength"]
+                        if params.get("startingImageStrength") is not None
+                        else 0.5,
+                        minimum=0,
+                        maximum=1,
+                        property_name="startingImageStrength",
+                    ),
                 }
             )
         _apply_sam3_and_pixal3d_params(keyframe, params)
@@ -1890,6 +1898,10 @@ def create_job_request_message(
     )
     if params.get("network"):
         template["network"] = params["network"]
+    if project_type == "image" and "embedPromptMetadata" in params:
+        if not isinstance(params["embedPromptMetadata"], bool):
+            raise ValueError("embedPromptMetadata must be a boolean")
+        template["embedPromptMetadata"] = params["embedPromptMetadata"]
     if params.get("appSource"):
         template["appSource"] = params["appSource"]
     # JSON.stringify in the JS client omits undefined keys.
@@ -2245,7 +2257,7 @@ class Job(DataEntity):
                 "stylePrompt": values.get("stylePrompt")
                 or self._project.params.get("stylePrompt", ""),
                 "tokenType": values.get("tokenType") or self._project.params.get("tokenType"),
-                "seed": self.seed or self._project.params.get("seed"),
+                "seed": self.seed if self.seed is not None else self._project.params.get("seed"),
                 "startingImage": await self.get_result_data(),
                 "startingImageStrength": 1 - _enhancement_strength(strength),
                 "sizePreset": self._project.params.get("sizePreset"),

@@ -32,6 +32,44 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
 MP3 = b"ID3" + b"\0" * 16
 
 
+@pytest.mark.parametrize("strength,denoise", [(0, 1), (1, 0), (0.25, 0.75), (None, 0.5)])
+@pytest.mark.parametrize("output_format", ["png", "jpg", "webp"])
+def test_worker_image_export_and_zero_strength(strength, denoise, output_format) -> None:
+    message = create_job_request_message(
+        "image-export",
+        {
+            "type": "image",
+            "modelId": "coreml-sogni_artist_v1_768",
+            "positivePrompt": "A ceramic mug",
+            "numberOfMedia": 1,
+            "seed": 0,
+            "startingImage": PNG,
+            "startingImageStrength": strength,
+            "outputFormat": output_format,
+            "embedPromptMetadata": False,
+        },
+        model_options("image"),
+    )
+    assert message["outputFormat"] == output_format
+    assert message["embedPromptMetadata"] is False
+    assert message["keyFrames"][0]["strength"] == denoise
+    assert message["keyFrames"][0]["seed"] == 0
+
+
+def test_worker_image_metadata_requires_boolean() -> None:
+    with pytest.raises(ValueError, match="embedPromptMetadata must be a boolean"):
+        create_job_request_message(
+            "invalid",
+            {
+                "type": "image",
+                "modelId": "coreml-sogni_artist_v1_768",
+                "positivePrompt": "A mug",
+                "embedPromptMetadata": "false",
+            },
+            model_options("image"),
+        )
+
+
 def model_options(kind: str, **overrides: Any) -> dict[str, Any]:
     options: dict[str, Any] = {
         "type": kind,
@@ -1439,7 +1477,10 @@ async def test_projects_api_emits_normalized_public_project_and_job_events() -> 
 
 
 @pytest.mark.asyncio
-async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases() -> None:
+@pytest.mark.parametrize("source_seed", [0, 42])
+async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases(
+    source_seed,
+) -> None:
     client = FakeClient()
     api = ProjectsApi(client)
     parent = Project(
@@ -1447,6 +1488,7 @@ async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases(
             "type": "image",
             "modelId": "flux1-schnell-fp8",
             "positivePrompt": "original",
+            "seed": 99,
             "stylePrompt": "original style",
             "numberOfMedia": 1,
             "tokenType": "sogni",
@@ -1461,7 +1503,7 @@ async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases(
             "status": "completed",
             "step": 5,
             "stepCount": 5,
-            "seed": 42,
+            "seed": source_seed,
             "resultUrl": "https://cdn.example/source.png",
         }
     )
@@ -1495,7 +1537,7 @@ async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases(
     assert submitted["positivePrompt"] == "override"
     assert submitted["stylePrompt"] == "original style"
     assert submitted["tokenType"] == "sogni"
-    assert submitted["seed"] == 42
+    assert submitted["seed"] == source_seed
     assert submitted["startingImage"] == b"result"
     assert submitted["startingImageStrength"] == pytest.approx(0.85)
     assert submitted["sizePreset"] == "square"
