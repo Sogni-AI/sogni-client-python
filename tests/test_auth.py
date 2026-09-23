@@ -286,3 +286,76 @@ async def test_cookie_auth_manager_is_explicit_and_not_backupable() -> None:
         await auth.backup()
     auth.clear()
     assert updates == [True, False]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 401])
+@pytest.mark.parametrize("sign_out", [False, True])
+async def test_late_renewal_cannot_replace_new_credentials_or_restore_signout(
+    status: int, sign_out: bool
+) -> None:
+    now = time.time()
+    old_access = make_jwt(now + 3600, addr="account-a")
+    old_refresh = make_jwt(now + 7200, addr="account-a")
+    new_access = make_jwt(now + 3600, addr="account-b")
+    new_refresh = make_jwt(now + 7200, addr="account-b")
+    refresh_client = FakeRefreshClient(
+        json_response(status, {"data": {"token": old_access, "refreshToken": old_refresh}}),
+        pause=True,
+    )
+    auth = TokenAuthManager("https://api.sogni.ai", refresh_client=refresh_client)
+    await auth.authenticate(token=old_access, refresh_token=old_refresh)
+    auth._token_expires_at = 0
+    requests = [asyncio.create_task(auth.headers()) for _ in range(2)]
+    for _ in range(100):
+        if refresh_client.calls:
+            break
+        await asyncio.sleep(0)
+    assert len(refresh_client.calls) == 1
+
+    if sign_out:
+        auth.clear()
+    else:
+        await auth.authenticate(token=new_access, refresh_token=new_refresh)
+    refresh_client.release.set()
+    errors = await asyncio.gather(*requests, return_exceptions=True)
+    assert all(
+        isinstance(error, RuntimeError) and "account changed" in str(error) for error in errors
+    )
+    if sign_out:
+        assert await auth.backup() is None
+        assert not auth.is_authenticated
+    else:
+        assert await auth.headers() == {"Authorization": new_access}
+        assert await auth.backup() == {"token": new_access, "refreshToken": new_refresh}
+
+
+@pytest.mark.asyncio
+async def test_expired_new_account_login_never_reuses_previous_valid_access_token() -> None:
+    now = time.time()
+    new_access = make_jwt(now + 3600, addr="account-b")
+    new_refresh = make_jwt(now + 7200, addr="account-b")
+    refresh_client = FakeRefreshClient(
+        json_response(200, {"data": {"token": new_access, "refreshToken": new_refresh}}),
+        pause=True,
+    )
+    auth = TokenAuthManager("https://api.sogni.ai", refresh_client=refresh_client)
+    await auth.authenticate(
+        token=make_jwt(now + 3600, addr="account-a"),
+        refresh_token=make_jwt(now + 7200, addr="account-a"),
+    )
+    login = asyncio.create_task(
+        auth.authenticate(token=make_jwt(now - 60, addr="account-b"), refresh_token=new_refresh)
+    )
+    for _ in range(100):
+        if refresh_client.calls:
+            break
+        await asyncio.sleep(0)
+    assert len(refresh_client.calls) == 1
+    pending_headers = asyncio.create_task(auth.headers())
+    await asyncio.sleep(0)
+    assert not pending_headers.done()
+    refresh_client.release.set()
+    await login
+    assert await pending_headers == {"Authorization": new_access}
+    assert len(refresh_client.calls) == 1

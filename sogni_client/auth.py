@@ -84,6 +84,7 @@ class TokenAuthManager(AuthManager):
         self._refresh_token: str | None = None
         self._refresh_expires_at = 0.0
         self._renew_lock = asyncio.Lock()
+        self._credential_version = 0
         self._refresh_client = refresh_client
 
     @property
@@ -110,11 +111,20 @@ class TokenAuthManager(AuthManager):
             raise ValueError("Both token and refresh_token are required")
         token_exp = float(_decode_jwt(token).get("exp", 0))
         refresh_exp = float(_decode_jwt(refresh_token).get("exp", 0))
-        self._refresh_token = refresh_token
-        self._refresh_expires_at = refresh_exp
+        if token != self._token or refresh_token != self._refresh_token:
+            self._credential_version += 1
+            # A new sign-in must not wait behind a previous account's renewal.
+            # Waiters on the old lock reject when they observe this version.
+            self._renew_lock = asyncio.Lock()
         if token_exp > time.time():
             self._set_tokens(token, refresh_token, token_exp, refresh_exp)
         else:
+            # Do not let requests made during this sign-in reuse an otherwise
+            # valid access token belonging to the previous account.
+            self._token = token
+            self._token_expires_at = token_exp
+            self._refresh_token = refresh_token
+            self._refresh_expires_at = refresh_exp
             await self._renew_token_safe()
 
     async def headers(self) -> dict[str, str]:
@@ -129,6 +139,8 @@ class TokenAuthManager(AuthManager):
     def clear(self) -> None:
         if not self._token and not self._refresh_token:
             return
+        self._credential_version += 1
+        self._renew_lock = asyncio.Lock()
         self._token = None
         self._token_expires_at = 0
         self._refresh_token = None
@@ -143,12 +155,19 @@ class TokenAuthManager(AuthManager):
         return await self._renew_token_safe()
 
     async def _renew_token_safe(self) -> str:
+        version = self._credential_version
         async with self._renew_lock:
+            self._assert_credentials(version)
             if self._token and self._token_expires_at > time.time():
                 return self._token
             return await self._renew_token()
 
+    def _assert_credentials(self, version: int) -> None:
+        if version != self._credential_version:
+            raise RuntimeError("The account changed. Submit this request again.")
+
     async def _renew_token(self) -> str:
+        version = self._credential_version
         if not self._refresh_token or self._refresh_expires_at <= time.time():
             self.clear()
             raise ValueError("Refresh token expired")
@@ -162,6 +181,9 @@ class TokenAuthManager(AuthManager):
         finally:
             if owns_client:
                 await client.aclose()
+        # A late success must not restore a signed-out account, and a late
+        # rejection must not clear credentials supplied by a newer sign-in.
+        self._assert_credentials(version)
         try:
             body = response.json()
         except ValueError:
