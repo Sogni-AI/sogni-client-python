@@ -304,7 +304,10 @@ async def test_websocket_connect_builds_protocol_query_and_exact_auth_headers() 
         assert query["appSource"] == ["pytest"]
         assert query["clientType"] == ["artist"]
         assert query["forceWorkerId"] == ["fast"]
-        assert json.loads(query["socketEventSubscriptions"][0]) == {"modelAvailability": False}
+        assert json.loads(query["socketEventSubscriptions"][0]) == {
+            "projectQueue": True,
+            "modelAvailability": False,
+        }
         assert query["clientName"] == ["Sogni/3.0.0 (sogni-client) 5.21.3"]
         assert call["additional_headers"] == {"api-key": "socket-secret"}
         assert call["ping_interval"] == call["ping_timeout"] == 15

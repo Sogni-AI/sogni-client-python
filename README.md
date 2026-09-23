@@ -556,6 +556,28 @@ seconds.
 Recovery is per app instance: the server hands projects back to the `appId` that
 created them, so persist your `appId` and reuse it across restarts.
 
+## Queue explanations
+
+`project.waiting_reason` and `project.job_waiting_reasons` describe why queued
+work is waiting. Subscribe to `sogni.projects.on("queueChanged", callback)` for
+updates with `projectId`, `waitingReason`, and `jobWaitingReasons`. Existing
+`project` and `job` events keep their meanings; a partial batch can be processing
+while another result waits.
+
+Each reason includes a server-provided plain-text `message` and a `reason` code:
+`concurrency_limit`, `model_concurrency_limit`, `payment_pending`, `no_workers`,
+or `queued`. These describe the current wait, not progress or an ETA. Each
+per-result entry has a zero-based `jobIndex`; `imgID` is optional until a worker
+starts. Reading queue entries does not create placeholder jobs. Known pending
+jobs also expose `job.waiting_reason`. Camel-case aliases and JSON serialization
+use `waitingReason` and `jobWaitingReasons`.
+
+Queue state clears when results start or finish, on explicit null/empty updates,
+and when an entry is omitted from the server's complete current list. Older
+servers simply leave these fields empty. The SDK automatically requests the
+`projectQueue` socket subscription; integrations may explicitly disable it with
+`socket_event_subscriptions={"projectQueue": False}`.
+
 ## Announcements
 
 Admin-authored in-app announcements — maintenance notices, launches — arrive on

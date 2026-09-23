@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import random
+import re
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
@@ -46,6 +47,27 @@ AUTHENTICATED_FALLBACK_SECONDS = 10.0
 READY_POLL_SECONDS = 0.1
 PLAIN_TEXT_ERROR_MAX_LENGTH = 500
 ERROR_BODY_EXCERPT_LENGTH = 200
+
+
+def _project_queue_subscription(current: bool, update: dict[str, Any]) -> bool:
+    """Retain queue subscription intent when an older server omits its ACK."""
+
+    def is_queue(name: Any) -> bool:
+        return isinstance(name, str) and re.sub(r"[^a-z]", "", name.lower()) == "projectqueue"
+
+    enabled = False if update.get("reset") is True else current
+    if is_queue(update.get("event")) and isinstance(update.get("enabled"), bool):
+        enabled = update["enabled"]
+    subscriptions = update.get("subscriptions")
+    if isinstance(subscriptions, dict):
+        for name, value in subscriptions.items():
+            if is_queue(name) and isinstance(value, bool):
+                enabled = value
+    for key, value in (("subscribe", True), ("unsubscribe", False)):
+        names = update.get(key)
+        if any(is_queue(name) for name in (names if isinstance(names, list) else [names])):
+            enabled = value
+    return enabled
 
 
 def _non_json_error_message(response: httpx.Response, text: str) -> str:
@@ -289,7 +311,13 @@ class WebSocketClient(EventEmitter):
         self.app_id = app_id
         self.app_source = app_source.strip() if app_source and app_source.strip() else None
         self.connection_attribution = normalize_connection_attribution(connection_attribution)
-        self.socket_event_subscriptions = socket_event_subscriptions
+        self._project_queue_subscription = _project_queue_subscription(
+            True, {"subscriptions": socket_event_subscriptions}
+        )
+        self.socket_event_subscriptions = {
+            **(socket_event_subscriptions or {}),
+            "projectQueue": self._project_queue_subscription,
+        }
         self.supernet_type = network
         http_scheme = "http" if urlsplit(base_url).scheme in {"http", "ws"} else "https"
         parts = urlsplit(base_url)
@@ -323,7 +351,13 @@ class WebSocketClient(EventEmitter):
             if isinstance(payload, dict) and isinstance(
                 payload.get("socketEventSubscriptions"), dict
             ):
-                self.socket_event_subscriptions = dict(payload["socketEventSubscriptions"])
+                subscriptions = payload["socketEventSubscriptions"]
+                if isinstance(subscriptions.get("projectQueue"), bool):
+                    self._project_queue_subscription = subscriptions["projectQueue"]
+                self.socket_event_subscriptions = {
+                    **subscriptions,
+                    "projectQueue": self._project_queue_subscription,
+                }
 
         self.on("socketEventSubscriptionsUpdated", remember_subscriptions)
 
@@ -597,6 +631,13 @@ class WebSocketClient(EventEmitter):
     async def set_socket_event_subscriptions(self, update: dict[str, Any]) -> None:
         update_keys = {"subscriptions", "subscribe", "unsubscribe", "reset", "event", "enabled"}
         normalized = update if update_keys.intersection(update) else {"subscriptions": update}
+        self._project_queue_subscription = _project_queue_subscription(
+            self._project_queue_subscription, normalized
+        )
+        self.socket_event_subscriptions = {
+            **self.socket_event_subscriptions,
+            "projectQueue": self._project_queue_subscription,
+        }
         await self.send("setSocketEventSubscriptions", normalized)
 
     setSocketEventSubscriptions = set_socket_event_subscriptions

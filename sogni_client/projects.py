@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import copy
 import json
 import logging
 import math
@@ -21,6 +22,7 @@ from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ProjectError
 from .events import DataEntity, EventEmitter
 from .personal_loras import PersonalLoras
+from .queue_state import normalize_job_waiting_reasons, normalize_waiting_reason
 from .recovery import (
     PROJECT_LOST_ERROR,
     is_llm_recovered_project,
@@ -1911,7 +1913,7 @@ def create_job_request_message(
 
 class Job(DataEntity):
     def __init__(self, data: dict[str, Any], project: Project, api: ProjectsApi) -> None:
-        super().__init__(data)
+        super().__init__({"waitingReason": None, **data})
         self._project = project
         self._api = api
         self._enhancement_project: Project | None = None
@@ -2133,6 +2135,13 @@ class Job(DataEntity):
     jobIndex = job_index
 
     @property
+    def waiting_reason(self) -> dict[str, Any] | None:
+        """Current server explanation for this result's wait, when available."""
+        return copy.deepcopy(self._data.get("waitingReason"))
+
+    waitingReason = waiting_reason
+
+    @property
     def eta(self) -> datetime | None:
         return self._data.get("eta")
 
@@ -2287,6 +2296,8 @@ class Job(DataEntity):
             "isNSFW": bool(data.get("triggeredNSFWFilter")),
             "nsfwDetected": data.get("nsfwDetected") is True,
         }
+        if _job_index(data.get("jobIndex")) is not None:
+            delta["jobIndex"] = data["jobIndex"]
         if data.get("nsfwSources") is not None:
             delta["nsfwSources"] = list(data.get("nsfwSources") or [])
         if data.get("result"):
@@ -2318,12 +2329,25 @@ class Job(DataEntity):
         self._update(delta)
 
     def _update(self, delta: dict[str, Any]) -> None:
+        clear_waiting = delta.get("status") in {
+            "initiating",
+            "processing",
+            "completed",
+            "failed",
+            "canceled",
+        }
+        if clear_waiting:
+            delta = {**delta, "waitingReason": None}
         if "eta" in delta and isinstance(delta.get("eta"), datetime):
             delta["etaSeconds"] = round((delta["eta"] - _now()).total_seconds())
             if not isinstance(self._data.get("etaStartedAt"), datetime):
                 delta.setdefault("etaStartedAt", _now())
         super()._update(delta)
-        if self.status == "processing":
+        if clear_waiting:
+            self._project._clear_job_waiting_reason(self.id, self.job_index)
+        # Queue metadata is not worker activity and must not restart a budget
+        # that a requeue event just stopped.
+        if self.status == "processing" and set(delta) != {"waitingReason"}:
             self._start_runtime_timeout()
         elif self.finished:
             self._stop_runtime_timeout()
@@ -2401,12 +2425,15 @@ class Project(DataEntity):
                 "startedAt": _now(),
                 "params": params,
                 "queuePosition": -1,
+                "waitingReason": None,
+                "jobWaitingReasons": [],
                 "status": "pending",
             }
         )
         self._api = api
         self._recovered = bool(recovered)
         self._jobs: list[Job] = []
+        self._queue_revision = 0
         self._completion = asyncio.get_running_loop().create_future()
         self._last_emitted_progress = -1
         self._last_updated = _now()
@@ -2491,6 +2518,67 @@ class Project(DataEntity):
         return self._data.get("queueStatus")
 
     queueStatus = queue_status
+
+    @property
+    def waiting_reason(self) -> dict[str, Any] | None:
+        """Current server explanation for queued work, independent of project status."""
+        return copy.deepcopy(self._data.get("waitingReason"))
+
+    waitingReason = waiting_reason
+
+    @property
+    def job_waiting_reasons(self) -> list[dict[str, Any]]:
+        """Queued result positions; an image ID may not exist until a worker starts."""
+        return copy.deepcopy(self._data.get("jobWaitingReasons") or [])
+
+    jobWaitingReasons = job_waiting_reasons
+
+    def _set_queue_state(self, data: dict[str, Any], revision: int | None = None) -> None:
+        if self.finished or (revision is not None and revision != self._queue_revision):
+            return
+        self._queue_revision += 1
+        count = int(self.params.get("numberOfMedia", 1))
+        entries = normalize_job_waiting_reasons(data.get("jobWaitingReasons"), count)
+        waiting = normalize_waiting_reason(data.get("waitingReason"))
+        current = []
+        for entry in entries:
+            local = next(
+                (
+                    job
+                    for job in self._jobs
+                    if (
+                        (entry.get("imgID") and str(job.id).upper() == entry["imgID"].upper())
+                        or job.job_index == entry["jobIndex"]
+                    )
+                ),
+                None,
+            )
+            if local is None or local.status == "pending":
+                current.append(entry)
+        if isinstance(data.get("jobWaitingReasons"), list) and data["jobWaitingReasons"]:
+            waiting = current[0]["waitingReason"] if current else None
+        entries = current
+        self._update({"waitingReason": waiting, "jobWaitingReasons": entries})
+
+    def _clear_job_waiting_reason(self, job_id: str, job_index: int | None) -> None:
+        # Even an unchanged live assignment invalidates an older HTTP snapshot.
+        self._queue_revision += 1
+        previous = self._data.get("jobWaitingReasons") or []
+        entries = [
+            entry
+            for entry in previous
+            if not (
+                (entry.get("imgID") and entry["imgID"].upper() == str(job_id).upper())
+                or (job_index is not None and entry["jobIndex"] == job_index)
+            )
+        ]
+        if entries != previous or (not entries and self.waiting_reason is not None):
+            self._update(
+                {
+                    "waitingReason": entries[0]["waitingReason"] if entries else None,
+                    "jobWaitingReasons": entries,
+                }
+            )
 
     @property
     def jobs(self) -> list[Job]:
@@ -2595,7 +2683,44 @@ class Project(DataEntity):
 
     def _update(self, delta: dict[str, Any]) -> None:
         self._keep_alive()
+        if delta.get("status") in {"completed", "failed", "canceled"}:
+            self._queue_revision += 1
+            delta = {**delta, "waitingReason": None, "jobWaitingReasons": []}
+        queue_changed = any(
+            key in delta and self._data.get(key) != delta[key]
+            for key in ("waitingReason", "jobWaitingReasons")
+        )
+        if "jobWaitingReasons" in delta:
+            entries = delta["jobWaitingReasons"]
+            for job in self._jobs:
+                entry = next(
+                    (
+                        item
+                        for item in entries
+                        if (
+                            (item.get("imgID") and item["imgID"].upper() == str(job.id).upper())
+                            or (job.job_index is not None and item["jobIndex"] == job.job_index)
+                        )
+                    ),
+                    None,
+                )
+                job._update(
+                    {
+                        "waitingReason": entry["waitingReason"]
+                        if entry and job.status == "pending"
+                        else None
+                    }
+                )
         super()._update(delta)
+        if queue_changed:
+            self._api.emit(
+                "queueChanged",
+                {
+                    "projectId": self.id,
+                    "waitingReason": self.waiting_reason,
+                    "jobWaitingReasons": self.job_waiting_reasons,
+                },
+            )
 
     def _keep_alive(self) -> None:
         self._last_updated = _now()
@@ -2696,7 +2821,9 @@ class Project(DataEntity):
             self._keep_alive()
 
     async def _sync_to_server(self) -> None:
+        revision = self._queue_revision
         data = await self._api.get(self.id)
+        self._set_queue_state(data, revision)
         raw_jobs = data.get("completedWorkerJobs")
         if not isinstance(raw_jobs, list):
             raw_jobs = []
@@ -2820,6 +2947,7 @@ class ProjectsApi(EventEmitter):
         socket.on("changeNetwork", self._handle_change_network)
         socket.on("swarmModels", self._handle_swarm_models)
         socket.on("jobState", self._handle_job_state)
+        socket.on("projectQueue", self._handle_project_queue)
         socket.on("jobProgress", self._handle_job_progress)
         socket.on("jobETA", self._handle_job_eta)
         socket.on("jobResult", self._handle_job_result)
@@ -3245,6 +3373,7 @@ class ProjectsApi(EventEmitter):
 
         assert_session = self._capture_session()
         requested_at = time.time()
+        queue_revisions = self._queue_revisions()
         body = await self.client.socket.get(
             "/api/v1/artist/projects/sync", {"appId": self.client.socket.app_id}
         )
@@ -3260,7 +3389,7 @@ class ProjectsApi(EventEmitter):
         }
         if isinstance(body.get("serverTime"), (int, float)):
             snapshot["serverTime"] = body["serverTime"]
-        return await self._queue_sync(snapshot, reason, requested_at)
+        return await self._queue_sync(snapshot, reason, requested_at, queue_revisions)
 
     async def list_projects_elsewhere(self) -> list[dict[str, Any]]:
         """In-flight projects this account owns on OTHER app instances.
@@ -3457,20 +3586,35 @@ class ProjectsApi(EventEmitter):
 
     resolveMissing = resolve_missing
 
+    def _queue_revisions(self) -> dict[str, int]:
+        return {project.id: project._queue_revision for project in self._projects}
+
     async def _queue_sync(
-        self, snapshot: dict[str, Any], reason: str, requested_at: float
+        self,
+        snapshot: dict[str, Any],
+        reason: str,
+        requested_at: float,
+        queue_revisions: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         """Serialize syncs so two snapshots never interleave their replays."""
 
         assert_session = self._capture_session()
+        if queue_revisions is None:
+            queue_revisions = self._queue_revisions()
         async with self._sync_lock:
             assert_session()
-            return await self._reconcile(snapshot, reason, requested_at)
+            return await self._reconcile(snapshot, reason, requested_at, queue_revisions)
 
     async def _reconcile(
-        self, snapshot: dict[str, Any], reason: str, requested_at: float
+        self,
+        snapshot: dict[str, Any],
+        reason: str,
+        requested_at: float,
+        queue_revisions: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         assert_session = self._capture_session()
+        if queue_revisions is None:
+            queue_revisions = self._queue_revisions()
         result: dict[str, Any] = {
             "reason": reason,
             "snapshot": snapshot,
@@ -3496,12 +3640,16 @@ class ProjectsApi(EventEmitter):
             if tracked is not None:
                 if tracked.finished:
                     continue
-                await self._replay_recovered_project(tracked, recovered)
+                await self._replay_recovered_project(
+                    tracked, recovered, queue_revisions.get(project_id, 0)
+                )
                 result["active"].append(project_id)
             else:
                 project = self._rehydrate_project(recovered)
                 self._projects.append(project)
-                await self._replay_recovered_project(project, recovered)
+                await self._replay_recovered_project(
+                    project, recovered, queue_revisions.get(project_id, 0)
+                )
                 result["recoveredActive"].append(recovered)
 
         for recovered in snapshot.get("unclaimedCompletedProjects") or []:
@@ -3516,7 +3664,9 @@ class ProjectsApi(EventEmitter):
             if tracked is not None:
                 if tracked.finished:
                     continue
-                await self._replay_recovered_project(tracked, recovered)
+                await self._replay_recovered_project(
+                    tracked, recovered, queue_revisions.get(project_id, 0)
+                )
                 result["completed"].append(project_id)
             elif project_id not in self._recovered_completed_ids:
                 # The sync route is read-only, so the same finished project can
@@ -3525,7 +3675,9 @@ class ProjectsApi(EventEmitter):
                 self._recovered_completed_ids.add(project_id)
                 project = self._rehydrate_project(recovered)
                 self._projects.append(project)
-                await self._replay_recovered_project(project, recovered)
+                await self._replay_recovered_project(
+                    project, recovered, queue_revisions.get(project_id, 0)
+                )
                 result["recoveredCompleted"].append(
                     {**recovered, "resultUrls": project.result_urls}
                 )
@@ -3614,11 +3766,17 @@ class ProjectsApi(EventEmitter):
             recovered=True,
         )
 
-    async def _replay_recovered_project(self, project: Project, recovered: dict[str, Any]) -> None:
-        await self._replay_raw_project(project, recovered, True)
+    async def _replay_recovered_project(
+        self, project: Project, recovered: dict[str, Any], queue_revision: int | None = None
+    ) -> None:
+        await self._replay_raw_project(project, recovered, True, queue_revision)
 
     async def _replay_raw_project(
-        self, project: Project, raw: dict[str, Any], include_in_flight_jobs: bool
+        self,
+        project: Project,
+        raw: dict[str, Any],
+        include_in_flight_jobs: bool,
+        queue_revision: int | None = None,
     ) -> None:
         """Bring a tracked project up to date by replaying the frames it missed.
 
@@ -3632,6 +3790,7 @@ class ProjectsApi(EventEmitter):
 
         assert_session = self._capture_session()
         project_id = project.id
+        project._set_queue_state(raw, queue_revision)
         step_count = raw.get("stepCount")
         if not isinstance(step_count, (int, float)) or isinstance(step_count, bool):
             step_count = project.params.get("steps")
@@ -3660,6 +3819,7 @@ class ProjectsApi(EventEmitter):
                 frame: dict[str, Any] = {
                     "jobID": project_id,
                     "imgID": img_id,
+                    "jobIndex": job.get("jobIndex"),
                     "triggeredNSFWFilter": bool(job.get("triggeredNSFWFilter")),
                     "userCanceled": job.get("reason") == "artistCanceled",
                 }
@@ -3689,6 +3849,7 @@ class ProjectsApi(EventEmitter):
                         "jobID": project_id,
                         "imgID": img_id,
                         "isFromWorker": True,
+                        "jobIndex": job.get("jobIndex"),
                         "error": reason,
                         "error_message": (
                             "Sensitive content detected."
@@ -3712,6 +3873,7 @@ class ProjectsApi(EventEmitter):
                         "jobID": project_id,
                         "imgID": img_id,
                         "workerName": worker_name,
+                        "jobIndex": job.get("jobIndex"),
                     }
                 )
             elif status in {"jobStarted", "jobProgress"}:
@@ -3721,6 +3883,7 @@ class ProjectsApi(EventEmitter):
                         "jobID": project_id,
                         "imgID": img_id,
                         "workerName": worker_name,
+                        "jobIndex": job.get("jobIndex"),
                     }
                 )
                 performed = job.get("performedSteps")
@@ -4336,6 +4499,13 @@ class ProjectsApi(EventEmitter):
     def _project(self, project_id: str) -> Project | None:
         return next((item for item in self._projects if item.id == project_id), None)
 
+    def _handle_project_queue(self, data: Any) -> None:
+        if not isinstance(data, dict) or not isinstance(data.get("jobID"), str):
+            return
+        project = self._project(data["jobID"])
+        if project is not None and not project.finished:
+            project._set_queue_state(data)
+
     def _handle_job_state(self, data: Any) -> None:
         if not isinstance(data, dict):
             return
@@ -4398,6 +4568,8 @@ class ProjectsApi(EventEmitter):
             for job in project.jobs:
                 if not job.finished:
                     job._stop_runtime_timeout()
+            if "waitingReason" in data or "jobWaitingReasons" in data:
+                project._set_queue_state(data)
             project._update(
                 {
                     "status": "queued",
@@ -4440,15 +4612,19 @@ class ProjectsApi(EventEmitter):
         if not project:
             return None, None
         job_id = data.get("imgID") or ""
-        job = self._reclaim_reassigned_job(project, job_id) or project._add_job(
+        job = self._reclaim_reassigned_job(
+            project, job_id, data.get("jobIndex")
+        ) or project._add_job(
             {
                 "id": job_id,
                 "projectId": project.id,
                 "status": "pending",
                 "step": 0,
                 "stepCount": project.params.get("steps", 0),
+                "jobIndex": data.get("jobIndex"),
             }
         )
+        project._clear_job_waiting_reason(job.id, job.job_index)
         return project, job
 
     def _reclaim_reassigned_job(
@@ -4553,6 +4729,7 @@ class ProjectsApi(EventEmitter):
         """
 
         job._stop_runtime_timeout()
+        job._project._clear_job_waiting_reason(job.id, job.job_index)
         delta: dict[str, Any] = {}
         if status:
             delta["status"] = status
@@ -4568,6 +4745,7 @@ class ProjectsApi(EventEmitter):
                 "etaStartedAt": None,
                 "etaSeconds": None,
                 "etaRange": None,
+                "waitingReason": None,
             }
         )
         job._update(delta)
@@ -4658,6 +4836,11 @@ class ProjectsApi(EventEmitter):
 
     def _handle_job_result(self, data: Any) -> None:
         if isinstance(data, dict):
+            project = self._project(data.get("jobID", ""))
+            if project is not None:
+                project._clear_job_waiting_reason(
+                    data.get("imgID", ""), _job_index(data.get("jobIndex"))
+                )
             self._track_task(self._apply_job_result(data, session_version=self._session_version))
 
     async def _apply_job_result(
@@ -4849,6 +5032,7 @@ class ProjectsApi(EventEmitter):
         self._clear_authenticated_timer()
         for project in self._projects:
             if not project.finished:
+                project._set_queue_state({})
                 project._keep_alive()
 
     def _handle_disconnect(self, _data: Any) -> None:
@@ -5007,10 +5191,11 @@ class ProjectsApi(EventEmitter):
             else [],
         }
         requested_at = self._connected_at or time.time()
+        queue_revisions = self._queue_revisions()
 
         async def run() -> None:
             try:
-                await self._queue_sync(snapshot, "authenticated", requested_at)
+                await self._queue_sync(snapshot, "authenticated", requested_at, queue_revisions)
             except Exception:
                 _LOGGER.error("Project recovery after authentication failed", exc_info=True)
 
