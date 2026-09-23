@@ -192,7 +192,7 @@
       "executionMode": "direct",
       "hostedToolName": "sound_to_video",
       "sdkToolName": "sound_to_video",
-      "hostedSchemaSha256": "6451568f77683b28956749c56f2f652a8ecea58b8addcb453fa016803120b3e0",
+      "hostedSchemaSha256": "bf66f7c41fdc267675b849fe0162af47a2504a5997b4905109ab16d2db452add",
       "hostedRequired": [
         "prompt"
       ],
@@ -215,7 +215,9 @@
         "targetResolution",
         "aspectRatio",
         "outputFormat",
-        "returnLastFrame"
+        "returnLastFrame",
+        "loras",
+        "loraStrengths"
       ],
       "argumentAliasTargets": [
         "prompt",

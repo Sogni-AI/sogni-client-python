@@ -747,11 +747,6 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
             raise _api_error(
                 f"MiniMax H3 {workflow} audioStart must be a number of seconds, 0 or greater."
             )
-        # No LoRA has been qualified on the audio-guide graphs; empty lists send nothing.
-        if params.get("loras") or params.get("loraStrengths"):
-            raise _api_error(
-                f"MiniMax H3 {workflow} does not support LoRAs. Remove loras and loraStrengths."
-            )
     elif audio_start is not None:
         raise _api_error(
             "audioStart is supported only by the MiniMax H3 FastH3 audio-guide workflows (minimax-h3-fastvideo-int8_ia2v_turbo, minimax-h3-fastvideo-int8_flfa2v_turbo, minimax-h3-fastvideo-int8_a2v_turbo and their _2stage ids)."

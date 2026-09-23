@@ -1963,13 +1963,11 @@ def test_minimax_h3_audio_guide_ids_take_exactly_their_uploads() -> None:
 
             with pytest.raises(ApiError, match=f"MiniMax H3 {workflow} output always carries"):
                 _h3_audio_request(model_id, uploads, generateAudio=False)
-            for lora_changes in (
-                {"loras": ["h3-realism-people"]},
-                {"loraStrengths": [1]},
-                {"loras": ["h3-realism-people"], "loraStrengths": [0.8]},
-            ):
-                with pytest.raises(ApiError, match=f"MiniMax H3 {workflow} does not support LoRAs"):
-                    _h3_audio_request(model_id, uploads, **lora_changes)
+            for loras in (["h3-realism-people"], ["personal-owned"], ["h3-realism-people", "personal-owned"]):
+                strengths = [0.8] * len(loras)
+                frame = _h3_audio_request(model_id, uploads, loras=loras, loraStrengths=strengths)
+                assert frame["loras"] == loras
+                assert frame["loraStrengths"] == strengths
             with pytest.raises(ApiError, match="MiniMax H3 has no audioDuration input"):
                 _h3_audio_request(model_id, uploads, audioDuration=10)
             for audio_start in (-1, float("nan"), float("inf"), "1", True):

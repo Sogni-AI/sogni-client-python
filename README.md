@@ -250,9 +250,10 @@ frame 0 and keeps that audio in the output, trimmed to the video length:
 
 Each also has a `_2stage` id that takes the same request and delivers twice the
 canvas. A mode refuses any upload it does not take. The optional `audio_start`
-(seconds, 0 or greater) offsets the audio window; `generate_audio=False`,
-`audio_duration` and LoRAs are refused before anything is sent, and every other
-H3 id refuses `audio_start`. `get_minimax_h3_frames_for_audio_duration(seconds)`
+(seconds, 0 or greater) offsets the audio window; `loras` and `lora_strengths`
+are accepted as on the frame modes; `generate_audio=False` and `audio_duration`
+are refused before anything is sent, and every other H3 id refuses
+`audio_start`. `get_minimax_h3_frames_for_audio_duration(seconds)`
 returns the smallest valid frame count covering the audio (124-362), and
 `is_minimax_h3_audio_guide_model()` recognizes all six ids. The hosted
 `sound_to_video` selectors are `minimax-h3-fasth3-ia2v-turbo`,
