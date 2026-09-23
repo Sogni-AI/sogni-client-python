@@ -97,7 +97,7 @@ from .workflows import (
     CreativeWorkflowTemplatesApi,
 )
 
-__version__ = "5.54.2"
+__version__ = "5.55.0"
 
 __all__ = [
     "BIREFNET_BACKGROUND_REMOVAL_MODEL_ID",

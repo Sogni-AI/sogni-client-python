@@ -13,10 +13,10 @@ Supernet. It follows the public surface and wire protocol of the TypeScript
 
 ## Install
 
-Install the latest beta directly from the official GitHub repository:
+Install the latest release from PyPI:
 
 ```bash
-python -m pip install "sogni-client @ git+https://github.com/Sogni-AI/sogni-client-python.git@main"
+python -m pip install --upgrade sogni-client
 ```
 
 For an editable source checkout:
@@ -557,6 +557,8 @@ Recovery is per app instance: the server hands projects back to the `appId` that
 created them, so persist your `appId` and reuse it across restarts.
 
 ## Queue explanations
+
+Available in version 5.55.0 and later.
 
 `project.waiting_reason` and `project.job_waiting_reasons` describe why queued
 work is waiting. Subscribe to `sogni.projects.on("queueChanged", callback)` for
