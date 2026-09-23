@@ -3790,7 +3790,9 @@ class ProjectsApi(EventEmitter):
 
         assert_session = self._capture_session()
         project_id = project.id
+        replay_in_flight = queue_revision is None or queue_revision == project._queue_revision
         project._set_queue_state(raw, queue_revision)
+        replay_revision = project._queue_revision
         step_count = raw.get("stepCount")
         if not isinstance(step_count, (int, float)) or isinstance(step_count, bool):
             step_count = project.params.get("steps")
@@ -3802,6 +3804,10 @@ class ProjectsApi(EventEmitter):
 
         for job in jobs:
             assert_session()
+            # New live activity wins over older in-flight worker states. Keep
+            # terminal result recovery available even if another result retried.
+            if project._queue_revision != replay_revision:
+                replay_in_flight = False
             if not isinstance(job, dict):
                 continue
             img_id = job.get("imgID") or job.get("id")
@@ -3858,10 +3864,12 @@ class ProjectsApi(EventEmitter):
                         ),
                     }
                 )
+                replay_revision = project._queue_revision
                 continue
 
             if (
                 not include_in_flight_jobs
+                or not replay_in_flight
                 or is_recovered_job_finished(str(status))
                 or (local is not None and local.finished)
             ):
@@ -3897,6 +3905,7 @@ class ProjectsApi(EventEmitter):
                     if isinstance(step_count, (int, float)):
                         progress["stepCount"] = step_count
                     self._handle_job_progress(progress)
+            replay_revision = project._queue_revision
 
         assert_session()
         if project.finished:

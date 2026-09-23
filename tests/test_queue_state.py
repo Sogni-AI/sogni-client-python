@@ -538,3 +538,45 @@ async def test_account_switch_rejects_delayed_snapshot_before_queue_replay(setup
         await task
     assert s.api.tracked_projects == []
     assert s.project.waiting_reason is None
+
+
+async def test_live_retry_during_snapshot_request_prevents_old_start_replay(setup):
+    s = setup
+    job = pending_job(s)
+    job._update({"status": "processing"})
+    requested, release = asyncio.Event(), asyncio.Event()
+
+    async def get(*args):
+        requested.set()
+        await release.wait()
+        return {
+            "activeProjects": [
+                {
+                    "id": s.project.id,
+                    "status": "active",
+                    "waitingReason": None,
+                    "jobWaitingReasons": [],
+                    "workerJobs": [{"imgID": job.id, "jobIndex": 0, "status": "jobStarted"}],
+                    "completedWorkerJobs": [
+                        {
+                            "imgID": "DONE-2",
+                            "jobIndex": 2,
+                            "status": "jobCompleted",
+                            "resultUrl": "https://example.test/result.png",
+                        }
+                    ],
+                }
+            ]
+        }
+
+    s.client.socket.get = get
+    task = asyncio.create_task(s.api.sync())
+    await requested.wait()
+    s.client.socket.emit("jobRetry", {"jobID": s.project.id, "imgID": job.id, "jobIndex": 0})
+    queue(s)
+    release.set()
+    await task
+    assert job.status == "pending"
+    assert job.waiting_reason == WAIT
+    assert s.project.job_waiting_reasons == [entry(0)]
+    assert s.project.job("DONE-2").status == "completed"
