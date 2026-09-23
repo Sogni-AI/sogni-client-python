@@ -148,10 +148,12 @@ class RestClient:
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
     ) -> httpx.Response:
+        assert_session = self.auth.capture_session()
         auth_headers = await self.auth.headers()
+        assert_session()
         request_headers = {**auth_headers, **(headers or {})}
         clean_params = {key: value for key, value in (params or {}).items() if value is not None}
-        return await self._client.request(
+        response = await self._client.request(
             method,
             self.url(path),
             params=clean_params,
@@ -160,6 +162,8 @@ class RestClient:
             headers=request_headers,
             timeout=timeout if timeout is not None else self.timeout,
         )
+        assert_session()
+        return response
 
     async def process_response(self, response: httpx.Response) -> Any:
         if response.status_code == 401 and self.auth.is_authenticated:
@@ -293,6 +297,8 @@ class WebSocketClient(EventEmitter):
         self.rest = RestClient(http_url, auth, http_client=socket_http_client)
         self._connect_factory = connect_factory
         self._socket: Any = None
+        self._socket_session_version: int | None = None
+        self._connection_generation = 0
         self._reader_task: asyncio.Task[None] | None = None
         self._connect_lock = asyncio.Lock()
         self._intentional_close = False
@@ -323,16 +329,24 @@ class WebSocketClient(EventEmitter):
 
     @property
     def is_connected(self) -> bool:
-        return self._socket is not None
+        return (
+            self._socket is not None and self._socket_session_version == self.auth.session_version
+        )
 
     @property
     def isConnected(self) -> bool:
         return self.is_connected
 
     async def connect(self) -> None:
+        assert_session = self.auth.capture_session()
         async with self._connect_lock:
-            if self._socket is not None:
+            assert_session()
+            if self.is_connected:
                 return
+            if self._socket is not None:
+                await self.disconnect()
+                assert_session()
+            generation = self._connection_generation
             self._intentional_close = False
             parts = urlsplit(self.base_url)
             scheme = "ws" if parts.scheme in {"http", "ws"} else "wss"
@@ -364,7 +378,8 @@ class WebSocketClient(EventEmitter):
                 )
             )
             headers = await self.auth.headers()
-            self._socket = await self._connect_factory(
+            assert_session()
+            socket = await self._connect_factory(
                 url,
                 additional_headers=headers or None,
                 ping_interval=15,
@@ -372,15 +387,27 @@ class WebSocketClient(EventEmitter):
                 close_timeout=5,
                 max_size=None,
             )
+            try:
+                assert_session()
+                if generation != self._connection_generation:
+                    raise ConnectionError("WebSocket connection cancelled")
+            except Exception:
+                await socket.close(code=1000, reason="Client session changed")
+                raise
+            self._socket = socket
+            self._socket_session_version = self.auth.session_version
             # Cleared only once a socket is open: a failed attempt leaves the
             # reconnect loop in charge, so `send` keeps waiting for it.
             self._reconnect_expected = False
             self._authenticated_socket = None
             self._opened_at = asyncio.get_running_loop().time()
-            self._reader_task = asyncio.create_task(self._read_loop())
+            self._reader_task = asyncio.create_task(
+                self._read_loop(socket, self.auth.session_version)
+            )
             self.emit("connected", {"network": self.supernet_type})
 
     async def disconnect(self, code: int = 1000, reason: str = "Client disconnected") -> None:
+        self._connection_generation += 1
         self._intentional_close = True
         self._reconnect_expected = False
         self._authenticated_socket = None
@@ -393,13 +420,14 @@ class WebSocketClient(EventEmitter):
             reader.cancel()
             await asyncio.gather(reader, return_exceptions=True)
 
-    async def _read_loop(self) -> None:
-        socket = self._socket
+    async def _read_loop(self, socket: Any, session_version: int) -> None:
         close_code = 0
         close_reason = ""
         try:
             while socket is self._socket:
                 message = await socket.recv()
+                if socket is not self._socket or session_version != self.auth.session_version:
+                    break
                 try:
                     if isinstance(message, bytes):
                         message = message.decode()
@@ -431,9 +459,12 @@ class WebSocketClient(EventEmitter):
         except Exception as error:
             _log_connection_error(error)
         finally:
+            current_connection = (
+                socket is self._socket and session_version == self.auth.session_version
+            )
             if socket is self._socket:
                 self._socket = None
-            if not self._intentional_close and self._socket is None:
+            if current_connection and not self._intentional_close:
                 self._authenticated_socket = None
                 self._reconnect_expected = (
                     self.auth.is_authenticated
@@ -441,16 +472,22 @@ class WebSocketClient(EventEmitter):
                     and close_code != 1000
                     and not _is_not_recoverable(close_code)
                 )
-            if not self._intentional_close:
+            if current_connection and not self._intentional_close:
                 self.emit("disconnected", {"code": close_code, "reason": close_reason})
+            if session_version != self.auth.session_version:
+                await socket.close(code=1000, reason="Client session changed")
 
     def _is_ready_for_work(self) -> bool:
         """The current socket is open and the server has accepted it for work."""
 
-        return self._socket is not None and self._authenticated_socket is self._socket
+        return self.is_connected and self._authenticated_socket is self._socket
 
     def _expecting_reconnect(self) -> bool:
-        return self._reconnect_expected and self.auth.is_authenticated
+        return (
+            self._reconnect_expected
+            and self.auth.is_authenticated
+            and self._socket_session_version == self.auth.session_version
+        )
 
     async def _wait_for_connection(self, timeout: float | None = None) -> None:
         """Wait until the socket can carry work.
@@ -462,6 +499,7 @@ class WebSocketClient(EventEmitter):
         failing. A terminal close, a signed-out session, or the deadline ends it.
         """
 
+        assert_session = self.auth.capture_session()
         if self._is_ready_for_work():
             return
         if (
@@ -491,13 +529,14 @@ class WebSocketClient(EventEmitter):
         remove_disconnected = self.on("disconnected", on_disconnected)
         try:
             while True:
+                assert_session()
                 wake.clear()
                 if failure:
                     raise failure[0]
                 if self._is_ready_for_work():
                     return
                 open_seconds = loop.time() - self._opened_at
-                if self._socket is not None and open_seconds >= fallback_seconds:
+                if self.is_connected and open_seconds >= fallback_seconds:
                     # An older server that never sends `authenticated`.
                     return
                 if (
@@ -519,11 +558,14 @@ class WebSocketClient(EventEmitter):
             remove_disconnected()
 
     async def send(self, message_type: str, data: Any) -> None:
+        assert_session = self.auth.capture_session()
         # While a recoverable close is being handled the ApiClient reconnects;
         # opening a connection here would race it.
-        if self._socket is None and not self._expecting_reconnect():
+        if not self.is_connected and not self._expecting_reconnect():
             await self.connect()
+        assert_session()
         await self._wait_for_connection()
+        assert_session()
         socket = self._socket
         if socket is None:  # pragma: no cover - guarded by the wait above
             raise ConnectionError("WebSocket not connected")
@@ -531,6 +573,7 @@ class WebSocketClient(EventEmitter):
             {"type": message_type, "data": b64_json_encode(data)}, separators=(",", ":")
         )
         await socket.send(envelope)
+        assert_session()
 
     async def switch_network(self, network: str) -> str:
         loop = asyncio.get_running_loop()
@@ -619,6 +662,8 @@ class ApiClient(EventEmitter):
         self._disposed = False
         self._reconnect_attempt = 0
         self._reconnect_task: asyncio.Task[None] | None = None
+        self._session_version = self.auth.session_version
+        self.auth.on("sessionChanged", self._on_session_changed)
         self.auth.on("updated", self._on_auth_updated)
         self.socket.on("connected", self._on_socket_connected)
         self.socket.on("disconnected", self._on_socket_disconnected)
@@ -661,14 +706,37 @@ class ApiClient(EventEmitter):
             self.emit("connecting", {"network": self.socket.supernet_type})
             await self.socket.connect()
 
+    def _on_session_changed(self, _data: Any) -> None:
+        if self._disposed:
+            return
+        if self._session_version != self.auth.session_version:
+            self._session_version = self.auth.session_version
+            self._clear_reconnect()
+            self.emit("sessionChanged", None)
+
     def _on_auth_updated(self, authenticated: bool) -> None:
         if self._disposed:
             return
         if authenticated:
             if self.socket_enabled and not self.socket.is_connected:
-                asyncio.create_task(self.start())
-        elif self.socket.is_connected:
-            asyncio.create_task(self.socket.disconnect())
+                asyncio.create_task(self._start_session(self.auth.session_version))
+        elif self.socket._socket is not None:
+            version = self.auth.session_version
+
+            async def disconnect_signed_out_session() -> None:
+                if version == self.auth.session_version:
+                    await self.socket.disconnect()
+
+            asyncio.create_task(disconnect_signed_out_session())
+
+    async def _start_session(self, version: int) -> None:
+        if self._disposed or version != self.auth.session_version:
+            return
+        try:
+            await self.start()
+        except Exception as error:
+            if not self._disposed and version == self.auth.session_version:
+                _log_connection_error(error)
 
     def _on_socket_connected(self, data: Any) -> None:
         self._reconnect_attempt = 0

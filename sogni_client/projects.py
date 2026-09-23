@@ -11,6 +11,7 @@ import math
 import re
 import time
 import weakref
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
@@ -2797,6 +2798,7 @@ class ProjectsApi(EventEmitter):
         # Bumped on every transport loss; tells a frame sent before a drop from
         # one sent after.
         self._transport_generation = 0
+        self._session_version = 0
         # The transport generation each request was written on, for requests
         # whose send completed. A request written on a connection that has since
         # dropped and that the server never saw died with that connection.
@@ -2829,6 +2831,50 @@ class ProjectsApi(EventEmitter):
         client.on("connecting", self._handle_transport_lost)
         client.on("disconnected", self._handle_disconnect)
         client.on("connected", self._handle_connect)
+        client.on("sessionChanged", self._handle_session_changed)
+
+    def _capture_session(self) -> Callable[[], None]:
+        version = self._session_version
+
+        def check() -> None:
+            if version != self._session_version:
+                raise RuntimeError("The account changed. Submit this request again.")
+
+        return check
+
+    def _handle_session_changed(self, _data: Any) -> None:
+        self._session_version += 1
+        self._clear_authenticated_timer()
+        if self._recheck_timer is not None:
+            self._recheck_timer.cancel()
+            self._recheck_timer = None
+        for task in tuple(self._background_tasks):
+            if task is not asyncio.current_task():
+                task.cancel()
+        for project in self._projects:
+            if not project.finished:
+                project._update(
+                    {
+                        "status": "failed",
+                        "error": {
+                            "code": 0,
+                            "message": "The account changed. Submit this request again.",
+                        },
+                    }
+                )
+            project._dispose()
+        self._projects.clear()
+        self._unadmitted_requests.clear()
+        self._awaiting_resubmit.clear()
+        self._resubmitted_at.clear()
+        self._sent_on_generation.clear()
+        self._recovered_completed_ids.clear()
+        for task in tuple(self._cancellation_requests.values()):
+            task.cancel()
+        self._cancellation_requests.clear()
+        self._sync_lock = asyncio.Lock()
+        self._assets = None
+        self._set_available_models([])
 
     @property
     def personal_loras(self) -> PersonalLoras:
@@ -2945,6 +2991,7 @@ class ProjectsApi(EventEmitter):
     waitForModels = wait_for_models
 
     async def create(self, params: dict[str, Any] | None = None, **kwargs: Any) -> Project:
+        assert_session = self._capture_session()
         data = _nested_params(normalize_params(params, **kwargs))
         for required in ("type", "modelId", "positivePrompt", "numberOfMedia"):
             if required not in data:
@@ -2981,6 +3028,7 @@ class ProjectsApi(EventEmitter):
         project = Project(data, self)
         try:
             options = await self.get_model_options(data["modelId"])
+            assert_session()
             request_params = dict(data)
             request_params["appSource"] = data.get("appSource") or self.client.app_source
             resolver = getattr(self.client, "resolve_workload_attribution", None)
@@ -2989,9 +3037,11 @@ class ProjectsApi(EventEmitter):
             )
             request = create_job_request_message(project.id, request_params, options)
             await self._process_assets(project, data, request)
+            assert_session()
             # A refusal can arrive as soon as send yields to the transport.
             self._unadmitted_requests[project.id] = request
             await self.client.socket.send("jobRequest", request)
+            assert_session()
             self._sent_on_generation[project.id] = self._transport_generation
             self._projects.append(project)
             return project
@@ -3004,6 +3054,14 @@ class ProjectsApi(EventEmitter):
     async def _process_assets(
         self, project: Project, data: dict[str, Any], request: dict[str, Any]
     ) -> None:
+        assert_session = self._capture_session()
+
+        async def upload(*args: Any, **kwargs: Any) -> str | None:
+            assert_session()
+            content_type = await self._upload_asset(*args, **kwargs)
+            assert_session()
+            return content_type
+
         if data["type"] == "image":
             assets: list[tuple[str, Any, bool]] = [
                 ("startingImage", data.get("startingImage"), False),
@@ -3033,19 +3091,19 @@ class ProjectsApi(EventEmitter):
                 assets.append(("referenceMask", mask, False))
             for role, value, media in assets:
                 if value and value is not True:
-                    await self._upload_asset(project.id, role, value, media=media)
+                    await upload(project.id, role, value, media=media)
         elif data["type"] == "video":
             h3_reference = is_minimax_h3_reference_model(data["modelId"])
             if data.get("referenceImage") and data["referenceImage"] is not True:
-                content_type = await self._upload_asset(
+                content_type = await upload(
                     project.id, "referenceImage", data["referenceImage"], media=False
                 )
                 request["keyFrames"][0]["referenceImageContentType"] = content_type
             for slot, value in _video_context_slots(data):
                 if value is not True:
-                    await self._upload_asset(project.id, f"contextImage{slot}", value, media=False)
+                    await upload(project.id, f"contextImage{slot}", value, media=False)
             if data.get("referenceImageEnd") and data["referenceImageEnd"] is not True:
-                content_type = await self._upload_asset(
+                content_type = await upload(
                     project.id, "referenceImageEnd", data["referenceImageEnd"], media=False
                 )
                 request["keyFrames"][0]["referenceImageEndContentType"] = content_type
@@ -3058,7 +3116,7 @@ class ProjectsApi(EventEmitter):
                         if value is True:
                             continue
                         role = f"{media_name}{slot}"
-                        content_type = await self._upload_asset(project.id, role, value, media=True)
+                        content_type = await upload(project.id, role, value, media=True)
                         request["keyFrames"][0][f"{role}ContentType"] = content_type
             for role, media in (
                 ("referenceAudio", True),
@@ -3075,7 +3133,7 @@ class ProjectsApi(EventEmitter):
                 ):
                     continue
                 if value and value is not True:
-                    content_type = await self._upload_asset(
+                    content_type = await upload(
                         project.id,
                         "referenceAudio" if role == "referenceAudioIdentity" else role,
                         value,
@@ -3090,7 +3148,7 @@ class ProjectsApi(EventEmitter):
         elif data["type"] == "audio":
             reference_audio = data.get("referenceAudio")
             if reference_audio and reference_audio is not True:
-                content_type = await self._upload_asset(
+                content_type = await upload(
                     project.id, "referenceAudio", reference_audio, media=True
                 )
                 request["keyFrames"][0]["referenceAudioContentType"] = content_type
@@ -3103,9 +3161,14 @@ class ProjectsApi(EventEmitter):
         return self._assets
 
     async def _upload_asset(self, job_id: str, role: str, value: Any, *, media: bool) -> str | None:
+        assert_session = self._capture_session()
         content_type = detect_content_type(value)
         body = read_media(value)
-        if await self.assets.try_bind_file(body, content_type, _saved_upload_binding(job_id, role)):
+        bound = await self.assets.try_bind_file(
+            body, content_type, _saved_upload_binding(job_id, role)
+        )
+        assert_session()
+        if bound:
             return content_type
         if media:
             url = await self.media_upload_url(
@@ -3120,7 +3183,9 @@ class ProjectsApi(EventEmitter):
                     "contentType": content_type,
                 }
             )
+        assert_session()
         await self.client.rest.put_bytes(url, body, content_type=content_type)
+        assert_session()
         return content_type
 
     async def get(self, project_id: str) -> dict[str, Any]:
@@ -3178,10 +3243,12 @@ class ProjectsApi(EventEmitter):
         Results are also broadcast as the ``projectsSynced`` event.
         """
 
+        assert_session = self._capture_session()
         requested_at = time.time()
         body = await self.client.socket.get(
             "/api/v1/artist/projects/sync", {"appId": self.client.socket.app_id}
         )
+        assert_session()
         body = body if isinstance(body, dict) else {}
         snapshot = {
             "activeProjects": body.get("activeProjects")
@@ -3209,7 +3276,9 @@ class ProjectsApi(EventEmitter):
         tags recovered projects with ``appId``; older builds yield an empty list.
         """
 
+        assert_session = self._capture_session()
         body = await self.client.socket.get("/api/v1/artist/projects/sync")
+        assert_session()
         projects = body.get("activeProjects") if isinstance(body, dict) else None
         own = self.client.socket.app_id
         return [
@@ -3248,6 +3317,7 @@ class ProjectsApi(EventEmitter):
         whose result record is not stored yet makes it ``unknown``.
         """
 
+        assert_session = self._capture_session()
         max_attempts = max(1, attempts or int(self._recovery_tuning["missing_project_attempts"]))
         retry_delay = (
             delay_seconds
@@ -3261,12 +3331,15 @@ class ProjectsApi(EventEmitter):
                 break
             if attempt > 0:
                 await asyncio.sleep(retry_delay)
+            assert_session()
             still_missing: list[str] = []
             for project_id in pending:
                 try:
                     project = await self.get(project_id)
+                    assert_session()
                     result[project_id] = {"state": "finished", "project": project}
                 except Exception as error:
+                    assert_session()
                     if isinstance(error, ApiError) and error.status == 404:
                         still_missing.append(project_id)
                     else:
@@ -3277,6 +3350,7 @@ class ProjectsApi(EventEmitter):
             # after the snapshot was taken is in flight, not lost. `None` means
             # the list could not be fetched.
             live = await self._list_active_project_ids()
+            assert_session()
             # Before failing anything, ask the owner-scoped live lookup. It can
             # confirm an active project or a terminal failure/cancellation.
             # A successful completion still needs its full result record and
@@ -3287,6 +3361,7 @@ class ProjectsApi(EventEmitter):
             answers = await asyncio.gather(
                 *(self._lookup_unlisted_project(project_id) for project_id in unlisted)
             )
+            assert_session()
             checks = dict(zip(unlisted, answers, strict=True))
             for project_id in pending:
                 if live and project_id in live:
@@ -3315,6 +3390,7 @@ class ProjectsApi(EventEmitter):
         run the generation twice.
         """
 
+        assert_session = self._capture_session()
         request = self._unadmitted_requests.get(project_id)
         sent_on = self._sent_on_generation.get(project_id)
         project = self._project(project_id)
@@ -3338,6 +3414,7 @@ class ProjectsApi(EventEmitter):
         )
         try:
             await self.client.socket.send("jobRequest", request)
+            assert_session()
         except Exception:
             _LOGGER.warning("Resubmitting project %s failed", project_id, exc_info=True)
             return False
@@ -3385,12 +3462,15 @@ class ProjectsApi(EventEmitter):
     ) -> dict[str, Any]:
         """Serialize syncs so two snapshots never interleave their replays."""
 
+        assert_session = self._capture_session()
         async with self._sync_lock:
+            assert_session()
             return await self._reconcile(snapshot, reason, requested_at)
 
     async def _reconcile(
         self, snapshot: dict[str, Any], reason: str, requested_at: float
     ) -> dict[str, Any]:
+        assert_session = self._capture_session()
         result: dict[str, Any] = {
             "reason": reason,
             "snapshot": snapshot,
@@ -3404,6 +3484,7 @@ class ProjectsApi(EventEmitter):
         seen: set[str] = set()
 
         for recovered in snapshot.get("activeProjects") or []:
+            assert_session()
             if not isinstance(recovered, dict):
                 continue
             project_id = recovered.get("id")
@@ -3424,6 +3505,7 @@ class ProjectsApi(EventEmitter):
                 result["recoveredActive"].append(recovered)
 
         for recovered in snapshot.get("unclaimedCompletedProjects") or []:
+            assert_session()
             if not isinstance(recovered, dict):
                 continue
             project_id = recovered.get("id")
@@ -3453,6 +3535,7 @@ class ProjectsApi(EventEmitter):
         # they are gone. Projects created moments ago may simply not be
         # registered yet.
         grace = float(self._recovery_tuning["recently_created_grace_seconds"])
+        assert_session()
         cutoff = requested_at - grace
         unlisted = [
             project for project in self._projects if not project.finished and project.id not in seen
@@ -3475,7 +3558,9 @@ class ProjectsApi(EventEmitter):
             self._schedule_recheck(judgeable_at - time.time())
         if missing:
             resolved = await self.resolve_missing([project.id for project in missing])
+            assert_session()
             for project in missing:
+                assert_session()
                 if project.finished:
                     continue  # a live event beat the lookup
                 resolution = resolved.get(project.id) or {}
@@ -3513,6 +3598,7 @@ class ProjectsApi(EventEmitter):
                 else:
                     result["unverified"].append(project.id)
 
+        assert_session()
         if result["recoveredActive"]:
             self.emit("activeProjectsRecovered", result["recoveredActive"])
         if result["recoveredCompleted"]:
@@ -3544,6 +3630,7 @@ class ProjectsApi(EventEmitter):
         in-flight state.
         """
 
+        assert_session = self._capture_session()
         project_id = project.id
         step_count = raw.get("stepCount")
         if not isinstance(step_count, (int, float)) or isinstance(step_count, bool):
@@ -3555,6 +3642,7 @@ class ProjectsApi(EventEmitter):
         replayed: set[str] = set()
 
         for job in jobs:
+            assert_session()
             if not isinstance(job, dict):
                 continue
             img_id = job.get("imgID") or job.get("id")
@@ -3647,6 +3735,7 @@ class ProjectsApi(EventEmitter):
                         progress["stepCount"] = step_count
                     self._handle_job_progress(progress)
 
+        assert_session()
         if project.finished:
             return
         status = raw.get("status")
@@ -4569,9 +4658,14 @@ class ProjectsApi(EventEmitter):
 
     def _handle_job_result(self, data: Any) -> None:
         if isinstance(data, dict):
-            asyncio.create_task(self._apply_job_result(data))
+            self._track_task(self._apply_job_result(data, session_version=self._session_version))
 
-    async def _apply_job_result(self, data: dict[str, Any]) -> None:
+    async def _apply_job_result(
+        self, data: dict[str, Any], *, session_version: int | None = None
+    ) -> None:
+        session_version = self._session_version if session_version is None else session_version
+        if session_version != self._session_version:
+            return
         project = self._project(data.get("jobID", ""))
         _, job = self._ensure_job(data) if project is not None else (None, None)
         url = _raw_result_url(data)
@@ -4618,6 +4712,8 @@ class ProjectsApi(EventEmitter):
                     if job is not None and job._image_content_type:
                         download["contentType"] = job._image_content_type
                     url = await self.download_url(download)
+        if session_version != self._session_version:
+            return
         steps = data.get("performedStepCount")
         if not isinstance(steps, (int, float)):
             steps = (job.step_count or job.step) if job is not None else None
@@ -4772,6 +4868,7 @@ class ProjectsApi(EventEmitter):
         project cannot be resubmitted and the error should surface as usual.
         """
 
+        session_version = self._session_version
         request = self._unadmitted_requests.get(project_id)
         project = self._project(project_id)
         if request is None or project is None or project.finished:
@@ -4786,6 +4883,8 @@ class ProjectsApi(EventEmitter):
         )
 
         def fail(error: BaseException) -> None:
+            if session_version != self._session_version:
+                return
             self._awaiting_resubmit.discard(project_id)
             _LOGGER.warning(
                 "Resubmitting project %s failed", project_id, exc_info=(type(error), error, None)
@@ -4796,10 +4895,14 @@ class ProjectsApi(EventEmitter):
                 project._update({"status": "failed", "error": failure})
 
         async def resend() -> None:
+            if session_version != self._session_version:
+                return
             try:
                 await self.client.socket.send("jobRequest", request)
             except Exception as error:
                 fail(error)
+                return
+            if session_version != self._session_version:
                 return
             self._awaiting_resubmit.discard(project_id)
             self._resubmitted_at[project_id] = time.time()

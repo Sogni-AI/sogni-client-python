@@ -750,9 +750,11 @@ async def test_failed_reconnect_attempt_logs_status_without_request_or_headers(
 ) -> None:
     caplog.set_level(logging.DEBUG, logger="sogni_client")
     attempts: list[dict[str, Any]] = []
+    attempted = asyncio.Event()
 
     async def rejecting_factory(url: str, **kwargs: Any) -> FakeSocket:
         attempts.append({"url": url, **kwargs})
+        attempted.set()
         raise _rejected_upgrade(502)
 
     fake_http = FakeHttpClient()
@@ -769,6 +771,10 @@ async def test_failed_reconnect_attempt_logs_status_without_request_or_headers(
     await client.auth.authenticate(CREDENTIAL)
     client._schedule_reconnect = lambda: None  # type: ignore[method-assign]
     try:
+        # Let the automatic initial attempt finish before inspecting the
+        # explicit reconnect attempt below.
+        await attempted.wait()
+        caplog.clear()
         await client._reconnect(0)
         assert attempts[0]["additional_headers"] == {"api-key": CREDENTIAL}
         records = _sogni_records(caplog)

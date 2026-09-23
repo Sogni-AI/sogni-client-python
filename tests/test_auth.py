@@ -352,6 +352,7 @@ async def test_expired_new_account_login_never_reuses_previous_valid_access_toke
             break
         await asyncio.sleep(0)
     assert len(refresh_client.calls) == 1
+
     pending_headers = asyncio.create_task(auth.headers())
     await asyncio.sleep(0)
     assert not pending_headers.done()
@@ -359,3 +360,22 @@ async def test_expired_new_account_login_never_reuses_previous_valid_access_toke
     await login
     assert await pending_headers == {"Authorization": new_access}
     assert len(refresh_client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_normal_token_renewal_preserves_request_session() -> None:
+    now = time.time()
+    access = make_jwt(now + 3600, addr="account-a")
+    refresh = make_jwt(now + 7200, addr="account-a")
+    renewed = make_jwt(now + 4600, addr="account-a")
+    client = FakeRefreshClient(
+        json_response(200, {"data": {"token": renewed, "refreshToken": refresh}})
+    )
+    auth = TokenAuthManager("https://api.sogni.ai", refresh_client=client)
+    await auth.authenticate(token=access, refresh_token=refresh)
+    version = auth.session_version
+    check = auth.capture_session()
+    auth._token_expires_at = 0
+    assert await auth.headers() == {"Authorization": renewed}
+    assert auth.session_version == version
+    check()

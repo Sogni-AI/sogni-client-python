@@ -234,6 +234,7 @@ class AccountApi(EventEmitter):
         self.client.on("connected", self._on_connected)
         self.client.on("disconnected", self._on_disconnected)
         self.client.auth.on("updated", self._on_auth_updated)
+        self.client.on("sessionChanged", lambda _data: self._on_auth_updated(False))
 
     @property
     def _eip712_domain(self) -> dict[str, Any]:

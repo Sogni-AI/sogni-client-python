@@ -7,6 +7,7 @@ import base64
 import json
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -29,6 +30,27 @@ def _decode_jwt(token: str) -> dict[str, Any]:
 
 
 class AuthManager(EventEmitter, ABC):
+    def __init__(self) -> None:
+        super().__init__()
+        self._session_version = 0
+
+    @property
+    def session_version(self) -> int:
+        return self._session_version
+
+    def _advance_session(self) -> None:
+        self._session_version += 1
+        self.emit("sessionChanged", None)
+
+    def capture_session(self) -> Callable[[], None]:
+        version = self.session_version
+
+        def check() -> None:
+            if version != self.session_version:
+                raise RuntimeError("The account changed. Submit this request again.")
+
+        return check
+
     @property
     @abstractmethod
     def is_authenticated(self) -> bool: ...
@@ -59,6 +81,8 @@ class ApiKeyAuthManager(AuthManager):
     async def authenticate(self, api_key: str) -> None:
         if not api_key or not api_key.strip():
             raise ValueError("api_key must be a non-empty string")
+        if self._api_key != api_key.strip():
+            self._advance_session()
         self._api_key = api_key.strip()
         self.emit("updated", True)
 
@@ -71,6 +95,7 @@ class ApiKeyAuthManager(AuthManager):
     def clear(self) -> None:
         if self._api_key is None:
             return
+        self._advance_session()
         self._api_key = None
         self.emit("updated", False)
 
@@ -112,6 +137,7 @@ class TokenAuthManager(AuthManager):
         token_exp = float(_decode_jwt(token).get("exp", 0))
         refresh_exp = float(_decode_jwt(refresh_token).get("exp", 0))
         if token != self._token or refresh_token != self._refresh_token:
+            self._advance_session()
             self._credential_version += 1
             # A new sign-in must not wait behind a previous account's renewal.
             # Waiters on the old lock reject when they observe this version.
@@ -139,6 +165,7 @@ class TokenAuthManager(AuthManager):
     def clear(self) -> None:
         if not self._token and not self._refresh_token:
             return
+        self._advance_session()
         self._credential_version += 1
         self._renew_lock = asyncio.Lock()
         self._token = None
@@ -234,6 +261,7 @@ class CookieAuthManager(AuthManager):
         return self._authenticated
 
     async def authenticate(self) -> None:
+        self._advance_session()
         self._authenticated = True
         self.emit("updated", True)
 
@@ -246,6 +274,7 @@ class CookieAuthManager(AuthManager):
     def clear(self) -> None:
         if not self._authenticated:
             return
+        self._advance_session()
         self._authenticated = False
         self.emit("updated", False)
 
