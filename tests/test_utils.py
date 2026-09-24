@@ -330,6 +330,9 @@ def test_capability_surface_is_exported_from_the_package_root() -> None:
         "requiresStartingImage",
         "isVideoModel",
         "isAudioModel",
+        "MINIMAX_H3_MAX_KEYFRAMES",
+        "is_minimax_h3_keyframe_model",
+        "isMinimaxH3KeyframeModel",
     ):
         assert name in sogni_client.__all__, f"{name} is not exported from the package root"
         assert getattr(sogni_client, name) is not None

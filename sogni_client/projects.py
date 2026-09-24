@@ -38,6 +38,7 @@ from .utils import (
     MINIMAX_H3_MAX_DIMENSION,
     MINIMAX_H3_MAX_DURATION,
     MINIMAX_H3_MAX_FRAMES,
+    MINIMAX_H3_MAX_KEYFRAMES,
     MINIMAX_H3_MAX_PIXELS,
     MINIMAX_H3_MIN_DURATION,
     MINIMAX_H3_MIN_FRAMES,
@@ -56,6 +57,7 @@ from .utils import (
     is_ltx_model,
     is_minimax_h3_audio_guide_model,
     is_minimax_h3_balanced_model,
+    is_minimax_h3_keyframe_model,
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
     is_minimax_h3_turbo_model,
@@ -720,6 +722,117 @@ def _video_context_slots(params: dict[str, Any]) -> list[tuple[int, Any]]:
     return [(offset + index, value) for index, value in enumerate(contexts, 1)]
 
 
+def _video_keyframe_slots(params: dict[str, Any]) -> list[tuple[int, Any, Any]]:
+    """MiniMax H3 ``keyframes`` as ``(slot, image, frameIndex)``.
+
+    ``keyframes[i]`` travels in ``contextImage<i+1>``, in caller order and with no
+    offset: unlike r2v's ``contextImages``, keyframes never shift past
+    ``referenceImage``, because the i2v and flf2v workflows carry their first and
+    last frames as ``referenceImage`` / ``referenceImageEnd`` and reject
+    ``contextImages``. The worker pairs ``contextImage<i+1>`` with
+    ``keyframeFrameIndices[i]``.
+    """
+
+    keyframes = params.get("keyframes")
+    if not isinstance(keyframes, list):
+        return []
+    return [
+        (slot, entry.get("image"), entry.get("frameIndex"))
+        for slot, entry in enumerate(keyframes, 1)
+        if isinstance(entry, dict)
+    ]
+
+
+def _describe_keyframe_value(value: Any) -> str:
+    """The offending value quoted in a keyframe error.
+
+    Formatted the way sogni-client formats it, so both SDKs raise byte-identical
+    messages for the same request.
+    """
+
+    if value is None:
+        return "nothing"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "Infinity" if value > 0 else "-Infinity"
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, (list, tuple)):
+        return "an array"
+    return "an object"
+
+
+def _validate_video_keyframes(params: dict[str, Any]) -> None:
+    """MiniMax H3 intermediate ``keyframes`` shape check.
+
+    Only the H3 i2v and flf2v ids accept keyframes, and an empty list means none.
+    Like the ``contextImages`` check, this runs before the external-API families
+    return early, so no vendor model can carry keyframes past it. Frame indices
+    are checked by ``_apply_h3_keyframes`` once the frame count is resolved.
+    """
+
+    keyframes = params.get("keyframes")
+    if keyframes is None or (isinstance(keyframes, list) and not keyframes):
+        return
+    if not is_minimax_h3_keyframe_model(params["modelId"]):
+        raise _api_error(
+            "keyframes is supported only by the MiniMax H3 image-to-video and first/last-frame workflows (i2v and flf2v model ids)."
+        )
+    if not isinstance(keyframes, list):
+        raise _api_error("keyframes must be an array of { image, frameIndex } entries.")
+    if len(keyframes) > MINIMAX_H3_MAX_KEYFRAMES:
+        raise _api_error(
+            f"keyframes accepts at most {MINIMAX_H3_MAX_KEYFRAMES} entries (got {len(keyframes)})."
+        )
+    for index, entry in enumerate(keyframes):
+        image = entry.get("image") if isinstance(entry, dict) else None
+        if not image:
+            raise _api_error(f"keyframes[{index}].image is required.")
+
+
+def _apply_h3_keyframes(keyframe: dict[str, Any], params: dict[str, Any]) -> None:
+    """Check keyframe frame indices against the resolved frame count and write
+    ``hasContextImage<i+1>`` for every entry plus ``keyframeFrameIndices`` in the
+    same order. ``_validate_video_keyframes`` has already checked the model and
+    the entries.
+    """
+
+    slots = _video_keyframe_slots(params)
+    if not slots:
+        return
+    frames = keyframe.get("frames")
+    if frames is None:
+        raise _api_error("keyframes need the video length: pass frames or duration.")
+    last_index = frames - 2
+    used: set[int] = set()
+    for slot, _image, frame_index in slots:
+        if (
+            isinstance(frame_index, bool)
+            or not isinstance(frame_index, int)
+            or not 1 <= frame_index <= last_index
+        ):
+            raise _api_error(
+                f"keyframes[{slot - 1}].frameIndex must be an integer between 1 and {last_index} "
+                f"for a {frames}-frame video (got {_describe_keyframe_value(frame_index)}); "
+                "use referenceImage and referenceImageEnd for the first and last frames."
+            )
+        if frame_index in used:
+            raise _api_error(
+                f"keyframes must use different frames; frame {frame_index} is used twice."
+            )
+        used.add(frame_index)
+    for slot, _image, _frame_index in slots:
+        keyframe[f"hasContextImage{slot}"] = True
+    keyframe["keyframeFrameIndices"] = [frame_index for _slot, _image, frame_index in slots]
+
+
 def _validate_h3_params(params: dict[str, Any]) -> None:
     if not is_minimax_h3_model(params["modelId"]):
         return
@@ -1069,6 +1182,7 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
             raise _api_error(f"{field} must be an array without empty entries.")
         if value is not None and not is_minimax_h3_reference_model(model_id):
             raise _api_error(f"{field} is supported only by MiniMax H3 r2v models.")
+    _validate_video_keyframes(params)
     if params.get("referenceVideoDurations") is not None and not is_minimax_h3_reference_model(
         model_id
     ):
@@ -1836,6 +1950,9 @@ def create_job_request_message(
                 duration,
                 params.get("fps", 30 if is_wan3_model(params["modelId"]) else 24),
             )
+        # MiniMax H3 intermediate keyframes: frame indices are checked against the
+        # frame count resolved just above, from ``frames`` or ``duration``.
+        _apply_h3_keyframes(keyframe, params)
         if params.get("sam2Coordinates") is not None:
             keyframe["sam2Coordinates"] = json.dumps(
                 params["sam2Coordinates"], separators=(",", ":")
@@ -3372,6 +3489,12 @@ class ProjectsApi(EventEmitter):
             for slot, value in _video_context_slots(data):
                 if value is not True:
                     await upload(project.id, f"contextImage{slot}", value, media=False)
+            # MiniMax H3 i2v/flf2v keyframes upload to contextImage1..N in caller
+            # order with no referenceImage offset; the request builder has already
+            # checked the model, the entries and the frame indices.
+            for slot, image, _frame_index in _video_keyframe_slots(data):
+                if image is not True:
+                    await upload(project.id, f"contextImage{slot}", image, media=False)
             if data.get("referenceImageEnd") and data["referenceImageEnd"] is not True:
                 content_type = await upload(
                     project.id, "referenceImageEnd", data["referenceImageEnd"], media=False

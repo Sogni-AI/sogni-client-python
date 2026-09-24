@@ -280,6 +280,42 @@ project = await sogni.projects.create(
 )
 ```
 
+## MiniMax H3 intermediate keyframes (i2v and flf2v)
+
+The H3 image-to-video and first/last-frame ids of every tier (Standard, Balanced,
+LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage; `is_minimax_h3_keyframe_model()`)
+accept `keyframes`: up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images pinned at
+chosen frames between the first and last frame. Each entry is
+`{"image": ..., "frame_index": ...}` (`frameIndex` works too). `frame_index` is the
+0-based frame at 24 fps (`round(seconds * 24)`), an `int` from 1 to `frames - 2`
+of the job's grid frame count, each frame used once, so pass `frames` or
+`duration`. The first and last frames stay `reference_image` /
+`reference_image_end` with their usual rules, and `context_images` stays r2v-only.
+Every other model refuses a non-empty list; an empty list is ignored. Each image
+uploads to `contextImage1..N` in list order. Describe in the prompt what happens
+at each keyframe's time; keyframes are not `<Picture N>` references. The
+validation errors match the JavaScript SDK's word for word.
+
+```python
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id="minimax-h3-fastvideo-int8_flf2v_turbo",
+    number_of_media=1,
+    steps=4,
+    positive_prompt=flf2v_prompt,  # says what happens at 2.5 s and 5 s
+    reference_image="first.png",
+    reference_image_end="last.png",
+    keyframes=[
+        {"image": "middle.png", "frame_index": round(2.5 * 24)},  # frame 60
+        {"image": "later.png", "frame_index": 120},
+    ],
+    duration=8,  # 192 frames, so frame_index may be 1-190
+    width=1344,
+    height=768,
+)
+```
+
 ## GPT Image 2.5
 
 `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst` join `gpt-image-2`. All three
@@ -714,7 +750,8 @@ schemas.
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
-Two-Stage 720p/1080p/2K ids), Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
+Two-Stage 720p/1080p/2K ids, plus intermediate keyframes on the i2v and flf2v ids),
+Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
 segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,
