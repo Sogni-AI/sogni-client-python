@@ -287,30 +287,53 @@ LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage; `is_minimax_h3_keyframe_model
 accept `keyframes`: up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images pinned at
 chosen frames between the first and last frame. Each entry is
 `{"image": ..., "frame_index": ...}` (`frameIndex` works too). `frame_index` is the
-0-based frame at 24 fps (`round(seconds * 24)`), an `int` from 1 to `frames - 2`
-of the job's grid frame count, each frame used once, so pass `frames` or
-`duration`. The first and last frames stay `reference_image` /
-`reference_image_end` with their usual rules, and `context_images` stays r2v-only.
-Every other model refuses a non-empty list; an empty list is ignored. Each image
-uploads to `contextImage1..N` in list order. Describe in the prompt what happens
-at each keyframe's time; keyframes are not `<Picture N>` references. The
-validation errors match the JavaScript SDK's word for word.
+0-based frame at 24 fps, an `int` from 1 to `frames - 2` of the job's frame count,
+each frame used once. To convert seconds, use `int(seconds * 24 + 0.5)`, which
+rounds halves up like the JavaScript SDK's `Math.round`; Python's `round()` rounds
+halves to even.
+
+Pass `frames` from the H3 grid (124, 141, 158, ... 362; `124 + n*17`) so the
+frame count is exact. `duration` also works but snaps to the grid (`duration=6`
+renders 141 frames, not 144), and `calculate_video_frames(model_id, seconds, 24)`
+returns the count a duration resolves to.
+
+The first and last frames stay `reference_image` / `reference_image_end` with
+their usual rules, and `context_images` stays r2v-only. Every other model refuses
+a non-empty list; an empty list is ignored. Each image uploads to
+`contextImage1..N` in list order. If no worker serving the model can pin
+keyframes yet, the job is refused with error code `4100`. The validation errors
+match the JavaScript SDK's word for word.
+
+Writing the prompt for keyframes:
+
+- H3 never sees the keyframe images as references. They are not `<Picture N>`
+  images, and the alignment line still names only the first and last frame, so
+  the prompt must describe what each keyframe shows at its time.
+- When a keyframe changes the framing, camera angle, location or light, start a
+  new shot (a hard cut) at its time: `[Shot N] At MM:SS.mmm, ...`, where the time
+  is `frame_index / 24` seconds (frame 144 is `00:06.000`). Two differently
+  framed or lit stills inside one continuous shot cross-fade into each other, and
+  a shot described differently from its still can flash the still for a single
+  frame.
 
 ```python
+# 192 frames (8 s): frame 0 is reference_image, frame 191 is reference_image_end.
+# flf2v_prompt describes keyframe 1 inside [Shot 1] at 00:02.500 and starts
+# [Shot 2] At 00:06.000 with the new camera angle keyframe 2 shows.
 project = await sogni.projects.create(
     type="video",
     network="fast",
     model_id="minimax-h3-fastvideo-int8_flf2v_turbo",
     number_of_media=1,
     steps=4,
-    positive_prompt=flf2v_prompt,  # says what happens at 2.5 s and 5 s
+    positive_prompt=flf2v_prompt,
     reference_image="first.png",
     reference_image_end="last.png",
     keyframes=[
-        {"image": "middle.png", "frame_index": round(2.5 * 24)},  # frame 60
-        {"image": "later.png", "frame_index": 120},
+        {"image": "same-shot.png", "frame_index": 60},  # 2.5 s, same framing and light
+        {"image": "new-angle.png", "frame_index": 144},  # 6 s, new angle: the prompt cuts
     ],
-    duration=8,  # 192 frames, so frame_index may be 1-190
+    frames=192,  # on the 124 + n*17 grid, so frame_index may be 1-190
     width=1344,
     height=768,
 )
