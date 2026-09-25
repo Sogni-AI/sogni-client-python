@@ -462,7 +462,20 @@ def calculate_video_frames(
     min_frames: int | None = None,
     max_frames: int | None = None,
 ) -> int:
-    """Match the JS SDK's WAN and LTX frame-count behavior."""
+    """The frame count a video request sends for ``duration`` seconds.
+
+    This is the count ``projects.create()`` sends when a video request passes
+    ``duration`` instead of ``frames``, so it tells a caller how long the video
+    will be before submitting. Use it to position MiniMax H3 ``keyframes``, whose
+    ``frame_index`` must fall inside the resolved count:
+    ``calculate_video_frames("minimax-h3-fl2va-fp8_i2v", 6, 24)`` is 141, not
+    144, because H3 snaps ``duration * 24`` to the nearest ``124 + n*17`` value
+    (124, 141, 158, ... 362) and ignores ``fps``. WAN 2.2 uses
+    ``duration * 16 + 1``; LTX 2.x uses ``duration * fps + 1`` snapped to
+    ``1 + n*8``; FlashVSR keeps ``duration * fps``; other models use
+    ``duration * fps + 1``. ``min_frames`` / ``max_frames`` optionally bound the
+    result. Mirrors the TypeScript ``calculateVideoFrames``.
+    """
 
     # Python uses bankers' rounding while JavaScript's Math.round chooses the
     # next integer for positive half values. Durations and frame rates are

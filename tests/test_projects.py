@@ -2159,10 +2159,13 @@ _MINIMAX_H3_NON_KEYFRAME_IDS = (
         for suffix in ("", "_2stage")
     ),
 )
-_KEYFRAMES_WRONG_MODEL = (
-    "keyframes is supported only by the MiniMax H3 image-to-video and first/last-frame "
-    "workflows (i2v and flf2v model ids)."
-)
+
+
+def _keyframes_wrong_model(model_id: str) -> str:
+    return (
+        "keyframes is supported only by the MiniMax H3 image-to-video and first/last-frame "
+        f"workflows (i2v and flf2v model ids); {model_id} does not accept keyframes."
+    )
 
 
 def _keyframe_steps(model_id: str) -> int:
@@ -2211,11 +2214,21 @@ def _assert_keyframe_error(params: dict[str, Any], message: str) -> None:
     assert str(caught.value) == message
 
 
-def _frame_index_error(index: int, frames: int, got: str) -> str:
+def _frame_index_error(
+    index: int, frames: int, got: str, *, duration: str | None = None, anchor: bool = False
+) -> str:
+    """The frame error names the count a duration resolved to, and points at
+    referenceImage / referenceImageEnd only for frame 0 or the last frame."""
+
+    video = (
+        f"a {frames}-frame video"
+        if duration is None
+        else f"the {frames}-frame video that duration {duration} resolves to"
+    )
+    hint = "; use referenceImage and referenceImageEnd for the first and last frames"
     return (
-        f"keyframes[{index}].frameIndex must be an integer between 1 and {frames - 2} for a "
-        f"{frames}-frame video (got {got}); use referenceImage and referenceImageEnd for the "
-        "first and last frames."
+        f"keyframes[{index}].frameIndex must be an integer between 1 and {frames - 2} for "
+        f"{video} (got {got}){hint if anchor else ''}."
     )
 
 
@@ -2304,7 +2317,7 @@ def test_minimax_h3_keyframes_check_frames_resolved_from_duration_or_frames() ->
         _keyframe_params(
             "minimax-h3-fl2va-fp8_i2v", duration=8, keyframes=[{"image": True, "frameIndex": 191}]
         ),
-        _frame_index_error(0, 192, "191"),
+        _frame_index_error(0, 192, "191", duration="8", anchor=True),
     )
     by_frames = _keyframe_request(
         _keyframe_params(
@@ -2322,6 +2335,53 @@ def test_minimax_h3_keyframes_check_frames_resolved_from_duration_or_frames() ->
         ),
         "keyframes need the video length: pass frames or duration.",
     )
+
+
+def test_minimax_h3_keyframe_errors_name_the_duration_snap_and_edge_frames() -> None:
+    i2v = "minimax-h3-fl2va-fp8_i2v"
+    flf2v = "minimax-h3-fl2va-fp8_flf2v"
+    # A duration snaps to the 124 + n*17 grid, so 6 s is 141 frames, not 144.
+    for seconds, frames in ((124 / 24, 124), (6, 141), (6.5, 158), (8, 192), (10, 243)):
+        assert calculate_video_frames(i2v, seconds, 24) == frames, seconds
+        request = _keyframe_request(
+            _keyframe_params(
+                i2v, duration=seconds, keyframes=[{"image": True, "frameIndex": frames - 2}]
+            )
+        )
+        assert request["frames"] == frames, seconds
+    _assert_keyframe_error(
+        _keyframe_params(i2v, duration=6, keyframes=[{"image": True, "frameIndex": 144}]),
+        "keyframes[0].frameIndex must be an integer between 1 and 139 for the 141-frame video "
+        "that duration 6 resolves to (got 144).",
+    )
+    # The duration prints as JavaScript's String(number) does: 6.0 is "6".
+    for duration, text in ((6.0, "6"), ("6", "6"), (6.5, "6.5")):
+        frames = calculate_video_frames(i2v, float(duration), 24)
+        _assert_keyframe_error(
+            _keyframe_params(
+                i2v, duration=duration, keyframes=[{"image": True, "frameIndex": frames}]
+            ),
+            _frame_index_error(0, frames, str(frames), duration=text),
+        )
+    # With frames, the error names the count directly; frame 0 and the last
+    # frame point at the anchors, and any other out-of-range frame does not.
+    _assert_keyframe_error(
+        _keyframe_params(
+            flf2v, duration=None, frames=141, keyframes=[{"image": True, "frameIndex": 140}]
+        ),
+        "keyframes[0].frameIndex must be an integer between 1 and 139 for a 141-frame video "
+        "(got 140); use referenceImage and referenceImageEnd for the first and last frames.",
+    )
+    for frame_index, anchor in ((0, True), (140, True), (141, False), (-1, False), (150, False)):
+        _assert_keyframe_error(
+            _keyframe_params(
+                flf2v,
+                duration=None,
+                frames=141,
+                keyframes=[{"image": True, "frameIndex": frame_index}],
+            ),
+            _frame_index_error(0, 141, str(frame_index), anchor=anchor),
+        )
 
 
 def test_minimax_h3_empty_keyframes_are_no_keyframes_on_any_model() -> None:
@@ -2360,7 +2420,7 @@ def test_minimax_h3_keyframes_are_refused_by_every_other_model() -> None:
                 "referenceImage": True,
                 "keyframes": [{"image": True, "frameIndex": 60}],
             },
-            _KEYFRAMES_WRONG_MODEL,
+            _keyframes_wrong_model(model_id),
         )
     # The model check comes first, even for a malformed list.
     _assert_keyframe_error(
@@ -2369,7 +2429,7 @@ def test_minimax_h3_keyframes_are_refused_by_every_other_model() -> None:
             referenceImage=None,
             keyframes={"image": True, "frameIndex": 60},
         ),
-        _KEYFRAMES_WRONG_MODEL,
+        _keyframes_wrong_model("minimax-h3-fl2va-fp8_t2v"),
     )
 
 
@@ -2400,27 +2460,32 @@ def test_minimax_h3_keyframe_errors_match_sogni_client_word_for_word() -> None:
         ),
     ):
         _assert_keyframe_error(_keyframe_params(flf2v, keyframes=keyframes), message)
-    for frame_index, got in (
-        (0, "0"),
-        (242, "242"),
-        (-5, "-5"),
-        (2.5, "2.5"),
-        (float("nan"), "NaN"),
-        ("60", '"60"'),
-        (None, "nothing"),
-        (True, "true"),
-        ([60], "an array"),
-        ({"at": 60}, "an object"),
+    # _keyframe_params asks for duration 10, which resolves 243 frames.
+    for frame_index, got, anchor in (
+        (0, "0", True),
+        (242, "242", True),
+        (243, "243", False),
+        (-5, "-5", False),
+        (2.5, "2.5", False),
+        (float("nan"), "NaN", False),
+        ("60", '"60"', False),
+        ("0", '"0"', False),
+        (None, "nothing", False),
+        (True, "true", False),
+        # False == 0 in Python, but JavaScript's false is not frame 0.
+        (False, "false", False),
+        ([60], "an array", False),
+        ({"at": 60}, "an object", False),
         # Python only: a float is never an integer frame, even a whole one.
-        (60.0, "60.0"),
+        (60.0, "60.0", False),
     ):
         _assert_keyframe_error(
             _keyframe_params(i2v, keyframes=[{"image": True, "frameIndex": frame_index}]),
-            _frame_index_error(0, 243, got),
+            _frame_index_error(0, 243, got, duration="10", anchor=anchor),
         )
     _assert_keyframe_error(
         _keyframe_params(i2v, keyframes=[{"image": True}]),
-        _frame_index_error(0, 243, "nothing"),
+        _frame_index_error(0, 243, "nothing", duration="10"),
     )
     _assert_keyframe_error(
         _keyframe_params(
@@ -2438,7 +2503,7 @@ def test_minimax_h3_keyframe_errors_match_sogni_client_word_for_word() -> None:
             i2v,
             keyframes=[{"image": True, "frameIndex": 30}, {"image": True, "frameIndex": 300}],
         ),
-        _frame_index_error(1, 243, "300"),
+        _frame_index_error(1, 243, "300", duration="10"),
     )
 
 
@@ -2521,7 +2586,7 @@ async def test_minimax_h3_keyframes_upload_to_context_slots_in_caller_order() ->
             reference_image=PNG,
             keyframes=[{"image": PNG, "frame_index": 243}],
         )
-    assert str(caught.value) == _frame_index_error(0, 243, "243")
+    assert str(caught.value) == _frame_index_error(0, 243, "243", duration="10")
     assert refused_client.rest.calls == []
     assert refused_client.socket.sent == []
 

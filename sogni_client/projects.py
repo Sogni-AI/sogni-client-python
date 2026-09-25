@@ -783,7 +783,8 @@ def _validate_video_keyframes(params: dict[str, Any]) -> None:
         return
     if not is_minimax_h3_keyframe_model(params["modelId"]):
         raise _api_error(
-            "keyframes is supported only by the MiniMax H3 image-to-video and first/last-frame workflows (i2v and flf2v model ids)."
+            "keyframes is supported only by the MiniMax H3 image-to-video and first/last-frame "
+            f"workflows (i2v and flf2v model ids); {params['modelId']} does not accept keyframes."
         )
     if not isinstance(keyframes, list):
         raise _api_error("keyframes must be an array of { image, frameIndex } entries.")
@@ -797,20 +798,35 @@ def _validate_video_keyframes(params: dict[str, Any]) -> None:
             raise _api_error(f"keyframes[{index}].image is required.")
 
 
-def _apply_h3_keyframes(keyframe: dict[str, Any], params: dict[str, Any]) -> None:
+def _apply_h3_keyframes(
+    key_frame: dict[str, Any],
+    params: dict[str, Any],
+    frames_duration: float | None = None,
+) -> None:
     """Check keyframe frame indices against the resolved frame count and write
     ``hasContextImage<i+1>`` for every entry plus ``keyframeFrameIndices`` in the
     same order. ``_validate_video_keyframes`` has already checked the model and
     the entries.
+
+    ``key_frame`` is the request's ``keyFrames[0]`` record, not a keyframe
+    image. ``frames_duration`` is the caller's ``duration`` when the frame count
+    was resolved from it, so a frame error can say which count that duration
+    snapped to.
     """
 
     slots = _video_keyframe_slots(params)
     if not slots:
         return
-    frames = keyframe.get("frames")
+    frames = key_frame.get("frames")
     if frames is None:
         raise _api_error("keyframes need the video length: pass frames or duration.")
     last_index = frames - 2
+    video = (
+        f"a {frames}-frame video"
+        if frames_duration is None
+        else f"the {frames}-frame video that duration "
+        f"{_js_number_string(frames_duration)} resolves to"
+    )
     used: set[int] = set()
     for slot, _image, frame_index in slots:
         if (
@@ -818,10 +834,16 @@ def _apply_h3_keyframes(keyframe: dict[str, Any], params: dict[str, Any]) -> Non
             or not isinstance(frame_index, int)
             or not 1 <= frame_index <= last_index
         ):
+            # Point at the anchors only when the caller aimed at the first or
+            # last frame. A bool is never 0 on the JavaScript side.
+            anchor_hint = (
+                "; use referenceImage and referenceImageEnd for the first and last frames"
+                if not isinstance(frame_index, bool) and frame_index in (0, frames - 1)
+                else ""
+            )
             raise _api_error(
                 f"keyframes[{slot - 1}].frameIndex must be an integer between 1 and {last_index} "
-                f"for a {frames}-frame video (got {_describe_keyframe_value(frame_index)}); "
-                "use referenceImage and referenceImageEnd for the first and last frames."
+                f"for {video} (got {_describe_keyframe_value(frame_index)}){anchor_hint}."
             )
         if frame_index in used:
             raise _api_error(
@@ -829,8 +851,8 @@ def _apply_h3_keyframes(keyframe: dict[str, Any], params: dict[str, Any]) -> Non
             )
         used.add(frame_index)
     for slot, _image, _frame_index in slots:
-        keyframe[f"hasContextImage{slot}"] = True
-    keyframe["keyframeFrameIndices"] = [frame_index for _slot, _image, frame_index in slots]
+        key_frame[f"hasContextImage{slot}"] = True
+    key_frame["keyframeFrameIndices"] = [frame_index for _slot, _image, frame_index in slots]
 
 
 def _validate_h3_params(params: dict[str, Any]) -> None:
@@ -1906,6 +1928,8 @@ def create_job_request_message(
             keyframe["fps"] = 30
         elif is_external_video_model(params["modelId"]) or is_minimax_h3_model(params["modelId"]):
             keyframe["fps"] = 24
+        # The duration the frame count was resolved from, when it was.
+        frames_duration: float | None = None
         # An explicit source frame count wins over duration for an upscale.
         if params.get("duration") is not None and not (
             is_upscale and params.get("frames") is not None
@@ -1950,9 +1974,10 @@ def create_job_request_message(
                 duration,
                 params.get("fps", 30 if is_wan3_model(params["modelId"]) else 24),
             )
+            frames_duration = duration
         # MiniMax H3 intermediate keyframes: frame indices are checked against the
         # frame count resolved just above, from ``frames`` or ``duration``.
-        _apply_h3_keyframes(keyframe, params)
+        _apply_h3_keyframes(keyframe, params, frames_duration)
         if params.get("sam2Coordinates") is not None:
             keyframe["sam2Coordinates"] = json.dumps(
                 params["sam2Coordinates"], separators=(",", ":")
