@@ -280,12 +280,15 @@ project = await sogni.projects.create(
 )
 ```
 
-## MiniMax H3 intermediate keyframes (i2v and flf2v)
+## MiniMax H3 intermediate keyframes
 
-The H3 image-to-video and first/last-frame ids of every tier (Standard, Balanced,
-LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage; `is_minimax_h3_keyframe_model()`)
-accept `keyframes`: up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images pinned at
-chosen frames between the first and last frame. Each entry is
+Every H3 workflow except text-to-video accepts `keyframes`, 21 ids in all
+(`is_minimax_h3_keyframe_model()`): image-to-video and first/last-frame on every
+tier (Standard, Balanced, LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage), the
+six FastH3 Sound to Video ids (ia2v, flfa2v, a2v, one- and two-stage) and the five
+Ref2VA r2v ids. A request takes up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images
+pinned at chosen frames between the first and last frame, alongside the
+workflow's own uploads. Each entry is
 `{"image": ..., "frame_index": ...}` (`frameIndex` works too). `frame_index` is the
 0-based frame at 24 fps, an `int` from 1 to `frames - 2` of the job's frame count,
 each frame used once. To convert seconds, use `int(seconds * 24 + 0.5)`, which
@@ -297,18 +300,25 @@ frame count is exact. `duration` also works but snaps to the grid (`duration=6`
 renders 141 frames, not 144), and `calculate_video_frames(model_id, seconds, 24)`
 returns the count a duration resolves to.
 
-The first and last frames stay `reference_image` / `reference_image_end` with
-their usual rules, and `context_images` stays r2v-only. Every other model refuses
-a non-empty list; an empty list is ignored. Each image uploads to
-`contextImage1..N` in list order. If no worker serving the model can pin
-keyframes yet, the job is refused with error code `4100`. The validation errors
-match the JavaScript SDK's word for word.
+Frame 0 and the last frame are never keyframes: i2v, flf2v and flfa2v set them
+with `reference_image` / `reference_image_end` under their usual rules, ia2v sets
+frame 0 with `reference_image`, and a2v and r2v cannot pin them. `context_images`
+stays r2v-only. t2v and every non-H3 model refuse a non-empty list; an empty list
+is ignored. Each image uploads to its own `keyframeImage1..N` slot in list order,
+so an r2v request sends its references (`reference_image` and `context_images`,
+which keep their slots) and its keyframes together. If no worker serving the
+model can pin keyframes yet, the job is refused with error code `4100`. The
+validation errors match the JavaScript SDK's word for word.
 
 Writing the prompt for keyframes:
 
-- H3 never sees the keyframe images as references. They are not `<Picture N>`
-  images, and the alignment line still names only the first and last frame, so
-  the prompt must describe what each keyframe shows at its time.
+- H3 never sees the keyframe images as references, so the prompt must describe
+  what each keyframe shows at its time. Keyframes are never labelled: the
+  i2v/flf2v alignment line still names only the first and last frame, and on r2v
+  `<Picture N>` and `<Subject N>` refer to the references only.
+- On Sound to Video the uploaded audio drives the performance; keyframes pin how
+  it looks at their times, so describe the look at each keyframe's time and let
+  the audio carry timing and delivery.
 - When a keyframe changes the framing, camera angle, location or light, start a
   new shot (a hard cut) at its time: `[Shot N] At MM:SS.mmm, ...`, where the time
   is `frame_index / 24` seconds (frame 144 is `00:06.000`). Two differently
@@ -773,7 +783,7 @@ schemas.
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
-Two-Stage 720p/1080p/2K ids, plus intermediate keyframes on the i2v and flf2v ids),
+Two-Stage 720p/1080p/2K ids, plus intermediate keyframes on every mode but t2v),
 Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
 segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
