@@ -236,7 +236,8 @@ def is_minimax_h3_reference_model(model_id: str) -> bool:
     return is_minimax_h3_model(model_id) and get_video_workflow_type(model_id) == "r2v"
 
 
-#: Most intermediate ``keyframes`` one MiniMax H3 i2v or flf2v request accepts.
+#: Most intermediate ``keyframes`` one MiniMax H3 request accepts, and the
+#: number of ``keyframeImage<n>`` upload slots.
 MINIMAX_H3_MAX_KEYFRAMES = 8
 
 
@@ -244,15 +245,22 @@ def is_minimax_h3_keyframe_model(model_id: str) -> bool:
     """A MiniMax H3 id that accepts intermediate ``keyframes``.
 
     Keyframes are still images the worker pins (ComfyUI ``MiniMaxH3AddGuide``) at
-    chosen frames between the first and last frame. The image-to-video (``i2v``)
-    and first/last-frame (``flf2v``) workflows of every tier accept them:
-    Standard, Balanced, LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage, ten ids
-    in all. Text-to-video, ``r2v`` and the FastH3 audio guide (``ia2v``,
-    ``flfa2v``, ``a2v``) do not. Mirrors the TypeScript
-    ``isMinimaxH3KeyframeModel``.
+    chosen frames between the first and last frame. Every MiniMax H3 workflow
+    except text-to-video accepts them, 21 ids in all: image-to-video (``i2v``)
+    and first/last-frame (``flf2v``) on every tier (Standard, Balanced, LightX2V
+    Turbo, FastH3 Turbo and FastH3 Two-Stage), the FastH3 Sound to Video audio
+    guide (``ia2v``, ``flfa2v``, ``a2v``, one- and two-stage) and Ref2VA
+    Reference to Video (``r2v``: Standard, Turbo, Balanced and both two-stage
+    ids). Mirrors the TypeScript ``isMinimaxH3KeyframeModel``.
     """
 
-    return is_minimax_h3_model(model_id) and get_video_workflow_type(model_id) in ("i2v", "flf2v")
+    if not is_minimax_h3_model(model_id):
+        return False
+    return get_video_workflow_type(model_id) in (
+        "i2v",
+        "flf2v",
+        "r2v",
+    ) or is_minimax_h3_audio_guide_model(model_id)
 
 
 def is_external_video_model(model_id: str) -> bool:

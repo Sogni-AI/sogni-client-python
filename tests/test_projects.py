@@ -2125,10 +2125,11 @@ def test_minimax_h3_frames_for_audio_duration_is_the_smallest_covering_grid_valu
             frames_for(bad)  # type: ignore[arg-type]
 
 
-# MiniMax H3 intermediate keyframes. The i2v and flf2v ids of every tier pin
-# still images between the first and last frame: keyframes[i]["image"] rides in
-# contextImage<i+1> (caller order, no referenceImage offset) and the frame
-# indices travel as keyframeFrameIndices in the same order.
+# MiniMax H3 intermediate keyframes. Every H3 workflow except t2v pins still
+# images between the first and last frame: keyframes[i]["image"] rides in its own
+# keyframeImage<i+1> slot (caller order) and the frame indices travel as
+# keyframeFrameIndices in the same order. Ref2VA references keep their
+# contextImage slots in the same request.
 _MINIMAX_H3_KEYFRAME_IDS = (
     "minimax-h3-fl2va-fp8_i2v",
     "minimax-h3-fl2va-fp8_i2v_turbo",
@@ -2140,31 +2141,65 @@ _MINIMAX_H3_KEYFRAME_IDS = (
     "minimax-h3-fastvideo-int8_flf2v_turbo",
     "minimax-h3-fastvideo-int8_i2v_turbo_2stage",
     "minimax-h3-fastvideo-int8_flf2v_turbo_2stage",
+    *(
+        f"{base_id}{suffix}"
+        for base_id, _uploads in _MINIMAX_H3_AUDIO_GUIDE_MODES.values()
+        for suffix in ("", "_2stage")
+    ),
+    "minimax-h3-ref2va-fp8_r2v",
+    "minimax-h3-ref2va-fp8_r2v_turbo",
+    "minimax-h3-ref2va-fp8_r2v_balanced",
+    "minimax-h3-ref2va-fp8_r2v_2stage",
+    "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
 )
-# Every H3 id without keyframe support; flfa2v/ia2v must not match i2v/flf2v.
+# Every H3 id without keyframe support: text-to-video.
 _MINIMAX_H3_NON_KEYFRAME_IDS = (
     "minimax-h3-fl2va-fp8_t2v",
     "minimax-h3-fl2va-fp8_t2v_turbo",
     "minimax-h3-fl2va-fp8_t2v_balanced",
     "minimax-h3-fastvideo-int8_t2v_turbo",
     "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
-    "minimax-h3-ref2va-fp8_r2v",
-    "minimax-h3-ref2va-fp8_r2v_turbo",
-    "minimax-h3-ref2va-fp8_r2v_balanced",
-    "minimax-h3-ref2va-fp8_r2v_2stage",
-    "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
-    *(
-        f"{base_id}{suffix}"
-        for base_id, _uploads in _MINIMAX_H3_AUDIO_GUIDE_MODES.values()
-        for suffix in ("", "_2stage")
-    ),
 )
+# One id per workflow, and each workflow's own uploads as boolean placeholders.
+_H3_KEYFRAME_WORKFLOW_IDS = {
+    "t2v": "minimax-h3-fl2va-fp8_t2v",
+    "i2v": "minimax-h3-fl2va-fp8_i2v",
+    "flf2v": "minimax-h3-fl2va-fp8_flf2v",
+    "ia2v": "minimax-h3-fastvideo-int8_ia2v_turbo",
+    "flfa2v": "minimax-h3-fastvideo-int8_flfa2v_turbo",
+    "a2v": "minimax-h3-fastvideo-int8_a2v_turbo",
+    "r2v": "minimax-h3-ref2va-fp8_r2v",
+}
+_H3_KEYFRAME_WORKFLOW_UPLOADS = {
+    "t2v": (),
+    "i2v": ("referenceImage",),
+    "flf2v": ("referenceImage", "referenceImageEnd"),
+    "ia2v": ("referenceImage", "referenceAudio"),
+    "flfa2v": ("referenceImage", "referenceImageEnd", "referenceAudio"),
+    "a2v": ("referenceAudio",),
+    "r2v": ("referenceImage",),
+}
+_BOTH_ANCHORS_HINT = "use referenceImage and referenceImageEnd for the first and last frames"
+
+
+def _keyframe_edge_hint(workflow: str, frames: int) -> str:
+    """What the frame error adds for frame 0 or the last frame, by workflow."""
+
+    if workflow in ("i2v", "flf2v", "flfa2v"):
+        return _BOTH_ANCHORS_HINT
+    if workflow == "ia2v":
+        return (
+            "use referenceImage for the first frame, and the last frame "
+            f"({frames - 1}) cannot be pinned"
+        )
+    return f"frames 0 and {frames - 1} cannot be pinned"
 
 
 def _keyframes_wrong_model(model_id: str) -> str:
     return (
-        "keyframes is supported only by the MiniMax H3 image-to-video and first/last-frame "
-        f"workflows (i2v and flf2v model ids); {model_id} does not accept keyframes."
+        "keyframes is supported only by the MiniMax H3 image-to-video, first/last-frame, "
+        "Sound to Video and Reference to Video workflows (i2v, flf2v, ia2v, flfa2v, a2v and "
+        f"r2v model ids); {model_id} does not accept keyframes."
     )
 
 
@@ -2186,10 +2221,9 @@ def _keyframe_params(model_id: str, **changes: Any) -> dict[str, Any]:
         "width": 1344,
         "height": 768,
         "steps": _keyframe_steps(model_id),
-        "referenceImage": True,
     }
-    if get_video_workflow_type(model_id) == "flf2v":
-        params["referenceImageEnd"] = True
+    for field in _H3_KEYFRAME_WORKFLOW_UPLOADS[get_video_workflow_type(model_id) or "t2v"]:
+        params[field] = True
     for key, value in changes.items():
         if value is None:
             params.pop(key, None)
@@ -2204,8 +2238,12 @@ def _keyframe_request(params: dict[str, Any]) -> dict[str, Any]:
     ]
 
 
-def _context_image_flags(keyframe: dict[str, Any]) -> list[str]:
-    return [key for key in keyframe if key.startswith("hasContextImage")]
+def _flags(keyframe: dict[str, Any], prefix: str) -> list[str]:
+    return [key for key in keyframe if key.startswith(prefix)]
+
+
+def _keyframe_image_flags(count: int) -> list[str]:
+    return [f"hasKeyframeImage{n}" for n in range(1, count + 1)]
 
 
 def _assert_keyframe_error(params: dict[str, Any], message: str) -> None:
@@ -2215,26 +2253,26 @@ def _assert_keyframe_error(params: dict[str, Any], message: str) -> None:
 
 
 def _frame_index_error(
-    index: int, frames: int, got: str, *, duration: str | None = None, anchor: bool = False
+    index: int, frames: int, got: str, *, duration: str | None = None, hint: str | None = None
 ) -> str:
-    """The frame error names the count a duration resolved to, and points at
-    referenceImage / referenceImageEnd only for frame 0 or the last frame."""
+    """The frame error names the count a duration resolved to, and explains the
+    edge frames only for frame 0 or the last frame."""
 
     video = (
         f"a {frames}-frame video"
         if duration is None
         else f"the {frames}-frame video that duration {duration} resolves to"
     )
-    hint = "; use referenceImage and referenceImageEnd for the first and last frames"
     return (
         f"keyframes[{index}].frameIndex must be an integer between 1 and {frames - 2} for "
-        f"{video} (got {got}){hint if anchor else ''}."
+        f"{video} (got {got}){f'; {hint}' if hint else ''}."
     )
 
 
-def test_minimax_h3_keyframe_models_are_the_ten_i2v_and_flf2v_ids() -> None:
+def test_minimax_h3_keyframe_models_are_every_workflow_except_t2v() -> None:
     assert sogni_client.MINIMAX_H3_MAX_KEYFRAMES == 8
     assert sogni_client.isMinimaxH3KeyframeModel is sogni_client.is_minimax_h3_keyframe_model
+    assert len(_MINIMAX_H3_KEYFRAME_IDS) == 21
     every_id = (*_MINIMAX_H3_KEYFRAME_IDS, *_MINIMAX_H3_NON_KEYFRAME_IDS)
     assert len(every_id) == 26
     assert all(is_minimax_h3_model(model_id) for model_id in every_id)
@@ -2243,30 +2281,37 @@ def test_minimax_h3_keyframe_models_are_the_ten_i2v_and_flf2v_ids() -> None:
         == _MINIMAX_H3_KEYFRAME_IDS
     )
     for model_id in (
+        # Audio-guide workflow names on the wrong checkpoint are not audio-guide ids.
+        "minimax-h3-fl2va-fp8_ia2v_turbo",
+        "minimax-h3-fastvideo-int8_flfa2v_balanced",
         "ltx23-22b-fp8_i2v_distilled",
+        "ltx23-22b-fp8_ia2v_distilled",
         "wan_v2.2-14b-fp8_i2v_lightx2v",
         "happyhorse-1.1-i2v",
+        "happyhorse-1.1-r2v",
         "seedance-2-5",
         "not-a-model",
     ):
         assert not sogni_client.is_minimax_h3_keyframe_model(model_id), model_id
 
 
-def test_minimax_h3_keyframes_reach_the_wire_in_caller_order() -> None:
+def test_minimax_h3_keyframes_reach_their_own_slots_in_caller_order() -> None:
+    ids = _H3_KEYFRAME_WORKFLOW_IDS
     # i2v with only a first frame and one keyframe.
     i2v = _keyframe_request(
-        _keyframe_params("minimax-h3-fl2va-fp8_i2v", keyframes=[{"image": True, "frameIndex": 96}])
+        _keyframe_params(ids["i2v"], keyframes=[{"image": True, "frameIndex": 96}])
     )
     assert i2v["frames"] == 243
     assert i2v["hasReferenceImage"] is True
     assert "hasReferenceImageEnd" not in i2v
-    assert _context_image_flags(i2v) == ["hasContextImage1"]
+    assert _flags(i2v, "hasKeyframeImage") == ["hasKeyframeImage1"]
+    assert _flags(i2v, "hasContextImage") == []
     assert i2v["keyframeFrameIndices"] == [96]
 
     # flf2v with two keyframes: slots and indices keep the caller's order.
     flf2v = _keyframe_request(
         _keyframe_params(
-            "minimax-h3-fl2va-fp8_flf2v",
+            ids["flf2v"],
             keyframes=[
                 {"image": b"late", "frameIndex": 180},
                 {"image": b"early", "frameIndex": 60},
@@ -2275,8 +2320,39 @@ def test_minimax_h3_keyframes_reach_the_wire_in_caller_order() -> None:
     )
     assert flf2v["hasReferenceImage"] is True
     assert flf2v["hasReferenceImageEnd"] is True
-    assert _context_image_flags(flf2v) == ["hasContextImage1", "hasContextImage2"]
+    assert _flags(flf2v, "hasKeyframeImage") == _keyframe_image_flags(2)
     assert flf2v["keyframeFrameIndices"] == [180, 60]
+
+    # Sound to Video keeps its audio and anchors; keyframes add their own slots.
+    for workflow in ("ia2v", "flfa2v", "a2v"):
+        keyframe = _keyframe_request(
+            _keyframe_params(
+                ids[workflow],
+                duration=None,
+                frames=192,
+                keyframes=[{"image": True, "frameIndex": 48}, {"image": True, "frameIndex": 144}],
+            )
+        )
+        assert keyframe["hasReferenceAudio"] is True, workflow
+        assert keyframe.get("hasReferenceImage") is (None if workflow == "a2v" else True)
+        assert keyframe.get("hasReferenceImageEnd") is (True if workflow == "flfa2v" else None)
+        assert _flags(keyframe, "hasKeyframeImage") == _keyframe_image_flags(2), workflow
+        assert _flags(keyframe, "hasContextImage") == [], workflow
+        assert keyframe["keyframeFrameIndices"] == [48, 144], workflow
+
+    # Ref2VA sends references and keyframes together: references keep their
+    # contextImage slots (offset past referenceImage), keyframes take keyframeImage.
+    r2v = _keyframe_request(
+        _keyframe_params(
+            ids["r2v"],
+            contextImages=[True, True],
+            keyframes=[{"image": True, "frameIndex": 60}, {"image": True, "frameIndex": 150}],
+        )
+    )
+    assert r2v["hasReferenceImage"] is True
+    assert _flags(r2v, "hasContextImage") == ["hasContextImage2", "hasContextImage3"]
+    assert _flags(r2v, "hasKeyframeImage") == _keyframe_image_flags(2)
+    assert r2v["keyframeFrameIndices"] == [60, 150]
 
     # The two-stage id takes the FastH3 request unchanged, keyframes included.
     two_stage_params = _keyframe_params(
@@ -2287,19 +2363,27 @@ def test_minimax_h3_keyframes_reach_the_wire_in_caller_order() -> None:
     )
     two_stage = _keyframe_request(two_stage_params)
     assert two_stage["modelID"] == "minimax-h3-fastvideo-int8_flf2v_turbo_2stage"
-    assert two_stage["hasContextImage1"] is True
+    assert two_stage["hasKeyframeImage1"] is True
     assert two_stage["keyframeFrameIndices"] == [120]
     base = _keyframe_request(
         {**two_stage_params, "modelId": "minimax-h3-fastvideo-int8_flf2v_turbo"}
     )
     assert {**two_stage, "modelID": "minimax-h3-fastvideo-int8_flf2v_turbo"} == base
 
-    # Every keyframe id accepts the full eight, in contextImage1..8.
+    # Every keyframe id accepts the full eight, in keyframeImage1..8, and the
+    # first and last pinnable frames (1 and frames - 2).
     eight = [{"image": True, "frameIndex": 10 + index * 20} for index in range(8)]
     for model_id in _MINIMAX_H3_KEYFRAME_IDS:
         keyframe = _keyframe_request(_keyframe_params(model_id, keyframes=eight))
-        assert _context_image_flags(keyframe) == [f"hasContextImage{n}" for n in range(1, 9)]
+        assert _flags(keyframe, "hasKeyframeImage") == _keyframe_image_flags(8), model_id
         assert keyframe["keyframeFrameIndices"] == [10, 30, 50, 70, 90, 110, 130, 150]
+        edges = _keyframe_request(
+            _keyframe_params(
+                model_id,
+                keyframes=[{"image": True, "frameIndex": 241}, {"image": True, "frameIndex": 1}],
+            )
+        )
+        assert edges["keyframeFrameIndices"] == [241, 1], model_id
 
 
 def test_minimax_h3_keyframes_check_frames_resolved_from_duration_or_frames() -> None:
@@ -2317,7 +2401,7 @@ def test_minimax_h3_keyframes_check_frames_resolved_from_duration_or_frames() ->
         _keyframe_params(
             "minimax-h3-fl2va-fp8_i2v", duration=8, keyframes=[{"image": True, "frameIndex": 191}]
         ),
-        _frame_index_error(0, 192, "191", duration="8", anchor=True),
+        _frame_index_error(0, 192, "191", duration="8", hint=_BOTH_ANCHORS_HINT),
     )
     by_frames = _keyframe_request(
         _keyframe_params(
@@ -2339,7 +2423,6 @@ def test_minimax_h3_keyframes_check_frames_resolved_from_duration_or_frames() ->
 
 def test_minimax_h3_keyframe_errors_name_the_duration_snap_and_edge_frames() -> None:
     i2v = "minimax-h3-fl2va-fp8_i2v"
-    flf2v = "minimax-h3-fl2va-fp8_flf2v"
     # A duration snaps to the 124 + n*17 grid, so 6 s is 141 frames, not 144.
     for seconds, frames in ((124 / 24, 124), (6, 141), (6.5, 158), (8, 192), (10, 243)):
         assert calculate_video_frames(i2v, seconds, 24) == frames, seconds
@@ -2363,45 +2446,67 @@ def test_minimax_h3_keyframe_errors_name_the_duration_snap_and_edge_frames() -> 
             ),
             _frame_index_error(0, frames, str(frames), duration=text),
         )
-    # With frames, the error names the count directly; frame 0 and the last
-    # frame point at the anchors, and any other out-of-range frame does not.
-    _assert_keyframe_error(
-        _keyframe_params(
-            flf2v, duration=None, frames=141, keyframes=[{"image": True, "frameIndex": 140}]
-        ),
+    # The edge-frame hint follows each workflow's inputs, word for word.
+    prefix = (
         "keyframes[0].frameIndex must be an integer between 1 and 139 for a 141-frame video "
-        "(got 140); use referenceImage and referenceImageEnd for the first and last frames.",
+        "(got 140); "
     )
-    for frame_index, anchor in ((0, True), (140, True), (141, False), (-1, False), (150, False)):
+    for workflow, hint in (
+        ("i2v", "use referenceImage and referenceImageEnd for the first and last frames."),
+        (
+            "ia2v",
+            "use referenceImage for the first frame, and the last frame (140) cannot be pinned.",
+        ),
+        ("a2v", "frames 0 and 140 cannot be pinned."),
+        ("r2v", "frames 0 and 140 cannot be pinned."),
+    ):
         _assert_keyframe_error(
             _keyframe_params(
-                flf2v,
+                _H3_KEYFRAME_WORKFLOW_IDS[workflow],
                 duration=None,
                 frames=141,
-                keyframes=[{"image": True, "frameIndex": frame_index}],
+                keyframes=[{"image": True, "frameIndex": 140}],
             ),
-            _frame_index_error(0, 141, str(frame_index), anchor=anchor),
+            prefix + hint,
         )
+    # Frame 0 and the last frame carry the hint on every workflow; any other
+    # out-of-range frame does not.
+    for workflow in ("i2v", "flf2v", "ia2v", "flfa2v", "a2v", "r2v"):
+        for frame_index, edge in ((0, True), (140, True), (141, False), (-1, False), (150, False)):
+            _assert_keyframe_error(
+                _keyframe_params(
+                    _H3_KEYFRAME_WORKFLOW_IDS[workflow],
+                    duration=None,
+                    frames=141,
+                    keyframes=[{"image": True, "frameIndex": frame_index}],
+                ),
+                _frame_index_error(
+                    0,
+                    141,
+                    str(frame_index),
+                    hint=_keyframe_edge_hint(workflow, 141) if edge else None,
+                ),
+            )
 
 
 def test_minimax_h3_empty_keyframes_are_no_keyframes_on_any_model() -> None:
     for model_id in (
         "minimax-h3-fl2va-fp8_i2v",
         "minimax-h3-fl2va-fp8_t2v",
+        "minimax-h3-fastvideo-int8_a2v_turbo",
         "minimax-h3-fastvideo-int8_flf2v_turbo_2stage",
     ):
-        keyframe = _keyframe_request(
-            _keyframe_params(
-                model_id,
-                keyframes=[],
-                referenceImage=None if model_id.endswith("_t2v") else True,
-            )
-        )
-        assert _context_image_flags(keyframe) == [], model_id
+        keyframe = _keyframe_request(_keyframe_params(model_id, keyframes=[]))
+        assert _flags(keyframe, "hasKeyframeImage") == [], model_id
         assert "keyframeFrameIndices" not in keyframe, model_id
 
 
-def test_minimax_h3_keyframes_are_refused_by_every_other_model() -> None:
+def test_minimax_h3_keyframes_are_refused_by_t2v_and_every_other_model() -> None:
+    assert _keyframes_wrong_model("minimax-h3-fl2va-fp8_t2v") == (
+        "keyframes is supported only by the MiniMax H3 image-to-video, first/last-frame, Sound "
+        "to Video and Reference to Video workflows (i2v, flf2v, ia2v, flfa2v, a2v and r2v model "
+        "ids); minimax-h3-fl2va-fp8_t2v does not accept keyframes."
+    )
     for model_id in (
         *_MINIMAX_H3_NON_KEYFRAME_IDS,
         "ltx23-22b-fp8_i2v_distilled",
@@ -2424,11 +2529,7 @@ def test_minimax_h3_keyframes_are_refused_by_every_other_model() -> None:
         )
     # The model check comes first, even for a malformed list.
     _assert_keyframe_error(
-        _keyframe_params(
-            "minimax-h3-fl2va-fp8_t2v",
-            referenceImage=None,
-            keyframes={"image": True, "frameIndex": 60},
-        ),
+        _keyframe_params("minimax-h3-fl2va-fp8_t2v", keyframes={"image": True, "frameIndex": 60}),
         _keyframes_wrong_model("minimax-h3-fl2va-fp8_t2v"),
     )
 
@@ -2442,7 +2543,9 @@ def test_minimax_h3_keyframe_errors_match_sogni_client_word_for_word() -> None:
         "keyframes must be an array of { image, frameIndex } entries.",
     )
     _assert_keyframe_error(
-        _keyframe_params(i2v, keyframes=[*eight, {"image": True, "frameIndex": 200}]),
+        _keyframe_params(
+            "minimax-h3-ref2va-fp8_r2v", keyframes=[*eight, {"image": True, "frameIndex": 200}]
+        ),
         "keyframes accepts at most 8 entries (got 9).",
     )
     for keyframes, message in (
@@ -2461,7 +2564,7 @@ def test_minimax_h3_keyframe_errors_match_sogni_client_word_for_word() -> None:
     ):
         _assert_keyframe_error(_keyframe_params(flf2v, keyframes=keyframes), message)
     # _keyframe_params asks for duration 10, which resolves 243 frames.
-    for frame_index, got, anchor in (
+    for frame_index, got, edge in (
         (0, "0", True),
         (242, "242", True),
         (243, "243", False),
@@ -2481,7 +2584,9 @@ def test_minimax_h3_keyframe_errors_match_sogni_client_word_for_word() -> None:
     ):
         _assert_keyframe_error(
             _keyframe_params(i2v, keyframes=[{"image": True, "frameIndex": frame_index}]),
-            _frame_index_error(0, 243, got, duration="10", anchor=anchor),
+            _frame_index_error(
+                0, 243, got, duration="10", hint=_BOTH_ANCHORS_HINT if edge else None
+            ),
         )
     _assert_keyframe_error(
         _keyframe_params(i2v, keyframes=[{"image": True}]),
@@ -2489,7 +2594,7 @@ def test_minimax_h3_keyframe_errors_match_sogni_client_word_for_word() -> None:
     )
     _assert_keyframe_error(
         _keyframe_params(
-            i2v,
+            "minimax-h3-fastvideo-int8_a2v_turbo",
             keyframes=[
                 {"image": True, "frameIndex": 30},
                 {"image": True, "frameIndex": 241},
@@ -2507,40 +2612,48 @@ def test_minimax_h3_keyframe_errors_match_sogni_client_word_for_word() -> None:
     )
 
 
-def test_minimax_h3_keyframes_keep_the_frame_anchor_and_context_image_rules() -> None:
+def test_minimax_h3_keyframes_keep_each_workflows_input_rules() -> None:
+    ids = _H3_KEYFRAME_WORKFLOW_IDS
     keyframes = [{"image": True, "frameIndex": 30}]
-    with pytest.raises(ApiError, match="i2v workflow requires at least one of referenceImage"):
-        _keyframe_request(
-            _keyframe_params("minimax-h3-fl2va-fp8_i2v", referenceImage=None, keyframes=keyframes)
-        )
-    with pytest.raises(ApiError, match="flf2v workflow requires referenceImageEnd"):
-        _keyframe_request(
-            _keyframe_params(
-                "minimax-h3-fl2va-fp8_flf2v", referenceImageEnd=None, keyframes=keyframes
-            )
-        )
-    with pytest.raises(ApiError, match="contextImages is supported only by MiniMax H3 r2v"):
-        _keyframe_request(
-            _keyframe_params("minimax-h3-fl2va-fp8_i2v", contextImages=[True], keyframes=keyframes)
-        )
+    for workflow, changes, pattern in (
+        ("i2v", {"referenceImage": None}, "i2v workflow requires at least one of referenceImage"),
+        ("flf2v", {"referenceImageEnd": None}, "flf2v workflow requires referenceImageEnd"),
+        ("i2v", {"contextImages": [True]}, "contextImages is supported only by MiniMax H3 r2v"),
+        ("ia2v", {"contextImages": [True]}, "contextImages is supported only by MiniMax H3 r2v"),
+        ("a2v", {"referenceAudio": None}, "a2v workflow requires referenceAudio"),
+        ("r2v", {"referenceImageEnd": True}, "referenceImageEnd"),
+    ):
+        with pytest.raises(ApiError, match=pattern):
+            _keyframe_request(_keyframe_params(ids[workflow], keyframes=keyframes, **changes))
 
 
-async def test_minimax_h3_keyframes_upload_to_context_slots_in_caller_order() -> None:
-    client = FakeClient(
-        [
-            {"data": {"uploadUrl": "https://upload.example/first"}},
-            {"data": {"uploadUrl": "https://upload.example/keyframe-1"}},
-            {"data": {"uploadUrl": "https://upload.example/keyframe-3"}},
-            {"data": {"uploadUrl": "https://upload.example/last"}},
-        ]
-    )
+async def _create_keyframe_project(
+    responses: list[str], **params: Any
+) -> tuple[FakeClient, dict[str, Any]]:
+    client = FakeClient([{"data": {"uploadUrl": f"https://upload.example/{n}"}} for n in responses])
     api = ProjectsApi(client)
     api.get_model_options = AsyncMock(return_value=model_options("video"))
+    await api.create(**params)
+    request_type, request = client.socket.sent[-1]
+    assert request_type == "jobRequest"
+    return client, request["keyFrames"][0]
 
+
+def _upload_types(client: FakeClient) -> list[str]:
+    return [call["params"]["type"] for call in client.rest.calls if call["method"] == "GET"]
+
+
+def _upload_bodies(client: FakeClient) -> list[bytes]:
+    return [call["data"] for call in client.rest.calls if call["method"] == "PUT"]
+
+
+async def test_minimax_h3_keyframes_upload_to_keyframe_slots_in_caller_order() -> None:
+    # i2v: a placeholder keyframe keeps its slot and flag but uploads nothing.
     # Python names normalize the nested frame_index to the wire's frameIndex.
-    await api.create(
+    client, keyframe = await _create_keyframe_project(
+        ["first", "keyframe-1", "keyframe-3"],
         type="video",
-        model_id="minimax-h3-fl2va-fp8_flf2v",
+        model_id="minimax-h3-fl2va-fp8_i2v",
         positive_prompt="One continuous shot through the record store.",
         number_of_media=1,
         duration=10,
@@ -2548,47 +2661,119 @@ async def test_minimax_h3_keyframes_upload_to_context_slots_in_caller_order() ->
         height=768,
         steps=20,
         reference_image=PNG + b"first",
-        reference_image_end=PNG + b"last",
         keyframes=[
             {"image": PNG + b"at-180", "frame_index": 180},
             {"image": True, "frame_index": 90},
             {"image": PNG + b"at-30", "frameIndex": 30},
         ],
     )
-
-    request_type, request = client.socket.sent[-1]
-    assert request_type == "jobRequest"
-    keyframe = request["keyFrames"][0]
-    assert keyframe["hasReferenceImage"] is True
-    assert keyframe["hasReferenceImageEnd"] is True
-    assert _context_image_flags(keyframe) == [
-        "hasContextImage1",
-        "hasContextImage2",
-        "hasContextImage3",
-    ]
+    assert _upload_types(client) == ["referenceImage", "keyframeImage1", "keyframeImage3"]
+    assert _upload_bodies(client) == [PNG + b"first", PNG + b"at-180", PNG + b"at-30"]
+    assert _flags(keyframe, "hasKeyframeImage") == _keyframe_image_flags(3)
+    assert _flags(keyframe, "hasContextImage") == []
     assert keyframe["keyframeFrameIndices"] == [180, 90, 30]
-    uploads = [call["params"]["type"] for call in client.rest.calls if call["method"] == "GET"]
-    assert uploads == ["referenceImage", "contextImage1", "contextImage3", "referenceImageEnd"]
-    bodies = [call["data"] for call in client.rest.calls if call["method"] == "PUT"]
-    assert bodies == [PNG + b"first", PNG + b"at-180", PNG + b"at-30", PNG + b"last"]
 
-    # A refused request uploads nothing and sends nothing.
-    refused_client = FakeClient()
-    refused = ProjectsApi(refused_client)
-    refused.get_model_options = AsyncMock(return_value=model_options("video"))
-    with pytest.raises(ApiError) as caught:
-        await refused.create(
-            type="video",
-            model_id="minimax-h3-fl2va-fp8_i2v",
-            positive_prompt="a kite",
-            number_of_media=1,
-            duration=10,
-            reference_image=PNG,
-            keyframes=[{"image": PNG, "frame_index": 243}],
-        )
-    assert str(caught.value) == _frame_index_error(0, 243, "243", duration="10")
-    assert refused_client.rest.calls == []
-    assert refused_client.socket.sent == []
+    # ia2v: the first frame and the driving audio upload as before.
+    client, keyframe = await _create_keyframe_project(
+        ["first", "keyframe-1", "keyframe-2", "song"],
+        type="video",
+        model_id="minimax-h3-fastvideo-int8_ia2v_turbo",
+        positive_prompt="The singer performs the uploaded song under warm stage light.",
+        number_of_media=1,
+        frames=243,
+        width=1344,
+        height=768,
+        steps=4,
+        reference_image=PNG + b"first",
+        reference_audio=MP3,
+        keyframes=[
+            {"image": PNG + b"at-72", "frame_index": 72},
+            {"image": PNG + b"at-168", "frame_index": 168},
+        ],
+    )
+    assert _upload_types(client) == [
+        "referenceImage",
+        "keyframeImage1",
+        "keyframeImage2",
+        "referenceAudio",
+    ]
+    assert _upload_bodies(client) == [PNG + b"first", PNG + b"at-72", PNG + b"at-168", MP3]
+    assert keyframe["hasReferenceImage"] is True
+    assert keyframe["hasReferenceAudio"] is True
+    assert _flags(keyframe, "hasKeyframeImage") == _keyframe_image_flags(2)
+    assert keyframe["keyframeFrameIndices"] == [72, 168]
+
+    # r2v: references in referenceImage + contextImage2..3, keyframes in
+    # keyframeImage1..2, in one request.
+    client, keyframe = await _create_keyframe_project(
+        ["reference-1", "reference-2", "reference-3", "keyframe-1", "keyframe-2"],
+        type="video",
+        model_id="minimax-h3-ref2va-fp8_r2v",
+        positive_prompt="<Subject 1> walks across the rooftop.",
+        number_of_media=1,
+        duration=10,
+        width=1344,
+        height=768,
+        steps=20,
+        reference_image=PNG + b"reference-1",
+        context_images=[PNG + b"reference-2", PNG + b"reference-3"],
+        keyframes=[
+            {"image": PNG + b"at-60", "frame_index": 60},
+            {"image": PNG + b"at-150", "frame_index": 150},
+        ],
+    )
+    assert _upload_types(client) == [
+        "referenceImage",
+        "contextImage2",
+        "contextImage3",
+        "keyframeImage1",
+        "keyframeImage2",
+    ]
+    assert _upload_bodies(client) == [
+        PNG + b"reference-1",
+        PNG + b"reference-2",
+        PNG + b"reference-3",
+        PNG + b"at-60",
+        PNG + b"at-150",
+    ]
+    assert keyframe["hasReferenceImage"] is True
+    assert _flags(keyframe, "hasContextImage") == ["hasContextImage2", "hasContextImage3"]
+    assert _flags(keyframe, "hasKeyframeImage") == _keyframe_image_flags(2)
+    assert keyframe["keyframeFrameIndices"] == [60, 150]
+
+
+async def test_minimax_h3_refused_keyframe_requests_upload_and_send_nothing() -> None:
+    for params, message in (
+        (
+            {
+                "model_id": "minimax-h3-fl2va-fp8_t2v",
+                "keyframes": [{"image": PNG, "frame_index": 60}],
+            },
+            _keyframes_wrong_model("minimax-h3-fl2va-fp8_t2v"),
+        ),
+        (
+            {
+                "model_id": "minimax-h3-fl2va-fp8_i2v",
+                "reference_image": PNG,
+                "keyframes": [{"image": PNG, "frame_index": 243}],
+            },
+            _frame_index_error(0, 243, "243", duration="10"),
+        ),
+    ):
+        client = FakeClient()
+        api = ProjectsApi(client)
+        api.get_model_options = AsyncMock(return_value=model_options("video"))
+        with pytest.raises(ApiError) as caught:
+            await api.create(
+                type="video",
+                positive_prompt="a kite",
+                number_of_media=1,
+                duration=10,
+                **params,
+            )
+        assert str(caught.value) == message
+        assert client.rest.calls == []
+        assert client.socket.sent == []
 
 
 @pytest.mark.parametrize("phase", ["options", "validation", "assets", "send", "cancel"])

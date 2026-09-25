@@ -725,11 +725,11 @@ def _video_context_slots(params: dict[str, Any]) -> list[tuple[int, Any]]:
 def _video_keyframe_slots(params: dict[str, Any]) -> list[tuple[int, Any, Any]]:
     """MiniMax H3 ``keyframes`` as ``(slot, image, frameIndex)``.
 
-    ``keyframes[i]`` travels in ``contextImage<i+1>``, in caller order and with no
-    offset: unlike r2v's ``contextImages``, keyframes never shift past
-    ``referenceImage``, because the i2v and flf2v workflows carry their first and
-    last frames as ``referenceImage`` / ``referenceImageEnd`` and reject
-    ``contextImages``. The worker pairs ``contextImage<i+1>`` with
+    ``keyframes[i]`` travels in its own ``keyframeImage<i+1>`` slot (1-8), in
+    caller order. The slots are separate from ``contextImage<n>``, so a Ref2VA
+    request carries its references (``referenceImage`` plus ``contextImages``,
+    see ``_video_context_slots``) and its keyframes together without renumbering
+    either. The worker pairs ``keyframeImage<i+1>`` with
     ``keyframeFrameIndices[i]``.
     """
 
@@ -772,7 +772,9 @@ def _describe_keyframe_value(value: Any) -> str:
 def _validate_video_keyframes(params: dict[str, Any]) -> None:
     """MiniMax H3 intermediate ``keyframes`` shape check.
 
-    Only the H3 i2v and flf2v ids accept keyframes, and an empty list means none.
+    Only the H3 i2v, flf2v, Sound to Video (ia2v, flfa2v, a2v) and Reference to
+    Video (r2v) ids accept keyframes (``is_minimax_h3_keyframe_model``), and an
+    empty list means none.
     Like the ``contextImages`` check, this runs before the external-API families
     return early, so no vendor model can carry keyframes past it. Frame indices
     are checked by ``_apply_h3_keyframes`` once the frame count is resolved.
@@ -783,8 +785,9 @@ def _validate_video_keyframes(params: dict[str, Any]) -> None:
         return
     if not is_minimax_h3_keyframe_model(params["modelId"]):
         raise _api_error(
-            "keyframes is supported only by the MiniMax H3 image-to-video and first/last-frame "
-            f"workflows (i2v and flf2v model ids); {params['modelId']} does not accept keyframes."
+            "keyframes is supported only by the MiniMax H3 image-to-video, first/last-frame, "
+            "Sound to Video and Reference to Video workflows (i2v, flf2v, ia2v, flfa2v, a2v "
+            f"and r2v model ids); {params['modelId']} does not accept keyframes."
         )
     if not isinstance(keyframes, list):
         raise _api_error("keyframes must be an array of { image, frameIndex } entries.")
@@ -798,13 +801,30 @@ def _validate_video_keyframes(params: dict[str, Any]) -> None:
             raise _api_error(f"keyframes[{index}].image is required.")
 
 
+def _keyframe_edge_hint(model_id: str, frames: int) -> str:
+    """What a keyframe error suggests when a caller aims at frame 0 or the last
+    frame. Only workflows with first/last-frame inputs can show those frames;
+    ia2v has a first frame only, and a2v and r2v have neither.
+    """
+
+    workflow = get_video_workflow_type(model_id)
+    if workflow in ("i2v", "flf2v", "flfa2v"):
+        return "use referenceImage and referenceImageEnd for the first and last frames"
+    if workflow == "ia2v":
+        return (
+            "use referenceImage for the first frame, and the last frame "
+            f"({frames - 1}) cannot be pinned"
+        )
+    return f"frames 0 and {frames - 1} cannot be pinned"
+
+
 def _apply_h3_keyframes(
     key_frame: dict[str, Any],
     params: dict[str, Any],
     frames_duration: float | None = None,
 ) -> None:
     """Check keyframe frame indices against the resolved frame count and write
-    ``hasContextImage<i+1>`` for every entry plus ``keyframeFrameIndices`` in the
+    ``hasKeyframeImage<i+1>`` for every entry plus ``keyframeFrameIndices`` in the
     same order. ``_validate_video_keyframes`` has already checked the model and
     the entries.
 
@@ -834,10 +854,10 @@ def _apply_h3_keyframes(
             or not isinstance(frame_index, int)
             or not 1 <= frame_index <= last_index
         ):
-            # Point at the anchors only when the caller aimed at the first or
-            # last frame. A bool is never 0 on the JavaScript side.
+            # Explain the edge frames only when the caller aimed at one of them.
+            # A bool is never 0 on the JavaScript side.
             anchor_hint = (
-                "; use referenceImage and referenceImageEnd for the first and last frames"
+                f"; {_keyframe_edge_hint(params['modelId'], frames)}"
                 if not isinstance(frame_index, bool) and frame_index in (0, frames - 1)
                 else ""
             )
@@ -851,7 +871,7 @@ def _apply_h3_keyframes(
             )
         used.add(frame_index)
     for slot, _image, _frame_index in slots:
-        key_frame[f"hasContextImage{slot}"] = True
+        key_frame[f"hasKeyframeImage{slot}"] = True
     key_frame["keyframeFrameIndices"] = [frame_index for _slot, _image, frame_index in slots]
 
 
@@ -3514,12 +3534,13 @@ class ProjectsApi(EventEmitter):
             for slot, value in _video_context_slots(data):
                 if value is not True:
                     await upload(project.id, f"contextImage{slot}", value, media=False)
-            # MiniMax H3 i2v/flf2v keyframes upload to contextImage1..N in caller
-            # order with no referenceImage offset; the request builder has already
-            # checked the model, the entries and the frame indices.
+            # MiniMax H3 keyframes upload to their own keyframeImage1..N slots in
+            # caller order, apart from the contextImage slots r2v references use;
+            # the request builder has already checked the model, the entries and
+            # the frame indices.
             for slot, image, _frame_index in _video_keyframe_slots(data):
                 if image is not True:
-                    await upload(project.id, f"contextImage{slot}", image, media=False)
+                    await upload(project.id, f"keyframeImage{slot}", image, media=False)
             if data.get("referenceImageEnd") and data["referenceImageEnd"] is not True:
                 content_type = await upload(
                     project.id, "referenceImageEnd", data["referenceImageEnd"], media=False
