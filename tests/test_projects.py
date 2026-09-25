@@ -1486,7 +1486,7 @@ async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases(
     parent = Project(
         {
             "type": "image",
-            "modelId": "flux1-schnell-fp8",
+            "modelId": "z_image_turbo_bf16",
             "positivePrompt": "original",
             "seed": 99,
             "stylePrompt": "original style",
@@ -1510,7 +1510,7 @@ async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases(
     enhanced = Project(
         {
             "type": "image",
-            "modelId": "flux1-schnell-fp8",
+            "modelId": "krea2_turbo_fp8_scaled",
             "positivePrompt": "enhanced",
             "numberOfMedia": 1,
         },
@@ -1528,19 +1528,25 @@ async def test_job_enhance_and_enhanced_image_surface_use_python_and_js_aliases(
     )
     enhanced._update({"status": "completed"})
     api.create = AsyncMock(return_value=enhanced)
+    api.get_size_presets = AsyncMock(return_value=[{"id": "square", "width": 1024, "height": 1024}])
 
     result = await source.enhance("light", positive_prompt="override")
 
     assert result == "https://cdn.example/enhanced.png"
     submitted = api.create.await_args.args[0]
-    assert submitted["modelId"] == "flux1-schnell-fp8"
+    # The parent's preset belongs to its own model; it is sent as a custom size.
+    assert api.get_size_presets.await_args.args == ("fast", "z_image_turbo_bf16")
+    assert submitted["modelId"] == "krea2_turbo_fp8_scaled"
+    assert submitted["modelId"] != "flux1-schnell-fp8"
+    assert submitted["steps"] == 8
     assert submitted["positivePrompt"] == "override"
     assert submitted["stylePrompt"] == "original style"
     assert submitted["tokenType"] == "sogni"
     assert submitted["seed"] == source_seed
     assert submitted["startingImage"] == b"result"
     assert submitted["startingImageStrength"] == pytest.approx(0.85)
-    assert submitted["sizePreset"] == "square"
+    assert submitted["sizePreset"] == "custom"
+    assert (submitted["width"], submitted["height"]) == (1024, 1024)
     assert source.image_url == source.imageUrl == "https://cdn.example/source.png"
     assert source.enhanced_image is not None
     assert source.enhancedImage is not None
@@ -1557,17 +1563,95 @@ async def test_estimate_enhancement_cost_delegates_to_image_estimator_defaults()
 
     assert await api.estimate_enhancement_cost("heavy", "sogni") is expected
     assert await api.estimateEnhancementCost("light") is expected
+    assert (
+        await api.estimate_enhancement_cost("medium", size={"width": 1152, "height": 896})
+        is expected
+    )
     assert api.estimate_cost.await_args_list[0].kwargs == {
         "network": "fast",
         "token_type": "sogni",
-        "model": "flux1-schnell-fp8",
+        "model": "krea2_turbo_fp8_scaled",
         "image_count": 1,
-        "step_count": 5,
+        "step_count": 8,
         "preview_count": 0,
         "cn_enabled": False,
-        "starting_image_strength": 0.49,
+        # Guide influence, as enhance() submits it: heavy denoise 0.49 keeps 0.51.
+        "starting_image_strength": pytest.approx(0.51),
     }
-    assert api.estimate_cost.await_args_list[1].kwargs["starting_image_strength"] == 0.15
+    assert api.estimate_cost.await_args_list[1].kwargs["starting_image_strength"] == pytest.approx(
+        0.85
+    )
+    sized = api.estimate_cost.await_args_list[2].kwargs
+    assert sized["starting_image_strength"] == pytest.approx(0.65)
+    assert (sized["width"], sized["height"]) == (1152, 896)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parent_size", "expected"),
+    [
+        ({"sizePreset": "custom", "width": 1152, "height": 896}, (1152, 896)),
+        ({"width": 832, "height": 1216}, (832, 1216)),
+        ({}, None),
+    ],
+)
+async def test_job_enhance_keeps_the_parent_canvas(parent_size, expected) -> None:
+    api = ProjectsApi(FakeClient())
+    parent = Project(
+        {"type": "image", "modelId": "z_image_turbo_bf16", "numberOfMedia": 1, **parent_size},
+        api,
+    )
+    source = parent._add_job(
+        {
+            "id": "source",
+            "projectId": parent.id,
+            "status": "completed",
+            "resultUrl": "https://cdn.example/source.png",
+        }
+    )
+    enhanced = Project({"type": "image", "modelId": "krea2_turbo_fp8_scaled"}, api)
+    enhanced._update({"status": "completed"})
+    api.create = AsyncMock(return_value=enhanced)
+    api.get_size_presets = AsyncMock(return_value=[])
+
+    await source.enhance("heavy")
+
+    submitted = api.create.await_args.args[0]
+    api.get_size_presets.assert_not_awaited()
+    assert submitted["startingImageStrength"] == pytest.approx(0.51)
+    if expected is None:
+        assert "sizePreset" not in submitted and "width" not in submitted
+    else:
+        assert submitted["sizePreset"] == "custom"
+        assert (submitted["width"], submitted["height"]) == expected
+
+
+@pytest.mark.asyncio
+async def test_job_enhance_refuses_an_unknown_parent_preset_before_paying() -> None:
+    api = ProjectsApi(FakeClient())
+    parent = Project(
+        {
+            "type": "image",
+            "modelId": "z_image_turbo_bf16",
+            "numberOfMedia": 1,
+            "sizePreset": "no_such_preset",
+        },
+        api,
+    )
+    source = parent._add_job(
+        {
+            "id": "source",
+            "projectId": parent.id,
+            "status": "completed",
+            "resultUrl": "https://cdn.example/source.png",
+        }
+    )
+    api.create = AsyncMock()
+    api.get_size_presets = AsyncMock(return_value=[{"id": "square", "width": 1024, "height": 1024}])
+
+    with pytest.raises(ValueError, match='Size preset "no_such_preset" is not available'):
+        await source.enhance("light")
+    api.create.assert_not_awaited()
 
 
 def test_minimax_h3_step_counts_are_fixed_per_acceleration_tier() -> None:
@@ -1963,7 +2047,11 @@ def test_minimax_h3_audio_guide_ids_take_exactly_their_uploads() -> None:
 
             with pytest.raises(ApiError, match=f"MiniMax H3 {workflow} output always carries"):
                 _h3_audio_request(model_id, uploads, generateAudio=False)
-            for loras in (["h3-realism-people"], ["personal-owned"], ["h3-realism-people", "personal-owned"]):
+            for loras in (
+                ["h3-realism-people"],
+                ["personal-owned"],
+                ["h3-realism-people", "personal-owned"],
+            ):
                 strengths = [0.8] * len(loras)
                 frame = _h3_audio_request(model_id, uploads, loras=loras, loraStrengths=strengths)
                 assert frame["loras"] == loras

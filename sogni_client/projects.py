@@ -295,14 +295,18 @@ _JOB_STATUS_MAP = {
     "jobCompleted": "completed",
     "jobError": "failed",
 }
+# Enhancement re-renders a finished image with Krea 2 Turbo image-to-image at
+# its tier's default 8 steps. FLUX.1 [schnell] was the enhancer until 2026-09:
+# its Comfy workflow had no image input, so every enhancement ignored the source
+# image, and the Supernet now refuses Schnell guide images.
 _ENHANCEMENT_DEFAULTS: dict[str, Any] = {
     "network": "fast",
-    "modelId": "flux1-schnell-fp8",
+    "modelId": "krea2_turbo_fp8_scaled",
     "positivePrompt": "",
     "negativePrompt": "",
     "stylePrompt": "",
     "startingImageStrength": 0.5,
-    "steps": 5,
+    "steps": 8,
     "guidance": 1,
     "numberOfMedia": 1,
     "numberOfPreviews": 0,
@@ -2225,17 +2229,41 @@ class Job(DataEntity):
 
     getResultData = get_result_data
 
+    async def _enhancement_size(self) -> tuple[int, int] | None:
+        """The parent render's canvas as explicit dimensions.
+
+        The enhancer is a different model from the parent, and models do not
+        share size-preset ids, so a preset is resolved against the parent's own
+        model. ``None`` when the parent used its model's default size.
+        """
+        params = self._project.params
+        preset = params.get("sizePreset")
+        if not preset or preset == "custom":
+            width, height = params.get("width"), params.get("height")
+            return (width, height) if width and height else None
+        network = params.get("network") or _ENHANCEMENT_DEFAULTS["network"]
+        presets = await self._api.get_size_presets(network, params.get("modelId", ""))
+        match = next((item for item in presets if item.get("id") == preset), None)
+        if match is None:
+            raise ValueError(f'Size preset "{preset}" is not available for {params.get("modelId")}')
+        return match["width"], match["height"]
+
     async def enhance(
         self,
         strength: str,
         overrides: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str | None:
+        """Enhance the image with Krea 2 Turbo at the same size.
+
+        ``light`` repaints the least of the image (denoise 0.15), ``heavy`` the
+        most (0.49).
+        """
         if self._project.params.get("type") != "image" or self.type != "image":
             raise RuntimeError("Enhancement is only available for images")
         # A segmentation result reports ``type == "image"`` and would otherwise
         # sail through the guard above, then be submitted as the starting image
-        # of a paid Flux render. A mask PNG (or its cut-out) has no
+        # of a paid enhancement render. A mask PNG (or its cut-out) has no
         # prompt-to-pixels relationship to enhance, so this spends real Spark on
         # a nonsense render.
         if is_segmentation_model(self._project.params.get("modelId", "")):
@@ -2253,6 +2281,7 @@ class Job(DataEntity):
         self._enhancement_project = None
         self._enhancement_listener = None
 
+        size = await self._enhancement_size()
         params = dict(_ENHANCEMENT_DEFAULTS)
         params.update(
             {
@@ -2265,9 +2294,10 @@ class Job(DataEntity):
                 "seed": self.seed if self.seed is not None else self._project.params.get("seed"),
                 "startingImage": await self.get_result_data(),
                 "startingImageStrength": 1 - _enhancement_strength(strength),
-                "sizePreset": self._project.params.get("sizePreset"),
             }
         )
+        if size is not None:
+            params.update({"sizePreset": "custom", "width": size[0], "height": size[1]})
         project = await self._api.create(params)
         self._enhancement_project = project
 
@@ -4315,8 +4345,12 @@ class ProjectsApi(EventEmitter):
     estimateCost = estimate_cost
 
     async def estimate_enhancement_cost(
-        self, strength: str, token_type: str = "spark"
+        self,
+        strength: str,
+        token_type: str = "spark",
+        size: dict[str, int] | None = None,
     ) -> dict[str, Any]:
+        """Estimate ``job.enhance(strength)``; ``size`` is the image's width and height."""
         return await self.estimate_cost(
             network=_ENHANCEMENT_DEFAULTS["network"],
             token_type=token_type,
@@ -4325,7 +4359,9 @@ class ProjectsApi(EventEmitter):
             step_count=_ENHANCEMENT_DEFAULTS["steps"],
             preview_count=0,
             cn_enabled=False,
-            starting_image_strength=_enhancement_strength(strength),
+            # Guide influence, exactly as enhance() submits it: light keeps the most.
+            starting_image_strength=1 - _enhancement_strength(strength),
+            **({"width": size["width"], "height": size["height"]} if size else {}),
         )
 
     estimateEnhancementCost = estimate_enhancement_cost
