@@ -3,8 +3,9 @@
 Images come from ``/v1/image/downloadUrl``; video, audio and 3D artifacts from
 ``/v1/media/downloadUrl``. The client used to read "no evidence" as "image": a
 result for a project it did not track and a model whose catalog entry had no
-media kind both went to the image endpoint, which cannot serve a video or audio
-result.
+media kind both went to the image endpoint, which answers a provable video or
+audio result with 404 "This result is media, not an image; request it from
+/v1/media/downloadUrl".
 """
 
 from __future__ import annotations
@@ -13,12 +14,24 @@ from typing import Any
 
 import pytest
 
+from sogni_client.errors import ApiError
 from sogni_client.events import EventEmitter
 from sogni_client.projects import Project, ProjectsApi
 from sogni_client.utils import result_media_evidence
 
 IMAGE_PATH = "/v1/image/downloadUrl"
 MEDIA_PATH = "/v1/media/downloadUrl"
+
+
+def media_refusal() -> ApiError:
+    return ApiError(
+        404,
+        {
+            "status": "error",
+            "errorCode": 122,
+            "message": "This result is media, not an image; request it from /v1/media/downloadUrl",
+        },
+    )
 
 
 class DownloadRest:
@@ -219,6 +232,55 @@ async def test_image_and_pixal3d_behaviour_is_unchanged() -> None:
         MEDIA_PATH,
         {"jobId": glb.id, "id": "IMG-3D", "type": "complete", "contentType": "model/gltf-binary"},
     )
+
+
+@pytest.mark.asyncio
+async def test_media_refusal_switches_to_the_media_endpoint_once() -> None:
+    state = {"media_fails": True}
+
+    def respond(path: str, params: dict[str, Any]) -> str:
+        if path == IMAGE_PATH:
+            raise media_refusal()
+        if state["media_fails"]:
+            raise ApiError(500, {"status": "error", "errorCode": 1, "message": "boom"})
+        return f"https://cdn.test{path}/{params['jobId']}/{params['id']}"
+
+    api, calls, completed = harness(
+        respond,
+        catalog=[
+            {"id": "flux1-schnell-fp8", "name": "Flux", "SID": 1, "tier": "t", "media": "image"}
+        ],
+    )
+    project = track(api, type="image", modelId="flux1-schnell-fp8")
+    await api._apply_job_result(result(project.id, "IMG-M"))
+    assert [path for path, _ in calls] == [IMAGE_PATH, MEDIA_PATH]
+    assert calls[1][1] == {"jobId": project.id, "id": "IMG-M", "type": "complete"}
+    assert completed[0]["resultUrl"] is None
+
+    state["media_fails"] = False
+    job = project.job("IMG-M")
+    assert job is not None
+    assert await job.get_result_url() == f"https://cdn.test{MEDIA_PATH}/{project.id}/IMG-M"
+    assert [path for path, _ in calls] == [IMAGE_PATH, MEDIA_PATH, MEDIA_PATH], (
+        "a later request goes straight to the media endpoint"
+    )
+
+
+@pytest.mark.asyncio
+async def test_other_image_failure_does_not_fall_back_to_media() -> None:
+    def respond(path: str, params: dict[str, Any]) -> str:
+        raise ApiError(404, {"status": "error", "errorCode": 122, "message": "Download not found"})
+
+    api, calls, completed = harness(
+        respond,
+        catalog=[
+            {"id": "flux1-schnell-fp8", "name": "Flux", "SID": 1, "tier": "t", "media": "image"}
+        ],
+    )
+    project = track(api, type="image", modelId="flux1-schnell-fp8")
+    await api._apply_job_result(result(project.id, "IMG-N"))
+    assert [path for path, _ in calls] == [IMAGE_PATH]
+    assert completed[0]["resultUrl"] is None
 
 
 def test_result_media_evidence() -> None:

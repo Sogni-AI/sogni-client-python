@@ -77,6 +77,27 @@ from .utils import (
 
 _LOGGER = logging.getLogger("sogni_client")
 
+# How many results the image endpoint reported as media are remembered, so a
+# later URL request for one goes straight to the media endpoint. Bounded so a
+# long-lived client cannot grow it without limit.
+_MEDIA_RESULT_MEMORY = 1000
+
+
+def _is_media_result_refusal(error: BaseException) -> bool:
+    """The image endpoint's answer for a result that is provably video or audio.
+
+    404 "This result is media, not an image; request it from
+    /v1/media/downloadUrl". Any other image failure is not this and must not be
+    retried on the media endpoint.
+    """
+
+    if not isinstance(error, ApiError) or error.status != 404:
+        return False
+    message = error.payload.get("message") if isinstance(error.payload, dict) else None
+    if not isinstance(message, str):
+        message = str(error)
+    return "/v1/media/downloadUrl" in message
+
 
 def _audio_content_type_for(params: dict[str, Any]) -> str:
     return {"flac": "audio/flac", "wav": "audio/wav"}.get(params.get("outputFormat"), "audio/mpeg")
@@ -2968,6 +2989,10 @@ class ProjectsApi(EventEmitter):
         # frame arrives with no `jobIndex` to match on; see
         # `_find_reassigned_job`.
         self._awaiting_reassignment: weakref.WeakSet[Job] = weakref.WeakSet()
+        # Results (`<projectId>/<jobId>`) the image endpoint reported as media.
+        # Their URLs come from the media endpoint only; the image endpoint is not
+        # asked for them again. A dict keeps insertion order for eviction.
+        self._media_result_ids: dict[str, None] = {}
         # Recovery timings. Overridable so regression tests can run the flow in
         # fractions of a second instead of seconds.
         self._recovery_tuning = {
@@ -3157,20 +3182,40 @@ class ProjectsApi(EventEmitter):
         """Mint a signed download URL for a finished job's result.
 
         Images come from ``/v1/image/downloadUrl``; video, audio and 3D artifacts
-        from ``/v1/media/downloadUrl``.
+        from ``/v1/media/downloadUrl``. When the image endpoint answers that the
+        result is media, this asks the media endpoint once and remembers the
+        result, so the image endpoint is never asked for it again. Any other
+        failure is raised unchanged.
         """
 
-        if kind == "image":
+        key = f"{project_id}/{job_id}"
+        if kind == "image" and key not in self._media_result_ids:
             params: dict[str, Any] = {"jobId": project_id, "imageId": job_id, "type": "complete"}
             if image_content_type:
                 params["contentType"] = image_content_type
-            return await self.download_url(params)
+            try:
+                return await self.download_url(params)
+            except ApiError as error:
+                if not _is_media_result_refusal(error):
+                    raise
+                self._remember_media_result(key)
+                _LOGGER.debug(
+                    "Image endpoint reported result %s as media; requesting it from the "
+                    "media endpoint",
+                    key,
+                )
         download: dict[str, Any] = {"jobId": project_id, "id": job_id, "type": "complete"}
         if kind == "audio" and audio_content_type:
             download["contentType"] = audio_content_type
         if kind == "model":
             download["contentType"] = "model/gltf-binary"
         return await self.media_download_url(download)
+
+    def _remember_media_result(self, key: str) -> None:
+        self._media_result_ids.pop(key, None)
+        self._media_result_ids[key] = None
+        while len(self._media_result_ids) > _MEDIA_RESULT_MEMORY:
+            del self._media_result_ids[next(iter(self._media_result_ids))]
 
     def _set_available_models(self, models: list[dict[str, Any]]) -> None:
         self._available_models = models
