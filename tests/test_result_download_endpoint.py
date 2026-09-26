@@ -294,3 +294,21 @@ def test_result_media_evidence() -> None:
     assert result_media_evidence(
         {"artifacts": [{"contentType": "text/plain"}], "outputFormat": "MOV"}
     ) == {"kind": "video"}
+
+
+def test_model_id_fallback_knows_live_media_ids() -> None:
+    """Ids the fallback guess used to misread as images when the catalog is not loaded
+    (checked against socket.sogni.ai/api/v1/models/list on 2026-09-25)."""
+    from sogni_client.utils import is_audio_model, is_video_model
+
+    assert is_video_model("wan_v2.2-14b-fp8_s2v")
+    assert is_video_model("wan_v2.2-14b-fp8_s2v_lightx2v")
+    for model_id in (
+        "qwen3_tts_1.7b_custom_voice_bf16",
+        "qwen3_tts_1.7b_voice_clone_bf16",
+        "qwen3_tts_1.7b_voice_design_bf16",
+    ):
+        assert is_audio_model(model_id), model_id
+        assert not is_video_model(model_id), model_id
+    assert not is_audio_model("flux1-schnell-fp8")
+    assert not is_video_model("flux1-schnell-fp8")

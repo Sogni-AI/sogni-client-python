@@ -32,6 +32,7 @@ _WAN_VIDEO_MODEL_IDS = {
     "wan_v2.2-14b-fp8_i2v",
     "wan_v2.2-14b-fp8_t2v_lightx2v",
     "wan_v2.2-14b-fp8_i2v_lightx2v",
+    "wan_v2.2-14b-fp8_s2v",
     "wan_v2.2-14b-fp8_s2v_lightx2v",
     "wan_v2.2-14b-fp8_animate-move_lightx2v",
     "wan_v2.2-14b-fp8_animate-replace_lightx2v",
