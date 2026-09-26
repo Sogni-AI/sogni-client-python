@@ -310,6 +310,11 @@ which keep their slots) and its keyframes together. If no worker serving the
 model can pin keyframes yet, the job is refused with error code `4100`. The
 validation errors match the JavaScript SDK's word for word.
 
+Pricing: the first two keyframes are included; each extra keyframe adds output
+time at the job's per-second rate, 0.75 s on FastH3 and 0.3 s on every other
+tier (an 8 s FastH3 clip with 8 keyframes: 32 + 18 = 50 Spark). Pass
+`keyframe_count` (or the job's `keyframes`) to `estimate_video_cost` to quote it.
+
 Writing the prompt for keyframes:
 
 - H3 never sees the keyframe images as references, so the prompt must describe

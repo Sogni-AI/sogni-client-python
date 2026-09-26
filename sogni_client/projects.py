@@ -4684,6 +4684,12 @@ class ProjectsApi(EventEmitter):
             if data.get("sourceWidth") is not None and data.get("sourceHeight") is not None
             else (None, None)
         )
+        # MiniMax H3 keyframes: the first two are included, each extra one adds output
+        # time at the job's rate (0.75 s FastH3, 0.3 s other tiers). A keyframes list is
+        # priced by its length; none sends no parameter.
+        keyframe_count = data.get("keyframeCount")
+        if keyframe_count is None and isinstance(data.get("keyframes"), (list, tuple)):
+            keyframe_count = len(data["keyframes"])
         response = await self.client.socket.get(
             "/api/v1/job-video/estimate/" + "/".join(quote(str(item)) for item in path),
             {
@@ -4712,6 +4718,14 @@ class ProjectsApi(EventEmitter):
                     and not isinstance(data.get("referenceVideoDurationSeconds"), bool)
                     and math.isfinite(data["referenceVideoDurationSeconds"])
                     and data["referenceVideoDurationSeconds"] >= 0
+                    else None
+                ),
+                "keyframeCount": (
+                    math.floor(keyframe_count)
+                    if isinstance(keyframe_count, (int, float))
+                    and not isinstance(keyframe_count, bool)
+                    and math.isfinite(keyframe_count)
+                    and keyframe_count > 0
                     else None
                 ),
                 # Unpinned, the job renders on the connection's network, so

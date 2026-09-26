@@ -2891,6 +2891,35 @@ async def test_minimax_h3_two_stage_estimates_use_the_model_id_and_refuse_output
     assert len(client.socket.get_calls) == 3
 
 
+async def test_video_estimate_sends_the_minimax_h3_keyframe_count() -> None:
+    quote = {"quote": {"project": {"costInToken": "1", "costInUSD": "2", "costInSpark": "3", "costInSogni": "4"}}}
+
+    class QuoteSocket(FakeSocket):
+        async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+            self.get_calls.append((path, params))
+            return quote
+
+    client = FakeClient()
+    client.socket = QuoteSocket()
+    api = ProjectsApi(client)
+    base = {
+        "tokenType": "spark",
+        "model": "minimax-h3-fastvideo-int8_ia2v_turbo",
+        "width": 1344,
+        "height": 768,
+        "frames": 192,
+        "fps": 24,
+        "steps": 4,
+        "numberOfMedia": 1,
+    }
+    await api.estimate_video_cost({**base, "keyframe_count": 8})
+    await api.estimate_video_cost({**base, "keyframes": [{}, {}, {}]})
+    await api.estimate_video_cost({**base, "keyframeCount": 0})
+    await api.estimate_video_cost({**base, "keyframeCount": True})
+    sent = [(query or {}).get("keyframeCount") for _path, query in client.socket.get_calls]
+    assert sent == [8, 3, None, None]
+
+
 def test_cost_estimates_carry_live_benchmark_seconds_only_when_the_server_has_samples() -> None:
     quote = {
         "quote": {
