@@ -45,6 +45,7 @@ from .utils import (
     PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID,
     PIXAL3D_ORBIT_VIEW_SLOTS,
     SAM3_IMAGE_SEGMENT_MODEL_ID,
+    as_result_media_kind,
     calculate_video_frames,
     detect_content_type,
     get_pixal3d_orbit_view_slots,
@@ -71,9 +72,24 @@ from .utils import (
     new_id,
     normalize_params,
     read_media,
+    result_media_evidence,
 )
 
 _LOGGER = logging.getLogger("sogni_client")
+
+
+def _audio_content_type_for(params: dict[str, Any]) -> str:
+    return {"flac": "audio/flac", "wav": "audio/wav"}.get(params.get("outputFormat"), "audio/mpeg")
+
+
+def _image_content_type_for(params: dict[str, Any]) -> str | None:
+    return {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "png": "image/png",
+    }.get(params.get("outputFormat"))
+
 
 VIDEO_WORKFLOW_ASSETS: dict[str, dict[str, str]] = {
     "upscale": {
@@ -2104,16 +2120,19 @@ class Job(DataEntity):
 
     @property
     def type(self) -> str:
-        """Media type produced by this job's model: image, video, audio, or model."""
+        """Media type produced by this job's model: image, video, audio, or model.
 
-        model_id = self._project.params.get("modelId", "")
-        if self._api.is_video_model_id(model_id):
-            return "video"
-        if self._api.is_audio_model_id(model_id):
-            return "audio"
-        if self._api.is_model_artifact_model_id(model_id):
-            return "model"
-        return "image"
+        When neither the model catalog nor the SDK knows the model, this is the
+        type the project was created with.
+        """
+
+        params = self._project.params
+        return (
+            self._api._result_media_kind(
+                model_id=params.get("modelId"), project_type=params.get("type")
+            )
+            or self._project.type
+        )
 
     @property
     def worker_name(self) -> str | None:
@@ -2179,18 +2198,11 @@ class Job(DataEntity):
 
     @property
     def _audio_content_type(self) -> str:
-        return {"flac": "audio/flac", "wav": "audio/wav"}.get(
-            self._project.params.get("outputFormat"), "audio/mpeg"
-        )
+        return _audio_content_type_for(self._project.params)
 
     @property
     def _image_content_type(self) -> str | None:
-        return {
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-            "webp": "image/webp",
-            "png": "image/png",
-        }.get(self._project.params.get("outputFormat"))
+        return _image_content_type_for(self._project.params)
 
     async def _mint_result_url(self) -> str:
         """Ask the server for a download URL without recording it on the job.
@@ -2199,17 +2211,13 @@ class Job(DataEntity):
         a delta can put the URL in the *same* update as the status change.
         """
 
-        if self.type in {"video", "audio", "model"}:
-            params: dict[str, Any] = {"jobId": self.project_id, "id": self.id, "type": "complete"}
-            if self.type == "audio":
-                params["contentType"] = self._audio_content_type
-            if self.type == "model":
-                params["contentType"] = "model/gltf-binary"
-            return await self._api.media_download_url(params)
-        params = {"jobId": self.project_id, "imageId": self.id, "type": "complete"}
-        if self._image_content_type:
-            params["contentType"] = self._image_content_type
-        return await self._api.download_url(params)
+        return await self._api._mint_job_result_url(
+            project_id=self.project_id,
+            job_id=self.id,
+            kind=self.type,
+            audio_content_type=self._audio_content_type,
+            image_content_type=self._image_content_type,
+        )
 
     async def get_result_url(self) -> str:
         if self.result_url:
@@ -3060,18 +3068,15 @@ class ProjectsApi(EventEmitter):
         return self._current_network_type
 
     def is_video_model_id(self, model_id: str) -> bool:
-        model = next(
-            (item for item in self._supported_models or [] if item.get("id") == model_id), None
-        )
-        return model.get("media") == "video" if model else is_video_model(model_id)
+        media = self._catalog_media_kind(model_id)
+        # The catalog is not loaded, does not list the model, or gives it no kind.
+        return media == "video" if media else is_video_model(model_id)
 
     isVideoModelId = is_video_model_id
 
     def is_audio_model_id(self, model_id: str) -> bool:
-        model = next(
-            (item for item in self._supported_models or [] if item.get("id") == model_id), None
-        )
-        return model.get("media") == "audio" if model else is_audio_model(model_id)
+        media = self._catalog_media_kind(model_id)
+        return media == "audio" if media else is_audio_model(model_id)
 
     isAudioModelId = is_audio_model_id
 
@@ -3093,12 +3098,79 @@ class ProjectsApi(EventEmitter):
 
         if is_model_artifact_model(model_id):
             return True
+        return self._catalog_media_kind(model_id) == "model"
+
+    isModelArtifactModelId = is_model_artifact_model_id
+
+    def _catalog_media_kind(self, model_id: str) -> str | None:
+        """The media kind the loaded catalog declares for a model, or ``None``.
+
+        ``None`` when the catalog is not loaded, does not list the model, or
+        lists it with no kind this SDK knows. A missing kind is no evidence; it
+        never reads as ``image``.
+        """
+
         model = next(
             (item for item in self._supported_models or [] if item.get("id") == model_id), None
         )
-        return model.get("media") == "model" if model else False
+        return as_result_media_kind(model.get("media")) if model else None
 
-    isModelArtifactModelId = is_model_artifact_model_id
+    def _result_media_kind(
+        self,
+        *,
+        model_id: str | None = None,
+        project_type: str | None = None,
+        result: dict[str, str] | None = None,
+    ) -> str | None:
+        """What a finished job's result is, from the evidence this client holds.
+
+        Strongest first: the Pixal3D artifact rule, the catalog's media kind, the
+        SDK's own model-id knowledge, what the result frame says it uploaded, and
+        finally the type the project was created with. ``None`` when none of these
+        says anything, which is the case for a result that arrives for a project
+        this client does not track and whose frame names no kind.
+        """
+
+        if model_id:
+            if is_model_artifact_model(model_id):
+                return "model"
+            catalog = self._catalog_media_kind(model_id)
+            if catalog:
+                return catalog
+            if is_video_model(model_id):
+                return "video"
+            if is_audio_model(model_id):
+                return "audio"
+        if result:
+            return result["kind"]
+        return as_result_media_kind(project_type)
+
+    async def _mint_job_result_url(
+        self,
+        *,
+        project_id: str,
+        job_id: str,
+        kind: str,
+        audio_content_type: str | None = None,
+        image_content_type: str | None = None,
+    ) -> str:
+        """Mint a signed download URL for a finished job's result.
+
+        Images come from ``/v1/image/downloadUrl``; video, audio and 3D artifacts
+        from ``/v1/media/downloadUrl``.
+        """
+
+        if kind == "image":
+            params: dict[str, Any] = {"jobId": project_id, "imageId": job_id, "type": "complete"}
+            if image_content_type:
+                params["contentType"] = image_content_type
+            return await self.download_url(params)
+        download: dict[str, Any] = {"jobId": project_id, "id": job_id, "type": "complete"}
+        if kind == "audio" and audio_content_type:
+            download["contentType"] = audio_content_type
+        if kind == "model":
+            download["contentType"] = "model/gltf-binary"
+        return await self.media_download_url(download)
 
     def _set_available_models(self, models: list[dict[str, Any]]) -> None:
         self._available_models = models
@@ -4906,35 +4978,39 @@ class ProjectsApi(EventEmitter):
         canceled = bool(data.get("userCanceled"))
         # Withheld media has nothing to mint. Labelled-but-delivered media does.
         withheld = nsfw and not detected
-        is_model_artifact = project is not None and self.is_model_artifact_model_id(
-            project.params.get("modelId", "")
-        )
         if not url and not withheld and not canceled:
-            with contextlib.suppress(Exception):
-                if project is not None and (
-                    project.type in {"video", "audio"} or is_model_artifact
-                ):
-                    download: dict[str, Any] = {
-                        "jobId": project.id,
-                        "id": data.get("imgID"),
-                        "type": "complete",
-                    }
-                    if project.type == "audio":
-                        download["contentType"] = (
-                            job._audio_content_type if job is not None else "audio/mpeg"
-                        )
-                    if is_model_artifact:
-                        download["contentType"] = "model/gltf-binary"
-                    url = await self.media_download_url(download)
-                else:
-                    download = {
-                        "jobId": data.get("jobID"),
-                        "imageId": data.get("imgID"),
-                        "type": "complete",
-                    }
-                    if job is not None and job._image_content_type:
-                        download["contentType"] = job._image_content_type
-                    url = await self.download_url(download)
+            evidence = result_media_evidence(data)
+            kind = self._result_media_kind(
+                model_id=project.params.get("modelId") if project is not None else None,
+                project_type=project.type if project is not None else None,
+                result=evidence,
+            )
+            if kind is None:
+                # A result for a project this client does not track (another
+                # client's, or one recovery has not rebuilt yet) whose frame names
+                # no kind. Reading it as an image sent every such video and audio
+                # result to the image endpoint; the client that tracks the
+                # project mints its own URL.
+                _LOGGER.debug(
+                    "No media kind for result %s/%s; not requesting a download URL",
+                    data.get("jobID"),
+                    data.get("imgID"),
+                )
+            else:
+                with contextlib.suppress(Exception):
+                    url = await self._mint_job_result_url(
+                        project_id=data.get("jobID", ""),
+                        job_id=data.get("imgID", ""),
+                        kind=kind,
+                        audio_content_type=(
+                            _audio_content_type_for(project.params)
+                            if project is not None
+                            else (evidence or {}).get("contentType")
+                        ),
+                        image_content_type=(
+                            _image_content_type_for(project.params) if project is not None else None
+                        ),
+                    )
         if session_version != self._session_version:
             return
         steps = data.get("performedStepCount")

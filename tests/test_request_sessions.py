@@ -289,7 +289,15 @@ async def test_delayed_result_url_cannot_complete_in_a_new_account(
         return "https://example.test/old-result.png"
 
     monkeypatch.setattr(client.projects, "download_url", download)
-    client.api_client.socket.emit("jobResult", {"jobID": "old-project", "imgID": "old-job"})
+    # The project is untracked, so only the frame's own artifact says it is an image.
+    client.api_client.socket.emit(
+        "jobResult",
+        {
+            "jobID": "old-project",
+            "imgID": "old-job",
+            "artifacts": [{"contentType": "image/png", "success": True}],
+        },
+    )
     await entered.wait()
     await client.api_client.auth.authenticate("account-b")
     release.set()

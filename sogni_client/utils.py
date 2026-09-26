@@ -302,6 +302,78 @@ def is_model_artifact_model(model_id: str) -> bool:
     return model_id.startswith("pixal3d_")
 
 
+#: What a finished job's result is, which decides the download endpoint: an
+#: ``image`` comes from ``/v1/image/downloadUrl``, everything else from
+#: ``/v1/media/downloadUrl``.
+RESULT_MEDIA_KINDS = frozenset({"image", "video", "audio", "model"})
+
+
+def as_result_media_kind(value: Any) -> str | None:
+    """Narrow a declared kind (a catalog ``media`` value, a project ``type``).
+
+    Anything else, including a missing value, is no evidence and returns
+    ``None``; it never reads as ``image``.
+    """
+
+    return value if isinstance(value, str) and value in RESULT_MEDIA_KINDS else None
+
+
+def _result_media_kind_from_content_type(content_type: str) -> str | None:
+    top, slash, _ = content_type.split(";")[0].strip().lower().partition("/")
+    return top if slash and top in RESULT_MEDIA_KINDS else None
+
+
+_OUTPUT_FORMAT_EVIDENCE: dict[str, dict[str, str]] = {
+    "mp4": {"kind": "video"},
+    "mov": {"kind": "video"},
+    "mp3": {"kind": "audio", "contentType": "audio/mpeg"},
+    "wav": {"kind": "audio", "contentType": "audio/wav"},
+    "flac": {"kind": "audio", "contentType": "audio/flac"},
+    "glb": {"kind": "model", "contentType": "model/gltf-binary"},
+    "png": {"kind": "image"},
+    "jpg": {"kind": "image"},
+    "jpeg": {"kind": "image"},
+    "webp": {"kind": "image"},
+}
+
+# A media artifact beside a still is the result; the still is incidental.
+_ARTIFACT_KIND_PRECEDENCE = ("model", "video", "audio", "image")
+
+
+def result_media_evidence(data: Any) -> dict[str, str] | None:
+    """What a ``jobResult`` frame says the job produced, or ``None`` when it says nothing.
+
+    ComfyUI workers list each uploaded artifact with its content type, and
+    partner-model results name an output format. A frame with neither (a Mac
+    worker's result, for one) is no evidence, and must not be read as an image.
+    Returns ``{"kind": ..., "contentType": ...}``; ``contentType`` only when known.
+    """
+
+    if not isinstance(data, dict):
+        return None
+    by_kind: dict[str, str] = {}
+    artifacts = data.get("artifacts")
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            content_type = artifact.get("contentType")
+            if artifact.get("success") is False or not isinstance(content_type, str):
+                continue
+            kind = _result_media_kind_from_content_type(content_type)
+            if kind and kind not in by_kind:
+                by_kind[kind] = content_type.strip()
+    for kind in _ARTIFACT_KIND_PRECEDENCE:
+        if kind in by_kind:
+            return {"kind": kind, "contentType": by_kind[kind]}
+    output_format = data.get("outputFormat")
+    if isinstance(output_format, str):
+        evidence = _OUTPUT_FORMAT_EVIDENCE.get(output_format.strip().lower())
+        if evidence:
+            return dict(evidence)
+    return None
+
+
 def is_segmentation_model(model_id: str) -> bool:
     """Check if a model performs image segmentation rather than generation.
 
