@@ -12,7 +12,7 @@ import math
 import re
 import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
@@ -3107,6 +3107,37 @@ class Project(DataEntity):
 
 _IN_FLIGHT_LOOKUP_STATUSES = frozenset({"pending", "queued", "processing"})
 
+_RECENT_PROJECTS_DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000
+# The history API refuses a media-only lookup reaching back more than 7 days;
+# stay a minute inside it so a slow clock cannot turn a 7-day request into a 400.
+_RECENT_PROJECTS_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000 - 60 * 1000
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _epoch_milliseconds(value: datetime) -> int:
+    """Milliseconds since the epoch, as JavaScript's ``Date.getTime()`` counts them.
+
+    A naive datetime is local time, as :meth:`datetime.timestamp` reads it.
+    """
+
+    aware = value if value.tzinfo is not None else value.astimezone()
+    return (aware - _EPOCH) // timedelta(milliseconds=1)
+
+
+def _is_real_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _result_job_status(job: dict[str, Any]) -> Any:
+    """A worker job's status in the names :meth:`ProjectsApi.get_result` uses."""
+
+    status = job.get("status")
+    if status == "jobCompleted":
+        return "completed"
+    if status == "jobError":
+        return "canceled" if job.get("reason") == "artistCanceled" else "failed"
+    return status if _js_truthy(status) else "unknown"
+
 
 class ProjectsApi(EventEmitter):
     def __init__(self, client: ApiClient) -> None:
@@ -3155,6 +3186,9 @@ class ProjectsApi(EventEmitter):
         # Their URLs come from the media endpoint only; the image endpoint is not
         # asked for them again. A dict keeps insertion order for eviction.
         self._media_result_ids: dict[str, None] = {}
+        # How `list_recent` learns the signed-in account's address; set by
+        # `SogniClient`, which owns the account.
+        self._account_address: Callable[[], Awaitable[str | None]] | None = None
         # Recovery timings. Overridable so regression tests can run the flow in
         # fractions of a second instead of seconds.
         self._recovery_tuning = {
@@ -3650,6 +3684,264 @@ class ProjectsApi(EventEmitter):
         return response["data"]["project"]
 
     getStatus = get_status
+
+    async def get_result(self, project_id: str, *, kind: str | None = None) -> dict[str, Any]:
+        """State and results of one of this account's projects by id, whenever it
+        is asked: while it is queued or rendering, and after it finished, including
+        one that finished while this client was offline, or after it stopped
+        waiting, or long after the socket stopped holding it for a reconnect.
+
+        Completed renders come back with signed download URLs, minted the same way
+        a live result's are. A queued project carries the server's
+        ``waitingReason``, which says whether it is held by the account's own plan
+        concurrency or is waiting for a worker. Needs an authenticated client;
+        another account's or an unknown project raises a 404 ``ApiError``.
+
+        Returns ``{"id", "status", "finished", "modelId"?, "waitingReason"?,
+        "jobs"}``. ``status`` is one of the :meth:`get_status` names and
+        ``finished`` is true for ``completed``, ``failed`` and ``canceled``. Each
+        entry of ``jobs`` is one render:
+
+        - ``id``: the render's result id (the ``imgID`` of its events).
+        - ``status``: ``completed``, ``failed`` or ``canceled`` once it has
+          finished; otherwise the worker job's in-flight status (``queued``,
+          ``assigned``, ``jobStarted``, ...).
+        - ``reason``: why a failed or cancelled render ended, e.g. ``genfailure``
+          or ``artistCanceled``.
+        - ``kind``: what the result is, when it is known.
+        - ``url``: signed download URL for a completed render's media. It
+          expires; ask again for a new one when it does.
+        - ``urlUnavailable``: why a completed render has no ``url``:
+          ``sensitiveContent`` when the Sensitive Content Filter withheld it,
+          ``unknownMediaKind`` when neither the model nor the result says what
+          media it is, ``downloadUrlFailed`` when the API refused or failed to
+          sign one (retry later).
+        - ``seed``: the seed the render used, when recorded.
+
+        ``kind`` (``image``, ``video``, ``audio`` or ``model``) is what the project
+        produces, when the caller knows it. It is used only when neither the model
+        catalog nor the stored result says, so a URL is never minted from the
+        wrong endpoint.
+
+        .. code-block:: python
+
+            result = await sogni.projects.get_result(project_id)
+            if result["finished"]:
+                for job in result["jobs"]:
+                    if job.get("url"):
+                        print(job["url"])
+            else:
+                print(result["status"], (result.get("waitingReason") or {}).get("message"))
+        """
+
+        if kind is not None and as_result_media_kind(kind) is None:
+            raise ValueError(
+                f'Invalid kind {kind}. Must be one of "image", "video", "audio", "model".'
+            )
+        assert_session = self._capture_session()
+        snapshot = await self.get_status(project_id)
+        assert_session()
+        model = snapshot.get("model") if isinstance(snapshot.get("model"), dict) else {}
+        model_id = model.get("id") if isinstance(model.get("id"), str) else None
+        # The stored record's model carries its media type.
+        project_type = model.get("type") if isinstance(model.get("type"), str) else None
+        records = [
+            *(snapshot.get("completedWorkerJobs") or []),
+            *(snapshot.get("workerJobs") or []),
+        ]
+        jobs: list[dict[str, Any]] = []
+        seen: set[Any] = set()
+        for job in records:
+            if not isinstance(job, dict):
+                continue
+            job_id = job.get("imgID") if _js_truthy(job.get("imgID")) else job.get("id")
+            if not _js_truthy(job_id) or job_id in seen:
+                continue
+            seen.add(job_id)
+            status = _result_job_status(job)
+            entry: dict[str, Any] = {"id": job_id, "status": status}
+            if status != "completed" and _js_truthy(job.get("reason")):
+                entry["reason"] = job["reason"]
+            seed = job.get("seedUsed")
+            if isinstance(seed, (int, float)) and not isinstance(seed, bool) and seed >= 0:
+                entry["seed"] = seed
+            if status == "completed":
+                result_url = job.get("resultUrl")
+                # Same rule as a live result: withheld only when the filter fired
+                # and no advisory label says the media was delivered anyway.
+                if job.get("triggeredNSFWFilter") is True and job.get("nsfwDetected") is not True:
+                    entry["urlUnavailable"] = "sensitiveContent"
+                elif isinstance(result_url, str) and result_url:
+                    entry["url"] = result_url
+                else:
+                    stored = job.get("result") if isinstance(job.get("result"), dict) else {}
+                    output_format = job.get("outputFormat")
+                    if output_format is None:
+                        output_format = stored.get("outputFormat")
+                    evidence = result_media_evidence({**stored, "outputFormat": output_format})
+                    media_kind = (
+                        self._result_media_kind(
+                            model_id=model_id, project_type=project_type, result=evidence
+                        )
+                        or kind
+                    )
+                    if media_kind is None:
+                        entry["urlUnavailable"] = "unknownMediaKind"
+                    else:
+                        entry["kind"] = media_kind
+                        try:
+                            entry["url"] = await self._mint_job_result_url(
+                                project_id=snapshot.get("id"),
+                                job_id=job_id,
+                                kind=media_kind,
+                                audio_content_type=(evidence or {}).get("contentType"),
+                            )
+                        except Exception as error:
+                            _LOGGER.error(
+                                "Failed to sign a download URL for %s/%s",
+                                snapshot.get("id"),
+                                job_id,
+                                exc_info=error,
+                            )
+                            entry["urlUnavailable"] = "downloadUrlFailed"
+                        assert_session()
+            jobs.append(entry)
+        result: dict[str, Any] = {
+            "id": snapshot.get("id"),
+            "status": snapshot.get("status"),
+            "finished": snapshot.get("finished"),
+        }
+        if model_id:
+            result["modelId"] = model_id
+        if "waitingReason" in snapshot:
+            result["waitingReason"] = snapshot["waitingReason"]
+        result["jobs"] = jobs
+        return result
+
+    getResult = get_result
+
+    async def list_recent(
+        self,
+        *,
+        since: datetime | int | float | None = None,
+        limit: int | float | None = None,
+        app_source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """This account's recently completed projects that produced media, newest
+        first, read from the durable history (``GET /v1/jobs/list``) rather than
+        the socket. It includes projects that finished while no client was
+        connected, and ones the socket has stopped holding for a reconnect (it
+        keeps a finished project for one hour). Pass a project's id to
+        :meth:`get_result` for its download URLs.
+
+        ``since`` is the oldest finish time to include, as a ``datetime`` or
+        milliseconds since the epoch (``time.time() * 1000``). It defaults to 24
+        hours ago. The history keeps 7 days, so anything older is read as 7 days
+        ago. ``limit`` is how many renders to read, 1-100 (default 50); projects
+        are grouped from these. ``app_source`` keeps only projects submitted by
+        that app source. Needs a signed-in account.
+
+        Each project is ``{"id", "modelId"?, "modelName"?, "appSource"?,
+        "finishedAt"?, "jobs"}``, where ``finishedAt`` is when its latest render
+        finished, in milliseconds since the epoch. Each render is ``{"id",
+        "status", "sensitiveContentWithheld", "finishedAt"?}``;
+        ``sensitiveContentWithheld`` is true when the Sensitive Content Filter
+        withheld its media.
+
+        .. code-block:: python
+
+            since = datetime.now(timezone.utc) - timedelta(hours=6)
+            for project in await sogni.projects.list_recent(since=since):
+                result = await sogni.projects.get_result(project["id"])
+        """
+
+        if since is not None and not isinstance(since, datetime) and not _is_real_number(since):
+            raise TypeError(
+                f"since must be a datetime or milliseconds since the epoch, got {since!r}"
+            )
+        if limit is not None and not _is_real_number(limit):
+            raise TypeError(f"limit must be a number, got {limit!r}")
+        assert_session = self._capture_session()
+        address = await self._resolve_account_address()
+        assert_session()
+        if not address:
+            raise RuntimeError("list_recent needs a signed-in account")
+        now = int(time.time() * 1000)
+        if isinstance(since, datetime):
+            requested_since: int | float = _epoch_milliseconds(since)
+        elif since is not None:
+            requested_since = since
+        else:
+            requested_since = now - _RECENT_PROJECTS_DEFAULT_WINDOW_MS
+        oldest = max(requested_since, now - _RECENT_PROJECTS_MAX_WINDOW_MS)
+        count = min(100, max(1, math.floor(50 if limit is None else limit)))
+        query: dict[str, Any] = {
+            "role": "artist",
+            "address": address,
+            "state": "completed",
+            "mediaOnly": True,
+            "since": _query_number(oldest),
+            "limit": count,
+        }
+        if app_source:
+            query["appSource"] = app_source
+        response = await self.client.rest.get("/v1/jobs/list", query)
+        assert_session()
+        data = response.get("data") if isinstance(response, dict) else None
+        records = data.get("jobs") if isinstance(data, dict) else None
+        projects: dict[Any, dict[str, Any]] = {}
+        for job in records or []:
+            if not isinstance(job, dict):
+                continue
+            parent = job.get("parentRequest") if isinstance(job.get("parentRequest"), dict) else {}
+            project_id = parent.get("id")
+            if not _js_truthy(project_id):
+                continue
+            project = projects.get(project_id)
+            if project is None:
+                model = parent.get("model") if isinstance(parent.get("model"), dict) else {}
+                project = {"id": project_id}
+                if _js_truthy(model.get("id")):
+                    project["modelId"] = model["id"]
+                if _js_truthy(model.get("name")):
+                    project["modelName"] = model["name"]
+                if _js_truthy(parent.get("appSource")):
+                    project["appSource"] = parent["appSource"]
+                project["jobs"] = []
+                projects[project_id] = project
+            end_time = job.get("endTime")
+            finished_at = (
+                end_time
+                if isinstance(end_time, (int, float))
+                and not isinstance(end_time, bool)
+                and end_time > 0
+                else None
+            )
+            render: dict[str, Any] = {
+                "id": job.get("imgID") if _js_truthy(job.get("imgID")) else job.get("id"),
+                "status": _result_job_status(job),
+                "sensitiveContentWithheld": job.get("triggeredNSFWFilter") is True
+                and job.get("nsfwDetected") is not True,
+            }
+            if finished_at:
+                render["finishedAt"] = finished_at
+            project["jobs"].append(render)
+            if finished_at and (
+                not project.get("finishedAt") or finished_at > project["finishedAt"]
+            ):
+                project["finishedAt"] = finished_at
+        return sorted(projects.values(), key=lambda item: item.get("finishedAt") or 0, reverse=True)
+
+    listRecent = list_recent
+
+    def _set_account_address_resolver(self, resolve: Callable[[], Awaitable[str | None]]) -> None:
+        """How :meth:`list_recent` learns the signed-in account's address. Set by
+        :class:`SogniClient`, which owns the account."""
+
+        self._account_address = resolve
+
+    async def _resolve_account_address(self) -> str | None:
+        return await self._account_address() if self._account_address is not None else None
 
     async def _list_active_project_ids(self) -> list[str] | None:
         try:

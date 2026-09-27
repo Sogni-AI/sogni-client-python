@@ -631,6 +631,45 @@ seconds.
 Recovery is per app instance: the server hands projects back to the `appId` that
 created them, so persist your `appId` and reuse it across restarts.
 
+### Results after you stopped waiting
+
+The socket holds a project that finished while its client was disconnected for
+one hour. A client that restarts, or a script or agent that exits before its
+projects finish, can still collect them:
+
+- `sogni.projects.get_result(project_id)` returns a project's state and its
+  renders at any time: while it is queued (with the server's `waitingReason`,
+  which says whether the account's own plan concurrency is holding it or it is
+  waiting for a worker) and after it finished, with signed download URLs for the
+  completed renders. Pass `kind="video"` (or `"image"`, `"audio"`, `"model"`)
+  when you know what it produces and the model is not in this client's catalog.
+- `sogni.projects.list_recent(since=...)` lists this account's recently completed
+  media projects, newest first, from the durable history (up to 7 days back, 24
+  hours by default), including ones that finished while no client was
+  connected. `since` is a `datetime` or milliseconds since the epoch; `limit`
+  (1-100, default 50) and `app_source` narrow it.
+
+```python
+from datetime import datetime, timedelta, timezone
+
+since = datetime.now(timezone.utc) - timedelta(hours=6)
+for project in await sogni.projects.list_recent(since=since):
+    result = await sogni.projects.get_result(project["id"])
+    for job in result["jobs"]:
+        if job.get("url"):
+            print(project.get("modelName"), job["url"])
+
+pending = await sogni.projects.get_result(project_id)
+if not pending["finished"]:
+    print(pending["status"], (pending.get("waitingReason") or {}).get("message"))
+```
+
+A completed render without a `url` says why in `urlUnavailable`:
+`sensitiveContent` (the Sensitive Content Filter withheld it), `unknownMediaKind`
+(neither the model nor the result says what media it is; pass `kind`), or
+`downloadUrlFailed` (the API could not sign one; ask again later). Failed and
+cancelled renders keep their `reason`.
+
 ## Queue explanations
 
 Available in version 5.55.0 and later.

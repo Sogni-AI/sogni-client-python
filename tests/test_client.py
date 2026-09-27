@@ -267,6 +267,41 @@ async def test_check_auth_rejects_non_cookie_authentication() -> None:
 
 
 @pytest.mark.asyncio
+async def test_projects_learn_the_account_address_from_me_before_the_socket_says() -> None:
+    # An API-key session learns its address from the socket's authenticated
+    # frame; before that arrives, `me()` answers it for `list_recent`.
+    sdk = await SogniClient.create(app_id="key-app", api_key="secret", disable_socket=True)
+    await asyncio.sleep(0)  # the sign-in's own account refresh
+    sdk.current_account._update({"wallet_address": None})
+    rest = sdk.api_client.rest
+    rest.gets.clear()
+
+    assert await sdk.projects._resolve_account_address() == "0xabc"
+    assert rest.gets == [("/v1/account/me", None)]
+    assert sdk.current_account.wallet_address == "0xabc"
+
+    # Once the account knows its address, nothing else is asked.
+    assert await sdk.projects._resolve_account_address() == "0xabc"
+    assert rest.gets == [("/v1/account/me", None)]
+
+    await sdk.aclose()
+
+
+@pytest.mark.asyncio
+async def test_projects_use_the_address_the_socket_already_gave() -> None:
+    sdk = await SogniClient.create(app_id="key-app", api_key="secret", disable_socket=True)
+    await asyncio.sleep(0)  # the sign-in's own account refresh
+    rest = sdk.api_client.rest
+    rest.gets.clear()
+    sdk.api_client.socket.emit("authenticated", {"address": "0xdef", "username": "grace"})
+
+    assert await sdk.projects._resolve_account_address() == "0xdef"
+    assert rest.gets == []
+
+    await sdk.aclose()
+
+
+@pytest.mark.asyncio
 async def test_socket_subscription_alias_and_close_are_forwarded_once() -> None:
     sdk = await SogniClient.create(app_id="app", disable_socket=True)
     update = {"subscriptions": {"modelAvailability": False}}

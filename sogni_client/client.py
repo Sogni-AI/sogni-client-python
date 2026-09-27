@@ -33,6 +33,7 @@ class SogniClient:
         self.apiClient = api_client
         self.account = AccountApi(api_client, testnet=testnet)
         self.projects = ProjectsApi(api_client)
+        self.projects._set_account_address_resolver(self._account_address)
         self.stats = StatsApi(api_client)
         self.chat = ChatApi(api_client, self.projects)
         self.workflows = CreativeWorkflowsApi(api_client)
@@ -136,6 +137,19 @@ class SogniClient:
 
     create_instance = create
     createInstance = create
+
+    async def _account_address(self) -> str | None:
+        """The signed-in account's wallet address, for ``projects.list_recent``.
+
+        An API-key session learns its address from the socket's authenticated
+        frame; before that arrives, ``me()`` answers it.
+        """
+
+        address = self.account.current_account.wallet_address
+        if address:
+            return address
+        await self.account.me()
+        return self.account.current_account.wallet_address
 
     @property
     def current_account(self):
