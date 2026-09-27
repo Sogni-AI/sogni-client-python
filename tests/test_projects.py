@@ -2892,7 +2892,16 @@ async def test_minimax_h3_two_stage_estimates_use_the_model_id_and_refuse_output
 
 
 async def test_video_estimate_sends_the_minimax_h3_keyframe_count() -> None:
-    quote = {"quote": {"project": {"costInToken": "1", "costInUSD": "2", "costInSpark": "3", "costInSogni": "4"}}}
+    quote = {
+        "quote": {
+            "project": {
+                "costInToken": "1",
+                "costInUSD": "2",
+                "costInSpark": "3",
+                "costInSogni": "4",
+            }
+        }
+    }
 
     class QuoteSocket(FakeSocket):
         async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
