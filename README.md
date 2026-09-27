@@ -319,24 +319,47 @@ tier (an 8 s FastH3 clip with 8 keyframes: 32 + 18 = 50 Spark). Pass
 
 Writing the prompt for keyframes:
 
-- H3 never sees the keyframe images as references, so the prompt must describe
-  what each keyframe shows at its time. Keyframes are never labelled: the
-  i2v/flf2v alignment line still names only the first and last frame, and on r2v
-  `<Picture N>` and `<Subject N>` refer to the references only.
+- Name each keyframe `<Picture N>` (MiniMax's keyframe format), numbered in time
+  order after the workflow's own pictures: after the first frame `<Picture 1>` on
+  i2v and ia2v (after the last frame `<Picture 1>` on a last-frame-only i2v job),
+  after `<Picture 1>` (first) and `<Picture 2>` (last) on flf2v and flfa2v, from
+  `<Picture 1>` on a2v, and after the last reference image `<Picture N>` on r2v.
+  Keyframes are still not references and never count toward the reference
+  limits.
+- i2v, flf2v and Sound to Video prompts open with one alignment line listing
+  every picture at its mark (`frame_index / 24` seconds, two decimals; a last
+  frame at the clip's end), in time order, each credited to the shot on screen
+  there: `How the reference pictures align with the target video — Picture 1
+  (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2
+  (from Shot 2) aligns with the 2.88-second mark of the target video.` The shot
+  where a keyframe lands says "the shot's keyframe corresponds to
+  `<Picture N>`".
+- r2v adds `<Picture N> is the keyframe of [Shot M], showing ...` to
+  `subject_definitions`, `keyframe completion` to the summary tasks (as in
+  `[reference generation + keyframe completion]`), and
+  `<Picture N> ([Shot M] keyframe): fully_preserved - ...` to
+  `retention_analysis`.
+- H3's text encoder never sees the keyframe images (they only pin frames), so
+  the prompt must still describe what each keyframe shows at its time: shot
+  size, camera angle, where each subject stands, pose, setting and light.
 - On Sound to Video the uploaded audio drives the performance; keyframes pin how
   it looks at their times, so describe the look at each keyframe's time and let
   the audio carry timing and delivery.
 - When a keyframe changes the framing, camera angle, location or light, start a
-  new shot (a hard cut) at its time: `[Shot N] At MM:SS.mmm, ...`, where the time
-  is `frame_index / 24` seconds (frame 144 is `00:06.000`). Two differently
+  new shot (a hard cut) at its time: `[Shot N] At MM:SS.mmm, the camera cuts to
+  ..., whose keyframe corresponds to <Picture N>.`, where the time is
+  `frame_index / 24` seconds (frame 144 is `00:06.000`). Two differently
   framed or lit stills inside one continuous shot cross-fade into each other, and
   a shot described differently from its still can flash the still for a single
   frame.
 
 ```python
 # 192 frames (8 s): frame 0 is reference_image, frame 191 is reference_image_end.
-# flf2v_prompt describes keyframe 1 inside [Shot 1] at 00:02.500 and starts
-# [Shot 2] At 00:06.000 with the new camera angle keyframe 2 shows.
+# The keyframes are <Picture 3> and <Picture 4>, after the first and last
+# frames. flf2v_prompt opens with the alignment line (Picture 1 at 0.00, Picture
+# 3 at 2.50, Picture 4 at 6.00, Picture 2 at 8.00), says "the shot's keyframe
+# corresponds to <Picture 3>" inside [Shot 1], and starts [Shot 2] At
+# 00:06.000 with the new camera angle <Picture 4> shows.
 project = await sogni.projects.create(
     type="video",
     network="fast",
