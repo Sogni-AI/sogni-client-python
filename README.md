@@ -282,6 +282,8 @@ project = await sogni.projects.create(
 
 ## MiniMax H3 intermediate keyframes
 
+Available in version 5.58.0 and later.
+
 Every H3 workflow except text-to-video accepts `keyframes`, 21 ids in all
 (`is_minimax_h3_keyframe_model()`): image-to-video and first/last-frame on every
 tier (Standard, Balanced, LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage), the
@@ -633,6 +635,8 @@ created them, so persist your `appId` and reuse it across restarts.
 
 ### Results after you stopped waiting
 
+Available in version 5.58.0 and later.
+
 The socket holds a project that finished while its client was disconnected for
 one hour. A client that restarts, or a script or agent that exits before its
 projects finish, can still collect them:
@@ -818,7 +822,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the TypeScript SDK at `5.51.0`. The
+This release tracks the TypeScript SDK at `5.58.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 27 hosted-tool
@@ -833,7 +837,8 @@ RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
 segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,
 live-benchmarked render/total time on cost quotes, in-flight project recovery
-across reconnects, confirmed cancellation, connection/workload attribution, and
+across reconnects, results by project id and recently completed projects from
+the durable history, confirmed cancellation, connection/workload attribution, and
 admin announcements (`appAlert` plus the announcements read/dismiss pair).
 
 The Python API is async-first; `AsyncSogniClient` is an alias of
