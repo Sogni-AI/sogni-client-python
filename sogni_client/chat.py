@@ -422,6 +422,19 @@ class ChatToolsApi:
         "generate_music",
     }
 
+    # Music models in preference order for a model-less generate_music call,
+    # mirroring sogni-client's MUSIC_MODEL_IDS: MiniMax Music 3 is the default,
+    # ACE-Step the explicit draft or legacy choice. Speech models never qualify.
+    MUSIC_MODEL_IDS = (
+        "minimax_music3",
+        "ace_step_1.5_xl_turbo",
+        "ace_step_1.5_xl_sft",
+        "ace_step_1.5_turbo",
+        "ace_step_1.5_sft",
+    )
+    # MiniMax Music 3 reads tempo and key from its prompt and has no such controls.
+    _ACE_ONLY_MUSIC_ARGS = frozenset({"bpm", "keyscale"})
+
     _IMAGE_SELECTORS = {
         "chatgpt": "gpt-image-2",
         "chatgpt-image": "gpt-image-2",
@@ -609,11 +622,21 @@ class ChatToolsApi:
             )
             requested = self._resolve_model(name, args)
             candidates = [model for model in models if model.get("media", "image") == media]
-            model_id = (
-                requested
-                if requested and any(model.get("id") == requested for model in candidates)
-                else max(candidates, key=lambda model: model.get("workerCount", 0))["id"]
-            )
+            if name == "generate_music":
+                candidates = [
+                    model for model in candidates if model.get("id") in self.MUSIC_MODEL_IDS
+                ]
+                if not candidates:
+                    raise RuntimeError(
+                        "No compatible audio models currently available on the network"
+                    )
+            available = {model.get("id") for model in candidates}
+            if requested and requested in available:
+                model_id = requested
+            elif name == "generate_music":
+                model_id = next(m for m in self.MUSIC_MODEL_IDS if m in available)
+            else:
+                model_id = max(candidates, key=lambda model: model.get("workerCount", 0))["id"]
             project_params: dict[str, Any] = {
                 "type": media,
                 "modelId": model_id,
@@ -645,6 +668,8 @@ class ChatToolsApi:
                 ("outputFormat", "outputFormat"),
                 ("output_format", "outputFormat"),
             ):
+                if model_id == "minimax_music3" and source in self._ACE_ONLY_MUSIC_ARGS:
+                    continue
                 if args.get(source) is not None:
                     project_params[target] = args[source]
             if media == "image":

@@ -1079,6 +1079,55 @@ async def test_chat_tools_forward_seedance_export_options_and_report_last_frames
 
 
 @pytest.mark.asyncio
+async def test_chat_tools_generate_music_defaults_to_minimax_music3() -> None:
+    class MusicProjects(FakeProjects):
+        def __init__(self, models: list[dict[str, Any]]) -> None:
+            super().__init__()
+            self.models = models
+
+        async def wait_for_models(self, _timeout: float) -> list[dict[str, Any]]:
+            return self.models
+
+    pool = [
+        {"id": "ace_step_1.5_xl_turbo", "media": "audio", "workerCount": 30},
+        {"id": "minimax_music3", "media": "audio", "workerCount": 1},
+        {"id": "qwen3_tts_1.7b_custom_voice_bf16", "media": "audio", "workerCount": 50},
+    ]
+    projects = MusicProjects(pool)
+    api = ChatToolsApi(projects)  # type: ignore[arg-type]
+    arguments = '{"prompt":"Warm lo-fi hip hop at 84 BPM in A minor","bpm":84,"keyscale":"A minor"}'
+
+    # No model named: MiniMax Music 3, whatever the worker counts, without
+    # the ACE-Step-only tempo and key controls.
+    result = await api.execute(tool_call("generate_music", arguments))
+    assert result["success"] is True
+    assert projects.created[0]["modelId"] == "minimax_music3"
+    assert "bpm" not in projects.created[0]
+    assert "keyscale" not in projects.created[0]
+
+    # ACE-Step named explicitly stays available, with its controls.
+    named = json.loads(arguments) | {"model": "ace_step_1.5_xl_turbo"}
+    await api.execute(tool_call("generate_music", json.dumps(named)))
+    assert projects.created[1]["modelId"] == "ace_step_1.5_xl_turbo"
+    assert projects.created[1]["bpm"] == 84
+    assert projects.created[1]["keyscale"] == "A minor"
+
+    # Without Music 3 online the next music model is ACE-Step XL Turbo, never speech.
+    no_music3 = MusicProjects([model for model in pool if model["id"] != "minimax_music3"])
+    await ChatToolsApi(no_music3).execute(tool_call("generate_music", arguments))  # type: ignore[arg-type]
+    assert no_music3.created[0]["modelId"] == "ace_step_1.5_xl_turbo"
+
+    # Only a speech model online: a song request fails instead of being read aloud.
+    speech_only = MusicProjects([pool[2]])
+    refused = await ChatToolsApi(speech_only).execute(  # type: ignore[arg-type]
+        tool_call("generate_music", arguments)
+    )
+    assert refused["success"] is False
+    assert "No compatible audio models" in refused["content"]
+    assert speech_only.created == []
+
+
+@pytest.mark.asyncio
 async def test_chat_tools_reject_non_sogni_calls_or_route_custom_handler() -> None:
     api = ChatToolsApi(FakeProjects())  # type: ignore[arg-type]
     custom = tool_call("lookup_weather", '{"city":"Paris"}')

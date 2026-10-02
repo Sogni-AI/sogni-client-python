@@ -357,13 +357,13 @@
             "model": {
               "type": "string",
               "enum": [
+                "minimax_music3",
                 "ace_step_1.5_xl_turbo",
                 "ace_step_1.5_xl_sft",
                 "ace_step_1.5_turbo",
-                "ace_step_1.5_sft",
-                "minimax_music3"
+                "ace_step_1.5_sft"
               ],
-              "description": "Canonical music model ID. Default: ace_step_1.5_xl_turbo. Use minimax_music3 (MiniMax Music 3, premium autoregressive composer, ~20x cost, duration is a ceiling) when the user asks for the best quality, realistic vocals, or full songs. Use ace_step_1.5_xl_sft only when the user explicitly requests XL SFT. Use legacy ace_step_1.5_turbo or ace_step_1.5_sft only when the user explicitly requests a legacy model."
+              "description": "Canonical music model ID. Default: minimax_music3 (MiniMax Music 3, premium autoregressive composer with the best vocals, lyric adherence and song structure; 10-300 s, and duration is a ceiling, so the song may end earlier at a musical resolution). Music 3 takes tempo and key in the prompt text; bpm, keyscale and timesig apply to ACE-Step only. Use ace_step_1.5_xl_turbo only when the user asks for a quick, cheap or draft track, or names ACE-Step. Use ace_step_1.5_xl_sft only when the user explicitly requests XL SFT. Use legacy ace_step_1.5_turbo or ace_step_1.5_sft only when the user explicitly requests a legacy model."
             },
             "timesig": {
               "type": "number",
