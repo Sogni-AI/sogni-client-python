@@ -220,6 +220,31 @@ def test_direct_video_to_video_does_not_route_wan3_as_an_edit_model() -> None:
     )
 
 
+def test_seedance25_uncensored_selector_keeps_its_own_model_id() -> None:
+    for tool_name, args in (
+        ("generate_video", {}),
+        ("generate_video", {"referenceImageIndices": [-1]}),
+        ("video_to_video", {}),
+        ("sound_to_video", {}),
+    ):
+        for selector in ("seedance2-5-spicy", "seedance-2-5-spicy"):
+            resolved = ChatToolsApi._resolve_model(tool_name, {**args, "videoModel": selector})
+            assert resolved == "seedance-2-5-spicy", (tool_name, selector)
+
+    definitions = {item["function"]["name"]: item for item in SogniTools.all}
+    for tool_name in (
+        "generate_video",
+        "sound_to_video",
+        "video_to_video",
+        "extend_video",
+        "replace_video_segment",
+    ):
+        enum = definitions[tool_name]["function"]["parameters"]["properties"]["videoModel"]["enum"]
+        assert enum[enum.index("seedance2-5") + 1] == "seedance2-5-spicy", tool_name
+    animate_photo = definitions["animate_photo"]["function"]["parameters"]["properties"]
+    assert "seedance2-5-spicy" not in animate_photo["videoModel"]["enum"]
+
+
 def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -> None:
     def t2v(selector: str) -> str | None:
         return ChatToolsApi._resolve_model("generate_video", {"videoModel": selector})

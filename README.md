@@ -407,6 +407,26 @@ for an output format other than `mp4`/`mov`, or for a non-boolean
 `return_last_frame`. Chat tool results list `lastFrameUrls` when a frame was
 exported.
 
+## Seedance 2.5 Uncensored
+
+`seedance-2-5-spicy` (hosted tool selector `seedance2-5-spicy`) is Seedance 2.5
+Uncensored: the same model with every Seedance 2.5 limit and option above, under
+its own model id. Each account must accept its one-time likeness and consent
+agreement in a Sogni app first; until then its jobs fail with
+`MODEL_CONSENT_REQUIRED_ERROR_CODE` (4103). The client never accepts the
+agreement, and retrying fails the same way until it is accepted.
+
+```python
+from sogni_client import ProjectError, is_model_consent_required_error
+
+try:
+    await project.wait_for_completion()
+except ProjectError as error:
+    if is_model_consent_required_error(error):
+        # error.consent_required == {"key": "seedance-2-5-spicy", "version": 1, ...}
+        print(error)  # tells the user to accept the agreement in the Sogni app
+```
+
 ## Reusable subscriber uploads
 
 On servers that support saved uploads, eligible subscribers reuse the same image,
@@ -874,7 +894,7 @@ Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
 Two-Stage 720p/1080p/2K ids, plus intermediate keyframes on every mode but t2v),
-Seedance 2.5, Wan 3 and Wan 3.0 Enhanced,
+Seedance 2.5 and Seedance 2.5 Uncensored, Wan 3 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
 segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,

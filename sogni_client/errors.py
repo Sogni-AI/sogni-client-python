@@ -15,6 +15,15 @@ SUBSCRIPTION_ERROR_CODES = {
     "SUBSCRIPTION_FEATURE_REQUIRES_UPGRADE": 4081,
 }
 
+# Socket error code for a job refused because its model requires a one-time
+# likeness and consent agreement the account has not accepted. Seedance 2.5
+# Uncensored (``seedance-2-5-spicy``) is the model that requires one. The error
+# carries ``consentRequired`` (``{"key", "version", "modelId"}``) so apps can open
+# the agreement. It is accepted in a Sogni app; the SDK never accepts it and
+# API-key sessions cannot. Until it is accepted every job for the model fails the
+# same way, so do not retry. Price estimates are not gated.
+MODEL_CONSENT_REQUIRED_ERROR_CODE = 4103
+
 # Error types for an LLM request that did not complete because the connection to
 # Sogni was interrupted, not because of the request itself:
 #
@@ -145,11 +154,20 @@ class ApiError(SogniError):
 
 
 class ProjectError(SogniError):
-    """A generation project failed after it was accepted."""
+    """A generation project failed after it was accepted.
+
+    ``consent_required`` names the agreement on a model consent refusal
+    (:data:`MODEL_CONSENT_REQUIRED_ERROR_CODE`) and is ``None`` otherwise.
+    """
 
     def __init__(self, error: dict[str, Any]) -> None:
         self.error = error
         self.code = error.get("code")
+        consent = error.get("consentRequired")
+        self.consent_required: dict[str, Any] | None = (
+            consent if isinstance(consent, dict) else None
+        )
+        self.consentRequired = self.consent_required
         super().__init__(str(error.get("message") or "Project failed"))
 
 
@@ -300,3 +318,43 @@ def is_subscription_limit_error(error: Any) -> bool:
 
 
 isSubscriptionLimitError = is_subscription_limit_error
+
+
+def is_model_consent_required_error(error: Any) -> bool:
+    """Whether ``error`` is a model consent refusal (:data:`MODEL_CONSENT_REQUIRED_ERROR_CODE`).
+
+    Accepts the numeric or string code, an error dict, a :class:`ProjectError`, or
+    any error carrying a ``consentRequired`` agreement or a ``code`` /
+    ``errorCode`` of 4103. The refusal is not retryable: ask the user to accept
+    the agreement in a Sogni app, then submit again.
+    """
+
+    def matches(code: Any) -> bool:
+        if isinstance(code, bool):
+            return False
+        if isinstance(code, (int, float, str)):
+            try:
+                return float(code) == MODEL_CONSENT_REQUIRED_ERROR_CODE
+            except ValueError:
+                return False
+        return False
+
+    def names_agreement(consent: Any) -> bool:
+        return isinstance(consent, dict) and isinstance(consent.get("key"), str)
+
+    if matches(error):
+        return True
+    if isinstance(error, dict):
+        return (
+            names_agreement(error.get("consentRequired"))
+            or matches(error.get("code"))
+            or matches(error.get("errorCode"))
+        )
+    return (
+        names_agreement(getattr(error, "consentRequired", None))
+        or matches(getattr(error, "code", None))
+        or matches(getattr(error, "errorCode", None))
+    )
+
+
+isModelConsentRequiredError = is_model_consent_required_error

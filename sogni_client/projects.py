@@ -239,6 +239,8 @@ _SEEDANCE_REFERENCE_LIMITS = {
     "seedance-2-0-mini": (9, 3, 3, 12),
     "seedance-2-0-fast": (9, 3, 3, 12),
     "seedance-2-5": (30, 10, 10, 50),
+    # Seedance 2.5 Uncensored: the same model and limits as Seedance 2.5.
+    "seedance-2-5-spicy": (30, 10, 10, 50),
 }
 
 _SAMPLER_ALIASES = {
@@ -5668,6 +5670,10 @@ class ProjectsApi(EventEmitter):
         for key in ("subscriptionLimit", "requiredPlans", "feature", "limitation"):
             if data.get(key) is not None:
                 error[key] = data[key]
+        # A model consent refusal (4103) names the agreement so apps can open it.
+        consent = data.get("consentRequired")
+        if isinstance(consent, dict) and isinstance(consent.get("key"), str):
+            error["consentRequired"] = dict(consent)
         if not data.get("imgID"):
             self.emit(
                 "project",

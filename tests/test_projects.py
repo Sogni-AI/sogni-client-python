@@ -672,6 +672,101 @@ def test_seedance25_export_options_reach_the_wire_and_are_validated() -> None:
     assert _seedance_request(modelId="seedance-2-0", outputFormat="mp4")["outputFormat"] == "mp4"
 
 
+def test_seedance25_uncensored_keeps_its_id_and_every_seedance25_limit() -> None:
+    def spicy(**overrides: Any) -> dict[str, Any]:
+        return _seedance_request(modelId="seedance-2-5-spicy", **overrides)
+
+    def urls(kind: str, count: int, extension: str) -> list[str]:
+        return [f"https://cdn.example/{kind}-{index}.{extension}" for index in range(count)]
+
+    for task in ("edit", "extend"):
+        frame = spicy(referenceVideoUrls=["https://cdn.example/source.mp4"], seedanceTaskType=task)[
+            "keyFrames"
+        ][0]
+        assert frame["modelID"] == "seedance-2-5-spicy"
+        assert frame["seedanceTaskType"] == task
+    audio_only = spicy(
+        referenceAudioUrls=["https://cdn.example/voice.mp3"], seedanceTaskType="reference"
+    )
+    assert audio_only["keyFrames"][0]["seedanceTaskType"] == "reference"
+    with pytest.raises(ApiError, match="require seedanceTaskType"):
+        spicy(referenceVideoUrls=["https://cdn.example/source.mp4"])
+
+    maximum = spicy(
+        referenceImageUrls=urls("image", 30, "jpg"),
+        referenceVideoUrls=urls("video", 10, "mp4"),
+        referenceAudioUrls=urls("audio", 10, "mp3"),
+        seedanceTaskType="reference",
+    )["keyFrames"][0]
+    assert len(maximum["referenceImageURLs"]) == 30
+    assert len(maximum["referenceVideoURLs"]) == 10
+    assert len(maximum["referenceAudioURLs"]) == 10
+    for field, kind, count, extension in (
+        ("referenceImageUrls", "image", 31, "jpg"),
+        ("referenceVideoUrls", "video", 11, "mp4"),
+        ("referenceAudioUrls", "audio", 11, "mp3"),
+    ):
+        with pytest.raises(ApiError, match=f"seedance-2-5-spicy supports at most {count - 1}"):
+            spicy(**{field: urls(kind, count, extension)}, seedanceTaskType="reference")
+
+    assert spicy(duration=30)["keyFrames"][0]["frames"] == 30 * 24 + 1
+    assert spicy(duration=4)["keyFrames"][0]["frames"] == 4 * 24 + 1
+    for duration in (31, 3):
+        with pytest.raises(ValueError, match="between 4 and 30"):
+            spicy(duration=duration)
+
+    exported = spicy(outputFormat="mov", returnLastFrame=True)
+    assert exported["outputFormat"] == "mov"
+    assert exported["keyFrames"][0]["returnLastFrame"] is True
+
+
+@pytest.mark.asyncio
+async def test_model_consent_refusal_keeps_the_agreement_on_the_project_error() -> None:
+    consent = {"key": "seedance-2-5-spicy", "version": 1, "modelId": "seedance-2-5-spicy"}
+    message = (
+        "Seedance 2.5 Uncensored requires a one-time likeness and consent agreement. "
+        "Review and accept it in the Sogni app, then try again."
+    )
+    api = ProjectsApi(FakeClient())
+    project = Project(
+        {
+            "type": "video",
+            "modelId": "seedance-2-5-spicy",
+            "positivePrompt": "Harbor at dusk",
+            "numberOfMedia": 1,
+        },
+        api,
+    )
+    api._projects.append(project)
+    events: list[dict[str, Any]] = []
+    api.on("project", events.append)
+    waiting = asyncio.create_task(project.wait_for_completion())
+
+    api._handle_job_error(
+        {
+            "jobID": project.id,
+            "isFromWorker": False,
+            "error": "4103",
+            "error_message": message,
+            "consentRequired": consent,
+        }
+    )
+
+    with pytest.raises(ProjectError, match="one-time likeness and consent agreement") as raised:
+        await waiting
+    assert raised.value.code == sogni_client.MODEL_CONSENT_REQUIRED_ERROR_CODE == 4103
+    assert raised.value.error["consentRequired"] == consent
+    assert raised.value.consent_required == consent
+    assert raised.value.consentRequired == consent
+    assert sogni_client.is_model_consent_required_error(raised.value)
+    assert events[0]["error"] == {"code": 4103, "message": message, "consentRequired": consent}
+
+    # Other job errors carry no agreement.
+    api._handle_job_error({"jobID": "other", "error": "4102", "error_message": "Too long."})
+    assert "consentRequired" not in events[-1]["error"]
+    assert not sogni_client.is_model_consent_required_error(events[-1]["error"])
+
+
 def _seedance_project(api: ProjectsApi) -> Project:
     project = Project(
         {

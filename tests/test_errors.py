@@ -7,12 +7,14 @@ from email.utils import format_datetime
 import pytest
 
 from sogni_client.errors import (
+    MODEL_CONSENT_REQUIRED_ERROR_CODE,
     SUBSCRIPTION_ERROR_CODES,
     ApiError,
     ChatJobError,
     ProjectError,
     api_error_extras,
     extract_chat_job_error_fields,
+    is_model_consent_required_error,
     is_subscription_limit_error,
     parse_retry_after_header,
 )
@@ -263,3 +265,45 @@ def test_is_subscription_limit_error_matches_feature_gate_semantics(
     error: object, expected: bool
 ) -> None:
     assert is_subscription_limit_error(error) is expected
+
+
+_CONSENT = {"key": "seedance-2-5-spicy", "version": 1, "modelId": "seedance-2-5-spicy"}
+
+
+def test_model_consent_required_error_code_matches_javascript_contract() -> None:
+    assert MODEL_CONSENT_REQUIRED_ERROR_CODE == 4103
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (4103, True),
+        ("4103", True),
+        ({"code": 4103}, True),
+        ({"code": "4103"}, True),
+        ({"errorCode": "4103"}, True),
+        ({"code": 0, "consentRequired": _CONSENT}, True),
+        (ProjectError({"code": 4103, "message": "accept it", "consentRequired": _CONSENT}), True),
+        (ChatJobError("consent", code="4103"), True),
+        (ApiError(403, {"errorCode": 4103}), True),
+        (4102, False),
+        ("4081", False),
+        ({"code": 4081}, False),
+        ({"code": 1, "consentRequired": None}, False),
+        ({"consentRequired": {"version": 1}}, False),
+        (ProjectError({"code": 4102, "message": "too long"}), False),
+        (True, False),
+        (None, False),
+    ],
+)
+def test_is_model_consent_required_error(error: object, expected: bool) -> None:
+    assert is_model_consent_required_error(error) is expected
+
+
+def test_project_error_exposes_the_consent_agreement() -> None:
+    refused = ProjectError({"code": 4103, "message": "accept it", "consentRequired": _CONSENT})
+    assert refused.consent_required == _CONSENT
+    assert refused.consentRequired == _CONSENT
+    other = ProjectError({"code": 4102, "message": "too long"})
+    assert other.consent_required is None
+    assert other.consentRequired is None

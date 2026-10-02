@@ -25,14 +25,17 @@ from .chat import (
 )
 from .client import AsyncSogniClient, SogniClient
 from .errors import (
+    MODEL_CONSENT_REQUIRED_ERROR_CODE,
     RETRYABLE_CHAT_ERROR_TYPES,
     SUBSCRIPTION_ERROR_CODES,
     ApiError,
     ChatJobError,
     ProjectError,
     SogniError,
+    is_model_consent_required_error,
     is_retryable_chat_error,
     is_subscription_limit_error,
+    isModelConsentRequiredError,
     isRetryableChatError,
     isSubscriptionLimitError,
 )
@@ -110,6 +113,7 @@ __all__ = [
     "MINIMAX_H3_FASTH3_FLFA2V_MODEL_ID",
     "MINIMAX_H3_FASTH3_IA2V_MODEL_ID",
     "MINIMAX_H3_MAX_KEYFRAMES",
+    "MODEL_CONSENT_REQUIRED_ERROR_CODE",
     "PIXAL3D_IMAGE_TO_3D_MODEL_ID",
     "PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID",
     "PIXAL3D_ORBIT_VIEW_SLOTS",
@@ -157,6 +161,7 @@ __all__ = [
     "is_minimax_h3_audio_guide_model",
     "is_minimax_h3_keyframe_model",
     "is_model_artifact_model",
+    "is_model_consent_required_error",
     "is_pixal3d_model",
     "is_pixal3d_multiview_model",
     "is_project_lost_error",
@@ -170,6 +175,7 @@ __all__ = [
     "isMinimaxH3AudioGuideModel",
     "isMinimaxH3KeyframeModel",
     "isModelArtifactModel",
+    "isModelConsentRequiredError",
     "isPixal3dModel",
     "isPixal3dMultiViewModel",
     "isProjectLostError",
