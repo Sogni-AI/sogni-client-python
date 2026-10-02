@@ -434,6 +434,8 @@ class ChatToolsApi:
     )
     # MiniMax Music 3 reads tempo and key from its prompt and has no such controls.
     _ACE_ONLY_MUSIC_ARGS = frozenset({"bpm", "keyscale"})
+    # MiniMax Music 3's longest track in seconds (ACE-Step renders up to 600).
+    MINIMAX_MUSIC3_MAX_DURATION_SECONDS = 300
 
     _IMAGE_SELECTORS = {
         "chatgpt": "gpt-image-2",
@@ -622,10 +624,18 @@ class ChatToolsApi:
             )
             requested = self._resolve_model(name, args)
             candidates = [model for model in models if model.get("media", "image") == media]
+            music_order = self.MUSIC_MODEL_IDS
             if name == "generate_music":
-                candidates = [
-                    model for model in candidates if model.get("id") in self.MUSIC_MODEL_IDS
-                ]
+                # A model-less track longer than Music 3's 300 s ceiling goes to
+                # ACE-Step, the only models that can render it.
+                duration = args.get("duration")
+                if (
+                    not requested
+                    and isinstance(duration, (int, float))
+                    and duration > self.MINIMAX_MUSIC3_MAX_DURATION_SECONDS
+                ):
+                    music_order = tuple(m for m in music_order if m != "minimax_music3")
+                candidates = [model for model in candidates if model.get("id") in music_order]
                 if not candidates:
                     raise RuntimeError(
                         "No compatible audio models currently available on the network"
@@ -634,7 +644,7 @@ class ChatToolsApi:
             if requested and requested in available:
                 model_id = requested
             elif name == "generate_music":
-                model_id = next(m for m in self.MUSIC_MODEL_IDS if m in available)
+                model_id = next(m for m in music_order if m in available)
             else:
                 model_id = max(candidates, key=lambda model: model.get("workerCount", 0))["id"]
             project_params: dict[str, Any] = {

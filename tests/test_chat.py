@@ -1117,6 +1117,12 @@ async def test_chat_tools_generate_music_defaults_to_minimax_music3() -> None:
     await ChatToolsApi(no_music3).execute(tool_call("generate_music", arguments))  # type: ignore[arg-type]
     assert no_music3.created[0]["modelId"] == "ace_step_1.5_xl_turbo"
 
+    # No model named and longer than Music 3's 300 s ceiling: ACE-Step, which renders up to 600 s.
+    long_track = json.loads(arguments) | {"duration": 420}
+    await api.execute(tool_call("generate_music", json.dumps(long_track)))
+    assert projects.created[2]["modelId"] == "ace_step_1.5_xl_turbo"
+    assert projects.created[2]["duration"] == 420
+
     # Only a speech model online: a song request fails instead of being read aloud.
     speech_only = MusicProjects([pool[2]])
     refused = await ChatToolsApi(speech_only).execute(  # type: ignore[arg-type]

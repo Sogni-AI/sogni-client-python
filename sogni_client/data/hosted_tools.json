@@ -336,19 +336,19 @@
             },
             "duration": {
               "type": "number",
-              "description": "Duration in seconds. Default: 30. Range: 10-600 (10 seconds to 10 minutes). Short clips: 10-30s. Standard songs: 120-300s.",
+              "description": "Duration in seconds. music3 (the default model): 10-300, default 60, and a ceiling — the song may end earlier at a musical resolution. ACE-Step turbo/sft: 10-600, default 30. Short clips: 10-30s. Standard songs: 120-300s.",
               "minimum": 10,
               "maximum": 600
             },
             "bpm": {
               "type": "number",
-              "description": "Beats per minute / tempo. Default: 120. Range: 30-300. Slow ballad: 60-80. Mid-tempo: 90-120. Upbeat: 120-140. Fast dance: 140-180. Very fast: 180+.",
+              "description": "ACE-Step (turbo, sft) only — music3 does not use it; for music3 put the tempo in the prompt instead. Beats per minute / tempo. Default: 120. Range: 30-300. Slow ballad: 60-80. Mid-tempo: 90-120. Upbeat: 120-140. Fast dance: 140-180. Very fast: 180+.",
               "minimum": 30,
               "maximum": 300
             },
             "keyscale": {
               "type": "string",
-              "description": "Musical key and scale. E.g., \"C major\", \"A minor\", \"F# minor\", \"Bb major\". Default: \"C major\". Only set when the user specifies a key or when a particular mood calls for it (minor keys for sad/dark, major for happy/bright)."
+              "description": "ACE-Step (turbo, sft) only — music3 does not use it; for music3 put the key in the prompt instead. Musical key and scale. E.g., \"C major\", \"A minor\", \"F# minor\", \"Bb major\". Default: \"C major\". Only set when the user specifies a key or when a particular mood calls for it (minor keys for sad/dark, major for happy/bright)."
             },
             "lyrics": {
               "type": "string",
@@ -363,7 +363,7 @@
                 "ace_step_1.5_turbo",
                 "ace_step_1.5_sft"
               ],
-              "description": "Canonical music model ID. Default: minimax_music3 (MiniMax Music 3, premium autoregressive composer with the best vocals, lyric adherence and song structure; 10-300 s, and duration is a ceiling, so the song may end earlier at a musical resolution). Music 3 takes tempo and key in the prompt text; bpm, keyscale and timesig apply to ACE-Step only. Use ace_step_1.5_xl_turbo only when the user asks for a quick, cheap or draft track, or names ACE-Step. Use ace_step_1.5_xl_sft only when the user explicitly requests XL SFT. Use legacy ace_step_1.5_turbo or ace_step_1.5_sft only when the user explicitly requests a legacy model."
+              "description": "Canonical music model ID. Default: minimax_music3 (MiniMax Music 3, premium autoregressive composer with the best vocals, lyric adherence and song structure; 10-300 s, and duration is a ceiling, so the song may end earlier at a musical resolution). Music 3 takes tempo and key in the prompt text; bpm, keyscale and timesig apply to ACE-Step only. Use ace_step_1.5_xl_turbo only when the user asks for a quick, cheap or draft track, names ACE-Step, or wants a track longer than 300 s (with no model named, a duration over 300 s uses ACE-Step XL Turbo). Use ace_step_1.5_xl_sft only when the user explicitly requests XL SFT. Use legacy ace_step_1.5_turbo or ace_step_1.5_sft only when the user explicitly requests a legacy model."
             },
             "timesig": {
               "type": "number",
@@ -373,7 +373,7 @@
                 4,
                 6
               ],
-              "description": "Time signature (beats per measure). 4 = 4/4 time (default, most common). 3 = 3/4 time (waltz). 2 = 2/4 time (march). 6 = 6/8 time (compound). Default: 4."
+              "description": "ACE-Step (turbo, sft) only — music3 does not use it; for music3 put the time signature in the prompt instead. Time signature (beats per measure). 4 = 4/4 time (default, most common). 3 = 3/4 time (waltz). 2 = 2/4 time (march). 6 = 6/8 time (compound). Default: 4."
             },
             "numberOfVariations": {
               "type": "number",
