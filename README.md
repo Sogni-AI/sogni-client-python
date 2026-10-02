@@ -845,7 +845,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the TypeScript SDK at `5.58.2`. The
+This release tracks the TypeScript SDK at `5.59.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 27 hosted-tool
