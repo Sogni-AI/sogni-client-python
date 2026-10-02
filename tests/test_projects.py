@@ -226,6 +226,35 @@ def test_image_request_validates_and_normalizes_custom_sizes_and_control_net_num
         create_job_request_message("invalid-size", invalid, options)
 
 
+def test_controlnet_preprocess_is_sent_only_when_true() -> None:
+    options = model_options(
+        "image",
+        sampler={"allowed": ["euler"], "default": "euler"},
+        scheduler={"allowed": ["normal"], "default": "normal"},
+    )
+
+    def control_for(control: dict[str, object]) -> dict[str, object]:
+        message = create_job_request_message(
+            "project-cn",
+            {
+                "type": "image",
+                "modelId": "coreml-sd15",
+                "positivePrompt": "city",
+                "numberOfMedia": 1,
+                "controlNet": {"name": "depth", "image": True, **control},
+            },
+            options,
+        )
+        return message["keyFrames"][0]["currentControlNetsJob"][0]
+
+    assert control_for({"preprocess": True})["preprocess"] is True
+    # false or omitted: the image is the control map, and the request is unchanged
+    assert "preprocess" not in control_for({"preprocess": False})
+    assert "preprocess" not in control_for({})
+    with pytest.raises(ValueError, match="controlNet.preprocess must be a boolean"):
+        control_for({"preprocess": "yes"})
+
+
 def test_video_request_serializes_frames_mask_and_validated_numeric_fields() -> None:
     message = create_job_request_message(
         "video-1",

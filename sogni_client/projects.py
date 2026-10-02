@@ -1824,6 +1824,12 @@ def create_job_request_message(
                     maximum=1,
                     property_name="guidanceEnd",
                 )
+            if control.get("preprocess") is not None:
+                if not isinstance(control["preprocess"], bool):
+                    raise ValueError("controlNet.preprocess must be a boolean")
+                # Sent only when true, so requests without it stay identical to before.
+                if control["preprocess"]:
+                    raw["preprocess"] = True
             keyframe["currentControlNetsJob"] = [raw]
         size_preset = params.get("sizePreset")
         if params.get("width") and params.get("height") and not size_preset:
