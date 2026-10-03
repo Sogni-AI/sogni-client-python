@@ -3685,6 +3685,10 @@ class ProjectsApi(EventEmitter):
         ``finished`` is true for the last three. A project owned by another
         account, or one that does not exist, raises a 404 ``ApiError``; a 503
         means the state could not be determined yet and the call can be retried.
+
+        Use this for one-off reads. Wait for tracked projects over the socket
+        with ``project.wait_for_completion()``. Each read uses the per-IP request
+        allowance; on a 429, wait ``ApiError.retry_after`` seconds.
         """
         response = await self.client.rest.get(f"/v2/projects/{quote(project_id, safe='')}")
         return response["data"]["project"]
@@ -3702,6 +3706,13 @@ class ProjectsApi(EventEmitter):
         ``waitingReason``, which says whether it is held by the account's own plan
         concurrency or is waiting for a worker. Needs an authenticated client;
         another account's or an unknown project raises a 404 ``ApiError``.
+
+        Wait for tracked projects with ``project.wait_for_completion()`` or
+        their socket events. After a restart, reconnect with the same ``app_id``
+        and call :meth:`sync`; :meth:`resolve_missing` covers projects the socket
+        no longer holds. Use this for one-off reads: each call uses the per-IP
+        request allowance and signs a URL for every completed render. On a 429,
+        wait ``ApiError.retry_after`` seconds before the next request.
 
         Returns ``{"id", "status", "finished", "modelId"?, "waitingReason"?,
         "jobs"}``. ``status`` is one of the :meth:`get_status` names and
