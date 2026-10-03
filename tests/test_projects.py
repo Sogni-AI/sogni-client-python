@@ -1246,6 +1246,40 @@ async def test_result_fallback_download_uses_output_content_type(
     }
 
 
+@pytest.mark.parametrize("img_id", ["render", None])
+@pytest.mark.parametrize(
+    "category",
+    [
+        "content_policy",
+        "input_validation",
+        "timeout",
+        "result_storage",
+        "cancelled",
+        "vendor_failed",
+        None,
+    ],
+)
+def test_socket_failure_preserves_server_category(img_id: str | None, category: str | None) -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    events = []
+    api.on("job" if img_id else "project", events.append)
+    payload = {
+        "jobID": "untracked-project",
+        "imgID": img_id,
+        "isFromWorker": False,
+        "error": "5061",
+        "error_message": "Service message changed",
+        "vendorFailureReason": "Private detail",
+    }
+    expected = {"code": 5061, "message": "Service message changed"}
+    if category:
+        payload["vendorFailureCategory"] = category
+        expected["vendorFailureCategory"] = category
+    client.socket.emit("jobError", payload)
+    assert events[-1]["error"] == expected
+
+
 @pytest.mark.asyncio
 async def test_project_failure_preserves_structured_subscription_error() -> None:
     client = FakeClient()
