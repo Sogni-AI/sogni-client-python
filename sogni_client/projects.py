@@ -5616,6 +5616,8 @@ class ProjectsApi(EventEmitter):
                 "originalCode": original,
                 "message": data.get("error_message"),
             }
+        if data.get("vendorFailureCategory"):
+            error["vendorFailureCategory"] = data["vendorFailureCategory"]
         for key in ("subscriptionLimit", "requiredPlans", "feature", "limitation"):
             if data.get(key) is not None:
                 error[key] = data[key]
