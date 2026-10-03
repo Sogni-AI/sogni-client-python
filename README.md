@@ -442,8 +442,9 @@ ready = await sogni.projects.personal_loras.catalog(model_id="krea2_turbo_fp8_sc
 
 Use `personal_loras.import_lora(url=..., name=..., model_id=...,
 rights_confirmed=True)` only after confirming permission to use the file. Imports
-are asynchronous: poll `personal_loras.get(imported["id"])` until the status is
-`ready`, `rejected`, or `revoked`. Remove an entry with
+are asynchronous and take minutes; check `personal_loras.get(imported["id"])`
+about every 30 seconds until the status is `ready`, `rejected`, or `revoked`.
+On a 429, wait `ApiError.retry_after` seconds before checking again. Remove an entry with
 `personal_loras.remove(imported["id"])`.
 
 Use ready catalog IDs with their listed model compatibility and strength ranges.
@@ -539,6 +540,14 @@ The client also exposes:
 Python `snake_case` arguments are preferred. Common JavaScript-style aliases
 remain accepted to simplify migration.
 
+### Generation failure categories
+
+`job.error`, `project.error`, error events, and `ProjectError.error` preserve
+the optional `vendorFailureCategory` string sent by the server. Known values
+include `content_policy`, `input_validation`, `timeout`, `result_storage`,
+`cancelled`, `vendor_failed`, `asset_resolution`, and `vendor_transient`.
+Servers may add categories; use a generic failure message for unknown strings.
+
 ### Retrying safely: `retry_after`, `details`, and idempotency keys
 
 A refused REST request raises `ApiError` with the HTTP `status`, the server's
@@ -585,7 +594,9 @@ Generation keeps running on the Supernet while your socket is down. A dropped
 connection is a transport gap, not a failure: tracked projects stay alive, the
 client reconnects with capped exponential backoff for as long as the session is
 authenticated, and on every `authenticated` handshake it reconciles with the
-server. Whatever the client missed is replayed through the normal `project` /
+server. The backoff resets only after the server authenticates the connection,
+so repeated opens that close before authentication keep increasing the delay.
+Whatever the client missed is replayed through the normal `project` /
 `job` events, so listeners attached before the gap keep receiving updates and
 `wait_for_completion()` still resolves.
 
@@ -675,6 +686,14 @@ projects finish, can still collect them:
   hours by default), including ones that finished while no client was
   connected. `since` is a `datetime` or milliseconds since the epoch; `limit`
   (1-100, default 50) and `app_source` narrow it.
+
+Use `get()`, `get_status()`, and `get_result()` for one-off reads. Wait for a
+tracked project with `project.wait_for_completion()` or its `completed` /
+`failed` events over the socket. After a restart, reconnect with the same
+`app_id` and call `projects.sync()`; `resolve_missing(ids)` covers projects the
+socket no longer holds. Each read uses the per-IP request allowance, and
+`get_result()` also signs a download URL for each completed render. On a 429,
+wait `ApiError.retry_after` seconds before the next request.
 
 ```python
 from datetime import datetime, timedelta, timezone
@@ -845,10 +864,10 @@ blur it.
 
 ## Compatibility
 
-This release tracks the TypeScript SDK at `5.59.0`. The
+This release tracks the TypeScript SDK at `5.60.3`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
-streaming chat, workflows, templates, replay, and the canonical 27 hosted-tool
+streaming chat, workflows, templates, replay, and the canonical 30 hosted-tool
 schemas.
 
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
@@ -868,7 +887,7 @@ The Python API is async-first; `AsyncSogniClient` is an alias of
 `SogniClient`, not a synchronous wrapper. Browser-only cookie coordination and
 multi-tab behavior have no Python equivalent. Local image references are
 uploaded with their detected MIME type, but the TypeScript client's optional
-browser-side image resizing is not reproduced. All 25 canonical tool schemas
+browser-side image resizing is not reproduced. All 30 canonical tool schemas
 are exposed; the local project-backed executor handles the six direct media
 generation tools, while the remaining tools run through the hosted or durable
 chat APIs. Live, credentialed smoke tests are intentionally separate from the

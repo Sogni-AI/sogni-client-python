@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import random
 import re
 from collections.abc import AsyncIterator, Callable
@@ -27,7 +28,7 @@ from .errors import ApiError
 from .events import EventEmitter
 from .utils import b64_json_decode, b64_json_encode, drop_none
 
-LIB_VERSION = "5.21.3"
+LIB_VERSION = "5.60.3"
 PROTOCOL_VERSION = "3.0.0"
 SWITCH_CONNECTION = 4015
 # Reconnect backoff for recoverable socket drops. Attempts continue for as long
@@ -707,6 +708,7 @@ class ApiClient(EventEmitter):
         self.auth.on("sessionChanged", self._on_session_changed)
         self.auth.on("updated", self._on_auth_updated)
         self.socket.on("connected", self._on_socket_connected)
+        self.socket.on("authenticated", self._on_socket_authenticated)
         self.socket.on("disconnected", self._on_socket_disconnected)
 
     @property
@@ -780,9 +782,13 @@ class ApiClient(EventEmitter):
                 _log_connection_error(error)
 
     def _on_socket_connected(self, data: Any) -> None:
-        self._reconnect_attempt = 0
+        # Keep the backoff across sockets that open but close before the server
+        # authenticates them, such as during a server restart.
         self._clear_reconnect()
         self.emit("connected", data)
+
+    def _on_socket_authenticated(self, _data: Any) -> None:
+        self._reconnect_attempt = 0
 
     def _on_socket_disconnected(self, data: Any) -> None:
         code = int(data.get("code") or 0) if isinstance(data, dict) else 0
@@ -815,7 +821,11 @@ class ApiClient(EventEmitter):
         self._clear_reconnect()
         attempt = self._reconnect_attempt
         self._reconnect_attempt += 1
-        base = min(WS_RECONNECT_BASE_DELAY * 2**attempt, WS_RECONNECT_MAX_DELAY)
+        # Stop exponentiating once the delay is capped: Python's integer-to-float
+        # conversion overflows after a long run of unauthenticated retries.
+        base = WS_RECONNECT_MAX_DELAY
+        if attempt < math.log2(WS_RECONNECT_MAX_DELAY / WS_RECONNECT_BASE_DELAY):
+            base = WS_RECONNECT_BASE_DELAY * 2**attempt
         delay = base * (0.8 + random.random() * 0.4)
         self.emit("connecting", {"network": self.socket.supernet_type})
         self._reconnect_task = asyncio.create_task(self._reconnect(delay))

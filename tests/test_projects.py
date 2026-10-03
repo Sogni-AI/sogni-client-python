@@ -1256,6 +1256,9 @@ async def test_result_fallback_download_uses_output_content_type(
         "result_storage",
         "cancelled",
         "vendor_failed",
+        "asset_resolution",
+        "vendor_transient",
+        "future_category",
         None,
     ],
 )
@@ -1278,6 +1281,49 @@ def test_socket_failure_preserves_server_category(img_id: str | None, category: 
         expected["vendorFailureCategory"] = category
     client.socket.emit("jobError", payload)
     assert events[-1]["error"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("img_id", ["render", None])
+@pytest.mark.parametrize("category", ["asset_resolution", "vendor_transient", "future_category"])
+async def test_tracked_failure_preserves_additional_server_categories(
+    img_id: str | None, category: str
+) -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    project = Project({"type": "video", "numberOfMedia": 1}, api)
+    api._projects.append(project)
+    job = None
+    if img_id:
+        job = project._add_job(
+            {"id": img_id, "projectId": project.id, "status": "processing", "stepCount": 1}
+        )
+    failed = []
+    project.on("failed", failed.append)
+    waiting = asyncio.create_task(project.wait_for_completion())
+    expected = {
+        "code": 5061,
+        "message": "Generation failed",
+        "vendorFailureCategory": category,
+    }
+    client.socket.emit(
+        "jobError",
+        {
+            "jobID": project.id,
+            "imgID": img_id,
+            "error": 5061,
+            "error_message": "Generation failed",
+            "vendorFailureCategory": category,
+        },
+    )
+
+    with pytest.raises(ProjectError) as raised:
+        await waiting
+    assert raised.value.error == expected
+    assert failed == [expected]
+    assert project.error == expected
+    if job:
+        assert job.error == expected
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.frames import Close
 from websockets.http11 import Response
 
+from sogni_client import __version__
 from sogni_client.auth import ApiKeyAuthManager
 from sogni_client.errors import ApiError
 from sogni_client.transport import (
@@ -308,7 +309,7 @@ async def test_websocket_connect_builds_protocol_query_and_exact_auth_headers() 
             "projectQueue": True,
             "modelAvailability": False,
         }
-        assert query["clientName"] == ["Sogni/3.0.0 (sogni-client) 5.21.3"]
+        assert query["clientName"] == [f"Sogni/3.0.0 (sogni-client) {__version__}"]
         assert call["additional_headers"] == {"api-key": "socket-secret"}
         assert call["ping_interval"] == call["ping_timeout"] == 15
         assert call["max_size"] is None
@@ -568,6 +569,61 @@ async def authenticated_socket_client(url: str, app_id: str) -> WebSocketClient:
     auth = ApiKeyAuthManager()
     await auth.authenticate("key")
     return WebSocketClient(url, auth, app_id, "fast")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("previous_attempts", "expected_delays"),
+    [(0, [0.01, 0.02, 0.04, 0.04, 0.04]), (1024, [0.04] * 5)],
+    ids=["fresh-outage", "extended-outage"],
+)
+async def test_reconnect_backoff_grows_until_the_server_authenticates(
+    monkeypatch: pytest.MonkeyPatch,
+    previous_attempts: int,
+    expected_delays: list[float],
+) -> None:
+    monkeypatch.setattr("sogni_client.transport.WS_RECONNECT_BASE_DELAY", 0.01)
+    monkeypatch.setattr("sogni_client.transport.WS_RECONNECT_MAX_DELAY", 0.04)
+    monkeypatch.setattr("sogni_client.transport.random.random", lambda: 0.5)
+
+    async with ReadinessServer() as server:
+        server.mode = "restarting"
+        fake_http = FakeHttpClient()
+        client = ApiClient(
+            base_url="https://api.sogni.ai",
+            socket_url=server.url,
+            app_id="APP-BACKOFF",
+            network="fast",
+            auth_type="apiKey",
+            http_client=fake_http,
+            socket_http_client=fake_http,
+        )
+        client._reconnect_attempt = previous_attempts
+        delays: list[float] = []
+        reconnect = client._reconnect
+        authenticated = asyncio.Event()
+        client.socket.on("authenticated", lambda _data: authenticated.set())
+
+        async def record_reconnect(delay: float) -> None:
+            delays.append(delay)
+            if len(delays) == 5:
+                server.mode = "auth"
+            await reconnect(delay)
+
+        monkeypatch.setattr(client, "_reconnect", record_reconnect)
+        try:
+            await client.auth.authenticate("key")
+            await asyncio.wait_for(authenticated.wait(), 2)
+            assert server.connections == 6
+            assert delays == pytest.approx(expected_delays)
+
+            authenticated.clear()
+            await server.close_all(1001, "Server is restarting")
+            await asyncio.wait_for(authenticated.wait(), 2)
+            assert server.connections == 7
+            assert delays == pytest.approx([*expected_delays, 0.01])
+        finally:
+            await client.aclose()
 
 
 @pytest.mark.asyncio

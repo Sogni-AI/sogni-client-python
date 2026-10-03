@@ -45,7 +45,9 @@ class PersonalLoras:
     ) -> dict[str, Any]:
         """Start an import with URL, name, model_id, and explicit rights_confirmed consent.
 
-        Poll :meth:`get` until its status is ready, rejected, or revoked.
+        Imports take minutes. Check :meth:`get` about every 30 seconds until its
+        status is ready, rejected, or revoked. On a 429, wait
+        ``ApiError.retry_after`` seconds before checking again.
         """
         session = self._session
         response = await self._rest.post("/v1/loras/personal", normalize_params(params, **kwargs))
