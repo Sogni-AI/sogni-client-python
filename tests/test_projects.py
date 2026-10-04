@@ -1474,6 +1474,7 @@ async def test_project_timeout_retries_then_notifies_server_and_fails_local_stat
         )
     )
     api._list_active_project_ids = AsyncMock(return_value=[])
+    api.get_status = AsyncMock(side_effect=ApiError(404, {"message": "not found"}))
     waiting = asyncio.create_task(project.wait_for_completion())
     project._last_updated = project_now() - timedelta(minutes=3)
 

@@ -3003,48 +3003,69 @@ class Project(DataEntity):
             self._arm_timeout()
             return
         live_project_ids = await self._api._list_active_project_ids()
+        if self.finished:
+            return
         if live_project_ids is not None and self.id in live_project_ids:
             self._failed_sync_attempts = 0
             self._keep_alive()
             return
-        socket_confirms_gone = live_project_ids is not None
-        try:
-            await self._sync_to_server()
-        except Exception as error:
-            if isinstance(error, ApiError) and error.status == 404 and not socket_confirms_gone:
-                self._arm_timeout()
-                return
-            self._failed_sync_attempts += 1
-            if self._failed_sync_attempts < _MAX_FAILED_SYNC_ATTEMPTS:
-                self._arm_timeout()
-                return
-            with contextlib.suppress(Exception):
-                await self._api._notify_project_timed_out(self.id)
-            for job in self.jobs:
-                if not job.finished:
-                    job._update(
-                        {
-                            "status": "failed",
-                            "error": {"code": 0, "message": "Job timed out"},
-                        }
-                    )
-            self._update(
-                {
-                    "status": "failed",
-                    "error": {
-                        "code": 0,
-                        "message": "Project timed out. Please try again or contact support.",
-                    },
-                }
-            )
-            return
-        self._failed_sync_attempts = 0
-        if not self.finished:
-            self._keep_alive()
-
-    async def _sync_to_server(self) -> None:
         revision = self._queue_revision
-        data = await self._api.get(self.id)
+        try:
+            resolved = await self._api.resolve_missing([self.id], attempts=1, delay_seconds=0)
+            if self.finished:
+                return
+            resolution = resolved.get(self.id, {})
+            state = resolution.get("state")
+            if state in {"finished", "terminal"}:
+                data = resolution["project"]
+                if state == "terminal":
+                    data = {
+                        **data,
+                        "status": "errored" if data["status"] == "failed" else "cancelled",
+                    }
+                await self._sync_to_server(data, revision)
+            if state != "lost":
+                self._failed_sync_attempts = 0
+                if not self.finished:
+                    self._keep_alive()
+                return
+        except Exception:
+            # An inconclusive request must not cancel a potentially live render.
+            self._failed_sync_attempts = 0
+            self._keep_alive()
+            return
+        self._failed_sync_attempts += 1
+        if self._failed_sync_attempts < _MAX_FAILED_SYNC_ATTEMPTS:
+            self._arm_timeout()
+            return
+        with contextlib.suppress(Exception):
+            await self._api._notify_project_timed_out(self.id)
+        for job in self.jobs:
+            if not job.finished:
+                job._update(
+                    {
+                        "status": "failed",
+                        "error": {"code": 0, "message": "Job timed out"},
+                    }
+                )
+        self._update(
+            {
+                "status": "failed",
+                "error": {
+                    "code": 0,
+                    "message": "Project timed out. Please try again or contact support.",
+                },
+            }
+        )
+        return
+
+    async def _sync_to_server(
+        self, snapshot: dict[str, Any] | None = None, revision: int | None = None
+    ) -> None:
+        was_finished = self.finished
+        if revision is None:
+            revision = self._queue_revision
+        data = snapshot if snapshot is not None else await self._api.get(self.id)
         self._set_queue_state(data, revision)
         raw_jobs = data.get("completedWorkerJobs")
         if not isinstance(raw_jobs, list):
@@ -3080,6 +3101,8 @@ class Project(DataEntity):
             )
             await job._sync_with_rest_data(raw)
 
+        if not was_finished and self.finished:
+            return
         params = dict(self.params)
         if data.get("imageCount") is not None:
             params["numberOfMedia"] = data["imageCount"]
@@ -4104,8 +4127,8 @@ class ProjectsApi(EventEmitter):
             # confirm an active project or a terminal failure/cancellation.
             # A successful completion still needs its full result record and
             # stays unverified until that record arrives.
-            # Anything else, including an unauthenticated client or an older API
-            # without the lookup, keeps the "lost" verdict.
+            # Failed lookups are inconclusive. Only a 404 together with an
+            # available live list can confirm absence.
             unlisted = [project_id for project_id in pending if not (live and project_id in live)]
             answers = await asyncio.gather(
                 *(self._lookup_unlisted_project(project_id) for project_id in unlisted)
@@ -4119,6 +4142,12 @@ class ProjectsApi(EventEmitter):
                 check = checks.get(project_id)
                 if check:
                     result[project_id] = check
+                    continue
+                if live is None:
+                    result[project_id] = {
+                        "state": "unknown",
+                        "error": RuntimeError("The live project list is not available"),
+                    }
                     continue
                 # Nothing on the server knows it. A request that died with a
                 # dropped connection is sent again; one just (re)sent is still
@@ -4183,12 +4212,15 @@ class ProjectsApi(EventEmitter):
 
     async def _lookup_unlisted_project(self, project_id: str) -> dict[str, Any] | None:
         """Second opinion for a project neither the terminal REST record nor the
-        live socket list knows. Returns ``None`` when the lookup cannot vouch for it."""
+        live socket list knows. Returns ``None`` for a 404; other lookup failures
+        remain unknown, preserving the error and retry-after information."""
 
         try:
             project = await self.get_status(project_id)
-        except Exception:
-            return None
+        except Exception as error:
+            if isinstance(error, ApiError) and error.status == 404:
+                return None
+            return {"state": "unknown", "error": error}
         if not isinstance(project, dict) or project.get("id") != project_id:
             return None
         if not project.get("finished") and project.get("status") in _IN_FLIGHT_LOOKUP_STATUSES:
@@ -5191,6 +5223,10 @@ class ProjectsApi(EventEmitter):
                 {"type": "completed", "projectId": data.get("jobID")},
             )
         elif kind in {"initiatingModel", "jobStarted"}:
+            # LLM startup frames share this channel but have no render id.
+            # ChatApi handles them; only media frames can emit a job event.
+            if not isinstance(data.get("imgID"), str):
+                return
             event = {
                 "type": "initiating" if kind == "initiatingModel" else "started",
                 "projectId": data.get("jobID"),
