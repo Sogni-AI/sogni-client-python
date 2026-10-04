@@ -28,7 +28,7 @@ from .errors import ApiError
 from .events import EventEmitter
 from .utils import b64_json_decode, b64_json_encode, drop_none
 
-LIB_VERSION = "5.60.3"
+LIB_VERSION = "5.60.4"
 PROTOCOL_VERSION = "3.0.0"
 SWITCH_CONNECTION = 4015
 # Reconnect backoff for recoverable socket drops. Attempts continue for as long

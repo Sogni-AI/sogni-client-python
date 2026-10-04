@@ -7,9 +7,11 @@ import contextlib
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
+from sogni_client.chat import ChatApi
 from sogni_client.errors import ApiError, ProjectError
 from sogni_client.events import EventEmitter
 from sogni_client.projects import Project, ProjectsApi
@@ -332,10 +334,10 @@ async def test_live_lookup_only_rescues_projects_the_socket_cannot_vouch_for() -
     assert list(resolved) == ids, "results keep the caller's order"
     assert resolved["QUEUED"] == {"state": "active"}
     assert resolved["PROCESSING"] == {"state": "active"}
-    assert resolved["GONE"] == {"state": "lost"}
-    assert resolved["ANON"] == {"state": "lost"}
+    assert resolved["GONE"]["state"] == "unknown"
+    assert resolved["ANON"]["state"] == "unknown"
     assert resolved["SETTLED"]["state"] == "unknown"
-    assert resolved["MISMATCH"] == {"state": "lost"}
+    assert resolved["MISMATCH"]["state"] == "unknown"
     lookups = [call["path"] for call in client.rest.calls if call["path"].startswith("/v2/")]
     assert lookups == [f"/v2/projects/{project_id}" for project_id in ids]
 
@@ -561,9 +563,9 @@ def restart_harness(
         }
     )
 
-    # Make the staleness watchdog's live-list lookup inert, as the JS harness does.
-    async def no_live_list() -> None:
-        return None
+    # An available empty live list confirms absence, as in the JS harness.
+    async def no_live_list() -> list[str]:
+        return []
 
     api._list_active_project_ids = no_live_list  # type: ignore[method-assign]
     project_events: list[dict[str, Any]] = []
@@ -611,6 +613,164 @@ async def test_a_recoverable_drop_defers_project_timeouts_too() -> None:
     assert api._should_defer_project_timeouts() is True, "timeouts defer while reconnecting"
     client.emit("connected", {"network": "fast"})
     assert api._should_defer_project_timeouts() is False, "timeouts resume on reconnect"
+    stop_timers(api)
+
+
+@pytest.mark.parametrize(
+    "lookup_error",
+    [
+        ApiError(503, {"message": "unavailable"}),
+        ApiError(429, {"message": "rate limited", "retryAfter": 30}),
+        ApiError(401, {"message": "unauthorized"}),
+        ConnectionError("Load failed"),
+    ],
+)
+async def test_inconclusive_final_lookup_keeps_generation_unverified(
+    lookup_error: Exception,
+) -> None:
+    api, client, events, synced = restart_harness()
+    project = track(api)
+    api.get = AsyncMock(side_effect=ApiError(404, {"message": "not found"}))
+    api.get_status = AsyncMock(side_effect=lookup_error)
+    api._resend_undelivered = AsyncMock(return_value=True)
+
+    resolved = await api.resolve_missing([project.id], attempts=1, delay_seconds=0)
+    assert resolved[project.id]["state"] == "unknown"
+    assert resolved[project.id]["error"] is lookup_error
+    await api._reconcile({"activeProjects": [], "unclaimedCompletedProjects": []}, "manual", 10**10)
+    assert synced[0]["unverified"] == [project.id]
+    assert synced[0]["lost"] == []
+    assert project.status == "pending"
+    assert events == []
+    api._resend_undelivered.assert_not_awaited()
+    stop_timers(api)
+
+
+async def test_a_404_with_unavailable_live_list_is_inconclusive() -> None:
+    api, client, _events, _synced = restart_harness()
+    project = track(api)
+    api._list_active_project_ids = AsyncMock(return_value=None)
+    api.get = AsyncMock(side_effect=ApiError(404, {}))
+    api.get_status = AsyncMock(side_effect=ApiError(404, {}))
+    api._resend_undelivered = AsyncMock(return_value=True)
+
+    resolved = await api.resolve_missing([project.id], attempts=1, delay_seconds=0)
+    assert resolved[project.id]["state"] == "unknown"
+    api._resend_undelivered.assert_not_awaited()
+    assert project.status == "pending"
+    stop_timers(api)
+
+
+@pytest.mark.parametrize("status", [503, 429, 401, None])
+async def test_watchdog_does_not_cancel_an_inconclusive_generation(status: int | None) -> None:
+    api, client, _events, _synced = restart_harness()
+    project = track(api)
+    api.get = AsyncMock(side_effect=ApiError(404, {}))
+    error = (
+        ApiError(status, {"message": "unavailable"}) if status else ConnectionError("Load failed")
+    )
+    api.get_status = AsyncMock(side_effect=error)
+    api._notify_project_timed_out = AsyncMock()
+    project._failed_sync_attempts = 2
+    for _ in range(5):
+        project._last_updated = datetime.now(timezone.utc) - timedelta(minutes=3)
+        await project._check_for_timeout()
+    assert project.status == "pending"
+    assert project._failed_sync_attempts == 0
+    assert api.get_status.await_count == 5
+    api._notify_project_timed_out.assert_not_awaited()
+    stop_timers(api)
+
+
+@pytest.mark.parametrize("status", ["queued", "failed", "canceled"])
+async def test_watchdog_applies_compact_lookup_without_erasing_settings(status: str) -> None:
+    api, client, _events, _synced = restart_harness()
+    project = track(api)
+    params = dict(project.params)
+    api.get = AsyncMock(side_effect=ApiError(404, {}))
+    api.get_status = AsyncMock(
+        return_value={
+            "id": project.id,
+            "status": status,
+            "finished": status != "queued",
+            "workerJobs": [],
+            "completedWorkerJobs": [],
+        }
+    )
+    api._notify_project_timed_out = AsyncMock()
+    project._last_updated = datetime.now(timezone.utc) - timedelta(minutes=3)
+    await project._check_for_timeout()
+    assert project.status == ("pending" if status == "queued" else status)
+    assert project.params == params
+    assert api.get.await_count == 1
+    api._notify_project_timed_out.assert_not_awaited()
+    stop_timers(api)
+
+
+async def test_live_completion_wins_delayed_watchdog_absence() -> None:
+    api, client, _events, _synced = restart_harness()
+    project = track(api)
+    api.get = AsyncMock(side_effect=ApiError(404, {}))
+    api._notify_project_timed_out = AsyncMock()
+
+    async def lookup(_project_id: str) -> dict[str, Any]:
+        project._update({"status": "completed"})
+        raise ApiError(404, {})
+
+    api.get_status = AsyncMock(side_effect=lookup)
+    project._failed_sync_attempts = 2
+    project._last_updated = datetime.now(timezone.utc) - timedelta(minutes=3)
+    await project._check_for_timeout()
+    assert project.status == "completed"
+    api._notify_project_timed_out.assert_not_awaited()
+    stop_timers(api)
+
+
+async def test_chat_startup_frames_do_not_emit_media_jobs() -> None:
+    api, client, _events, _synced = restart_harness()
+    chat = ChatApi(client, api)
+    media_events: list[dict[str, Any]] = []
+    chat_states: list[dict[str, Any]] = []
+    api.on("job", media_events.append)
+    chat.on("jobState", chat_states.append)
+    stream = await chat.completions.create(
+        model="model-1", messages=[{"role": "user", "content": "hello"}], stream=True
+    )
+    job_id = stream.job_id
+    client.socket.emit("jobState", {"type": "initiatingModel", "jobID": job_id})
+    client.socket.emit(
+        "jobState", {"type": "jobStarted", "jobID": job_id, "workerName": "chat-worker"}
+    )
+    client.socket.emit(
+        "jobState", {"type": "jobStarted", "jobID": "OTHER-TAB-CHAT", "workerName": "chat-worker"}
+    )
+    assert [state["type"] for state in chat_states] == ["initiatingModel", "jobStarted"]
+    assert media_events == []
+    client.socket.emit("jobTokens", {"jobID": job_id, "content": "hello"})
+    client.socket.emit("llmJobResult", {"jobID": job_id, "timeTaken": 1})
+    assert stream.final_result["content"] == "hello"
+    assert stream.final_result["workerName"] == "chat-worker"
+
+    project = track(api)
+    for kind in ("initiatingModel", "jobStarted"):
+        client.socket.emit(
+            "jobState",
+            {"type": kind, "jobID": project.id, "imgID": "IMG-START", "workerName": "media-worker"},
+        )
+    assert len(project.jobs) == 1
+    assert project.jobs[0].id == "IMG-START"
+    assert project.jobs[0].status == "processing"
+    client.socket.emit(
+        "jobState",
+        {
+            "type": "jobStarted",
+            "jobID": "UNTRACKED-MEDIA",
+            "imgID": "IMG-UNTRACKED",
+            "workerName": "media-worker",
+        },
+    )
+    assert len(media_events) == 3
+    assert media_events[-1]["jobId"] == "IMG-UNTRACKED"
     stop_timers(api)
 
 
