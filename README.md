@@ -409,7 +409,7 @@ exported.
 
 ## Seedance 2.5 Uncensored
 
-`seedance-2-5-spicy` (hosted tool selector `seedance2-5-spicy`) is Seedance 2.5
+`seedance-2-5-uncensored` (hosted tool selector `seedance2-5-uncensored`) is Seedance 2.5
 Uncensored: the same model with every Seedance 2.5 limit and option above, under
 its own model id. Each account must accept its one-time likeness and consent
 agreement in a Sogni app first; until then its jobs fail with
@@ -423,7 +423,7 @@ try:
     await project.wait_for_completion()
 except ProjectError as error:
     if is_model_consent_required_error(error):
-        # error.consent_required == {"key": "seedance-2-5-spicy", "version": 1, ...}
+        # error.consent_required == {"key": "seedance-2-5-uncensored", "version": 1, ...}
         print(error)  # tells the user to accept the agreement in the Sogni app
 ```
 

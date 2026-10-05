@@ -240,7 +240,7 @@ _SEEDANCE_REFERENCE_LIMITS = {
     "seedance-2-0-fast": (9, 3, 3, 12),
     "seedance-2-5": (30, 10, 10, 50),
     # Seedance 2.5 Uncensored: the same model and limits as Seedance 2.5.
-    "seedance-2-5-spicy": (30, 10, 10, 50),
+    "seedance-2-5-uncensored": (30, 10, 10, 50),
 }
 
 _SAMPLER_ALIASES = {

@@ -130,11 +130,13 @@ def test_calculate_video_frames_applies_explicit_bounds_after_model_rules() -> N
 
 def test_seedance25_uncensored_is_seedance25_under_its_own_id() -> None:
     assert is_seedance25_model("seedance-2-5") is True
-    assert is_seedance25_model("seedance-2-5-spicy") is True
-    for model_id in ("seedance-2-0", "seedance-2-5-uncensored", "seedance2-5-spicy"):
+    assert is_seedance25_model("seedance-2-5-uncensored") is True
+    for model_id in ("seedance-2-0", "seedance-2-5-spicy", "seedance2-5-uncensored"):
         assert is_seedance25_model(model_id) is False
-    assert get_video_workflow_type("seedance-2-5-spicy") == get_video_workflow_type("seedance-2-5")
-    assert calculate_video_frames("seedance-2-5-spicy", 30, 24) == 721
+    assert get_video_workflow_type("seedance-2-5-uncensored") == get_video_workflow_type(
+        "seedance-2-5"
+    )
+    assert calculate_video_frames("seedance-2-5-uncensored", 30, 24) == 721
 
 
 def test_video_workflow_detection_rejects_family_invalid_suffixes() -> None:
@@ -148,10 +150,12 @@ def test_video_workflow_detection_rejects_family_invalid_suffixes() -> None:
         ("wan_v2.2-14b-fp8_i2v", True, False, False, False, True, False, False),
         ("ltx23-22b-fp8_t2v_dev", False, True, False, False, True, False, False),
         ("seedance-2-0-mini", False, False, True, False, True, True, False),
-        ("seedance-2-5-spicy", False, False, True, False, True, True, False),
-        # Explicit-id registry: near-miss ids are not Seedance 2.5 Uncensored.
-        ("seedance2-5-spicy", False, False, False, False, False, False, False),
-        ("seedance-2-5-spicy-v2", False, False, False, False, False, False, False),
+        ("seedance-2-5-uncensored", False, False, True, False, True, True, False),
+        # Explicit-id registry: near-miss ids, including the old pre-rename
+        # seedance-2-5-spicy id, are not Seedance 2.5 Uncensored.
+        ("seedance2-5-uncensored", False, False, False, False, False, False, False),
+        ("seedance-2-5-uncensored-v2", False, False, False, False, False, False, False),
+        ("seedance-2-5-spicy", False, False, False, False, False, False, False),
         ("happyhorse-1.1-r2v", False, False, False, True, True, True, False),
         ("ace_step_1.5_xl_turbo", False, False, False, False, False, False, True),
         (

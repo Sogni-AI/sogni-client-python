@@ -267,7 +267,7 @@ def test_is_subscription_limit_error_matches_feature_gate_semantics(
     assert is_subscription_limit_error(error) is expected
 
 
-_CONSENT = {"key": "seedance-2-5-spicy", "version": 1, "modelId": "seedance-2-5-spicy"}
+_CONSENT = {"key": "seedance-2-5-uncensored", "version": 1, "modelId": "seedance-2-5-uncensored"}
 
 
 def test_model_consent_required_error_code_matches_javascript_contract() -> None:

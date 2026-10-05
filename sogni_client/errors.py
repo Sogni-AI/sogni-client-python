@@ -17,7 +17,7 @@ SUBSCRIPTION_ERROR_CODES = {
 
 # Socket error code for a job refused because its model requires a one-time
 # likeness and consent agreement the account has not accepted. Seedance 2.5
-# Uncensored (``seedance-2-5-spicy``) is the model that requires one. The error
+# Uncensored (``seedance-2-5-uncensored``) is the model that requires one. The error
 # carries ``consentRequired`` (``{"key", "version", "modelId"}``) so apps can open
 # the agreement. It is accepted in a Sogni app; the SDK never accepts it and
 # API-key sessions cannot. Until it is accepted every job for the model fails the
