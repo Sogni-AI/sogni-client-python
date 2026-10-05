@@ -8,6 +8,7 @@ import pytest
 
 from sogni_client.errors import (
     MODEL_CONSENT_REQUIRED_ERROR_CODE,
+    MODEL_NOT_YET_AVAILABLE_ERROR_CODE,
     SUBSCRIPTION_ERROR_CODES,
     ApiError,
     ChatJobError,
@@ -272,6 +273,11 @@ _CONSENT = {"key": "seedance-2-5-uncensored", "version": 1, "modelId": "seedance
 
 def test_model_consent_required_error_code_matches_javascript_contract() -> None:
     assert MODEL_CONSENT_REQUIRED_ERROR_CODE == 4103
+
+
+def test_model_not_yet_available_error_code_matches_javascript_contract() -> None:
+    assert MODEL_NOT_YET_AVAILABLE_ERROR_CODE == 4104
+    assert not is_model_consent_required_error(MODEL_NOT_YET_AVAILABLE_ERROR_CODE)
 
 
 @pytest.mark.parametrize(

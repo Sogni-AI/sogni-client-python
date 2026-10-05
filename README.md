@@ -409,12 +409,16 @@ exported.
 
 ## Seedance 2.5 Uncensored
 
-`seedance-2-5-uncensored` (hosted tool selector `seedance2-5-uncensored`) is Seedance 2.5
-Uncensored: the same model with every Seedance 2.5 limit and option above, under
-its own model id. Each account must accept its one-time likeness and consent
-agreement in a Sogni app first; until then its jobs fail with
+`seedance-2-5-uncensored` (hosted tool selector `seedance2-5-uncensored`) is
+Seedance 2.5 Uncensored: the same model with every Seedance 2.5 limit and option
+above, under its own model id. Each account must accept its one-time likeness
+and consent agreement in a Sogni app first; until then its jobs fail with
 `MODEL_CONSENT_REQUIRED_ERROR_CODE` (4103). The client never accepts the
 agreement, and retrying fails the same way until it is accepted.
+
+A model that is not yet available on a network is refused with
+`MODEL_NOT_YET_AVAILABLE_ERROR_CODE` (4104). Show the error's message as is (it
+names models to try instead) and do not retry.
 
 ```python
 from sogni_client import ProjectError, is_model_consent_required_error

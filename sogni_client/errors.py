@@ -24,6 +24,13 @@ SUBSCRIPTION_ERROR_CODES = {
 # same way, so do not retry. Price estimates are not gated.
 MODEL_CONSENT_REQUIRED_ERROR_CODE = 4103
 
+# Socket error code for a job or price estimate refused because its model is not
+# yet available on this network (for example a model released to staging but
+# held in production). The error's message is the socket's wording, which names
+# models to try instead; show it as is. Not retryable: the model stays refused
+# until the server makes it available.
+MODEL_NOT_YET_AVAILABLE_ERROR_CODE = 4104
+
 # Error types for an LLM request that did not complete because the connection to
 # Sogni was interrupted, not because of the request itself:
 #

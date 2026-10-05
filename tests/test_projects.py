@@ -767,6 +767,44 @@ async def test_model_consent_refusal_keeps_the_agreement_on_the_project_error() 
     assert not sogni_client.is_model_consent_required_error(events[-1]["error"])
 
 
+async def test_model_not_yet_available_refusal_keeps_the_socket_message() -> None:
+    message = (
+        "This model is not yet available, try Wan 3 Spicy or MiniMax H3 video in the meantime."
+    )
+    api = ProjectsApi(FakeClient())
+    project = Project(
+        {
+            "type": "video",
+            "modelId": "seedance-2-5-uncensored",
+            "positivePrompt": "Harbor at dusk",
+            "numberOfMedia": 1,
+        },
+        api,
+    )
+    api._projects.append(project)
+    events: list[dict[str, Any]] = []
+    api.on("project", events.append)
+    waiting = asyncio.create_task(project.wait_for_completion())
+
+    api._handle_job_error(
+        {
+            "jobID": project.id,
+            "isFromWorker": False,
+            "error": "4104",
+            "modelId": "seedance-2-5-uncensored",
+            "error_message": message,
+        }
+    )
+
+    with pytest.raises(ProjectError) as raised:
+        await waiting
+    assert str(raised.value) == message
+    assert raised.value.code == sogni_client.MODEL_NOT_YET_AVAILABLE_ERROR_CODE == 4104
+    assert raised.value.consent_required is None
+    assert not sogni_client.is_model_consent_required_error(raised.value)
+    assert events[0]["error"] == {"code": 4104, "message": message}
+
+
 def _seedance_project(api: ProjectsApi) -> Project:
     project = Project(
         {
