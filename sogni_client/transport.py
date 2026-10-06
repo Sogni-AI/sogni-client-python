@@ -852,6 +852,11 @@ class ApiClient(EventEmitter):
 
     async def aclose(self) -> None:
         self._disposed = True
+        # End the session before anything awaits, so a pending renewal cannot
+        # revive it. Closing (not an account change) is what unfinished
+        # requests report, and the API groups drop work that outlives it.
+        self.auth._close()
+        self.emit("closed", None)
         task, self._reconnect_task = self._reconnect_task, None
         if task is not None:
             task.cancel()

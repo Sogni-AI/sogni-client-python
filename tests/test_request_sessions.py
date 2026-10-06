@@ -13,8 +13,8 @@ import httpx
 import pytest
 
 from sogni_client import SogniClient
-from sogni_client.auth import ApiKeyAuthManager
-from sogni_client.transport import RestClient, WebSocketClient
+from sogni_client.auth import CLIENT_CLOSED_MESSAGE, ApiKeyAuthManager, RequestSessionError
+from sogni_client.transport import ApiClient, RestClient, WebSocketClient
 from sogni_client.utils import b64_json_encode
 
 
@@ -169,6 +169,69 @@ async def test_logout_rejects_a_pending_create_without_sending_work(sessions, mo
     with pytest.raises(RuntimeError, match="account changed"):
         await pending
     assert not any(message["type"] == "jobRequest" for socket in sockets for message in socket.sent)
+
+
+async def test_closing_the_client_ends_a_pending_create_without_an_account_change(
+    sessions, monkeypatch
+):
+    client, sockets = sessions
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def options(_model):
+        entered.set()
+        await release.wait()
+        return {
+            "type": "image",
+            "sampler": {"allowed": [], "default": None},
+            "scheduler": {"allowed": [], "default": None},
+        }
+
+    monkeypatch.setattr(client.projects, "get_model_options", options)
+    pending = asyncio.create_task(
+        client.projects.create(
+            type="image", modelId="flux1-schnell-fp8", positivePrompt="A mug", numberOfMedia=1
+        )
+    )
+    await entered.wait()
+    await client.aclose()
+    release.set()
+    with pytest.raises(RequestSessionError) as raised:
+        await pending
+    assert raised.value.reason == "clientClosed"
+    assert str(raised.value) == CLIENT_CLOSED_MESSAGE
+    assert not any(message["type"] == "jobRequest" for socket in sockets for message in socket.sent)
+
+
+async def test_a_request_that_outlives_its_client_says_the_client_closed():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def respond(_request):
+        entered.set()
+        await release.wait()
+        return httpx.Response(200, json={"data": {}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        api = ApiClient(
+            base_url="https://api.sogni.ai",
+            socket_url="wss://socket.sogni.ai",
+            app_id="closed-request-test",
+            network="fast",
+            auth_type="apiKey",
+            disable_socket=True,
+            http_client=http,
+        )
+        await api.auth.authenticate("account-a")
+        pending = asyncio.create_task(api.rest.get("/v1/account/me"))
+        await entered.wait()
+        await api.aclose()
+        release.set()
+        with pytest.raises(RequestSessionError) as raised:
+            await pending
+    assert raised.value.reason == "clientClosed"
+    assert str(raised.value) == CLIENT_CLOSED_MESSAGE
+    assert "account changed" not in str(raised.value)
 
 
 async def test_stale_upgrade_closes_old_socket_and_new_account_can_connect():

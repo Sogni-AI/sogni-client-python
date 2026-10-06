@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from sogni_client.auth import CLIENT_CLOSED_MESSAGE, RequestSessionError
 from sogni_client.chat import ChatApi
 from sogni_client.errors import ApiError, ProjectError
 from sogni_client.events import EventEmitter
@@ -703,6 +704,38 @@ async def test_watchdog_applies_compact_lookup_without_erasing_settings(status: 
     assert project.status == ("pending" if status == "queued" else status)
     assert project.params == params
     assert api.get.await_count == 1
+    api._notify_project_timed_out.assert_not_awaited()
+    stop_timers(api)
+
+
+async def test_watchdog_check_cut_short_by_closing_the_client_is_not_a_failed_sync() -> None:
+    api, client, _events, _synced = restart_harness()
+    project = track(api)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def lookup(_project_id: str) -> dict[str, Any]:
+        entered.set()
+        await release.wait()
+        # How the transport ends a request that outlives its client.
+        raise RequestSessionError(CLIENT_CLOSED_MESSAGE, "clientClosed")
+
+    api.get = AsyncMock(side_effect=lookup)
+    api._notify_project_timed_out = AsyncMock()
+    project._failed_sync_attempts = 2
+    # The elapsed watchdog timer clears its handle before the check runs.
+    project._timeout_handle.cancel()
+    project._timeout_handle = None
+    project._last_updated = datetime.now(timezone.utc) - timedelta(minutes=3)
+    check = asyncio.create_task(project._check_for_timeout())
+    await entered.wait()
+    client.emit("closed", None)
+    release.set()
+    await check
+    # No strike reset and no new watchdog: the project has no owner left.
+    assert project._failed_sync_attempts == 2
+    assert project._timeout_handle is None
+    assert project.status == "pending"
     api._notify_project_timed_out.assert_not_awaited()
     stop_timers(api)
 

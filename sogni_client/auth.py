@@ -8,12 +8,38 @@ import json
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from .errors import ApiError
 from .events import EventEmitter
+
+ACCOUNT_CHANGED_MESSAGE = "The account changed. Submit this request again."
+CLIENT_CLOSED_MESSAGE = "This Sogni client was closed before the request finished."
+
+
+class RequestSessionError(RuntimeError):
+    """A request outlived the sign-in session that started it.
+
+    ``reason`` says why: ``"accountChanged"`` when the account signed out or
+    changed, ``"clientClosed"`` when the client itself was closed. A closed
+    client never reports an account change that did not happen, and background
+    work can recognise a result that no longer has an owner. Mirrors
+    sogni-client's ``RequestSessionError``.
+    """
+
+    def __init__(self, message: str, reason: Literal["accountChanged", "clientClosed"]) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def request_session_ended(closed: bool) -> RequestSessionError:
+    """The error for work whose session ended: closed client or changed account."""
+
+    if closed:
+        return RequestSessionError(CLIENT_CLOSED_MESSAGE, "clientClosed")
+    return RequestSessionError(ACCOUNT_CHANGED_MESSAGE, "accountChanged")
 
 
 def _decode_jwt(token: str) -> dict[str, Any]:
@@ -33,21 +59,33 @@ class AuthManager(EventEmitter, ABC):
     def __init__(self) -> None:
         super().__init__()
         self._session_version = 0
+        self._closed = False
 
     @property
     def session_version(self) -> int:
         return self._session_version
 
+    @property
+    def closed(self) -> bool:
+        """True once the owning client was closed. Its unfinished requests end
+        because the client closed, not because the account changed."""
+        return self._closed
+
     def _advance_session(self) -> None:
         self._session_version += 1
         self.emit("sessionChanged", None)
+
+    def _close(self) -> None:
+        """The owning client was closed; end its session without an account change."""
+        self._closed = True
+        self._session_version += 1
 
     def capture_session(self) -> Callable[[], None]:
         version = self.session_version
 
         def check() -> None:
             if version != self.session_version:
-                raise RuntimeError("The account changed. Submit this request again.")
+                raise request_session_ended(self.closed)
 
         return check
 
@@ -162,6 +200,11 @@ class TokenAuthManager(AuthManager):
             return {"token": self._token, "refreshToken": self._refresh_token}
         return None
 
+    def _close(self) -> None:
+        super()._close()
+        # A renewal still in flight must not restore credentials to a closed client.
+        self._credential_version += 1
+
     def clear(self) -> None:
         if not self._token and not self._refresh_token:
             return
@@ -191,7 +234,7 @@ class TokenAuthManager(AuthManager):
 
     def _assert_credentials(self, version: int) -> None:
         if version != self._credential_version:
-            raise RuntimeError("The account changed. Submit this request again.")
+            raise request_session_ended(self.closed)
 
     async def _renew_token(self) -> str:
         version = self._credential_version

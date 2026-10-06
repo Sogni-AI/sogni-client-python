@@ -10,8 +10,16 @@ from typing import Any
 import httpx
 import pytest
 
-from sogni_client.auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager, _decode_jwt
+from sogni_client.auth import (
+    CLIENT_CLOSED_MESSAGE,
+    ApiKeyAuthManager,
+    CookieAuthManager,
+    RequestSessionError,
+    TokenAuthManager,
+    _decode_jwt,
+)
 from sogni_client.errors import ApiError
+from sogni_client.transport import ApiClient
 
 
 def make_jwt(exp: float, **claims: Any) -> str:
@@ -328,6 +336,101 @@ async def test_late_renewal_cannot_replace_new_credentials_or_restore_signout(
     else:
         assert await auth.headers() == {"Authorization": new_access}
         assert await auth.backup() == {"token": new_access, "refreshToken": new_refresh}
+
+
+@pytest.mark.asyncio
+async def test_closing_ends_a_pending_renewal_without_reviving_or_changing_the_account() -> None:
+    now = time.time()
+    access = make_jwt(now + 3600, addr="account-a")
+    refresh = make_jwt(now + 7200, addr="account-a")
+    refresh_client = FakeRefreshClient(
+        json_response(
+            200,
+            {
+                "data": {
+                    "token": make_jwt(now + 3600, addr="account-a", renewal=1),
+                    "refreshToken": make_jwt(now + 7200, addr="account-a", renewal=1),
+                }
+            },
+        ),
+        pause=True,
+    )
+    auth = TokenAuthManager("https://api.sogni.ai", refresh_client=refresh_client)
+    await auth.authenticate(token=access, refresh_token=refresh)
+    auth._token_expires_at = 0
+    updates: list[bool] = []
+    auth.on("updated", updates.append)
+    request = asyncio.create_task(auth.headers())
+    for _ in range(100):
+        if refresh_client.calls:
+            break
+        await asyncio.sleep(0)
+    assert len(refresh_client.calls) == 1
+
+    auth._close()
+    refresh_client.release.set()
+    with pytest.raises(RequestSessionError) as raised:
+        await request
+    assert raised.value.reason == "clientClosed"
+    assert str(raised.value) == CLIENT_CLOSED_MESSAGE
+    # The late renewal restored nothing.
+    assert updates == []
+    assert await auth.backup() == {"token": access, "refreshToken": refresh}
+
+
+@pytest.mark.asyncio
+async def test_a_connect_waiting_on_renewal_reports_the_closed_client() -> None:
+    now = time.time()
+    refresh_client = FakeRefreshClient(
+        json_response(
+            200,
+            {
+                "data": {
+                    "token": make_jwt(now + 3600, addr="account-a", renewal=1),
+                    "refreshToken": make_jwt(now + 7200, addr="account-a", renewal=1),
+                }
+            },
+        ),
+        pause=True,
+    )
+    opened: list[str] = []
+
+    async def connect(url: str, **_kwargs: Any) -> Any:
+        opened.append(url)
+        raise AssertionError("a closed client must not open a socket")
+
+    api = ApiClient(
+        base_url="https://api.sogni.ai",
+        socket_url="wss://socket.sogni.ai",
+        app_id="closed-renewal-test",
+        network="fast",
+        auth_type="token",
+        disable_socket=True,
+        http_client=refresh_client,  # type: ignore[arg-type]
+        websocket_factory=connect,
+    )
+    auth = api.auth
+    assert isinstance(auth, TokenAuthManager)
+    await auth.authenticate(
+        token=make_jwt(now + 3600, addr="account-a"),
+        refresh_token=make_jwt(now + 7200, addr="account-a"),
+    )
+    auth._token_expires_at = 0
+    connecting = asyncio.create_task(api.socket.connect())
+    for _ in range(100):
+        if refresh_client.calls:
+            break
+        await asyncio.sleep(0)
+    assert len(refresh_client.calls) == 1
+
+    await api.aclose()
+    refresh_client.release.set()
+    # Closing ended the session, but the account did not change.
+    with pytest.raises(RequestSessionError) as raised:
+        await connecting
+    assert raised.value.reason == "clientClosed"
+    assert "account changed" not in str(raised.value)
+    assert opened == []
 
 
 @pytest.mark.asyncio

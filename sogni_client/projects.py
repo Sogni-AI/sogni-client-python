@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from .assets import ReusableUploads
 from .attribution import workload_attribution_to_wire_fields
+from .auth import ACCOUNT_CHANGED_MESSAGE, RequestSessionError, request_session_ended
 from .errors import ApiError, ProjectError
 from .events import DataEntity, EventEmitter
 from .personal_loras import PersonalLoras
@@ -3031,6 +3032,11 @@ class Project(DataEntity):
                 if not self.finished:
                     self._keep_alive()
                 return
+        except RequestSessionError:
+            # The session ended mid-check (sign-out, account change or the
+            # client closing). That is not a failed sync, and the project no
+            # longer has an owner to keep watching it for.
+            return
         except Exception:
             # An inconclusive request must not cancel a potentially live render.
             self._failed_sync_attempts = 0
@@ -3204,6 +3210,9 @@ class ProjectsApi(EventEmitter):
         # one sent after.
         self._transport_generation = 0
         self._session_version = 0
+        # Set once the client closed; work it cut short says so instead of
+        # reporting an account change that did not happen.
+        self._client_closed = False
         # The transport generation each request was written on, for requests
         # whose send completed. A request written on a connection that has since
         # dropped and that the server never saw died with that connection.
@@ -3245,15 +3254,22 @@ class ProjectsApi(EventEmitter):
         client.on("disconnected", self._handle_disconnect)
         client.on("connected", self._handle_connect)
         client.on("sessionChanged", self._handle_session_changed)
+        client.on("closed", self._handle_client_closed)
 
     def _capture_session(self) -> Callable[[], None]:
         version = self._session_version
 
         def check() -> None:
             if version != self._session_version:
-                raise RuntimeError("The account changed. Submit this request again.")
+                raise request_session_ended(self._client_closed)
 
         return check
+
+    def _handle_client_closed(self, _data: Any) -> None:
+        # The client was closed, not signed out: work it cuts short ends with
+        # its session and reports that the client closed.
+        self._client_closed = True
+        self._session_version += 1
 
     def _handle_session_changed(self, _data: Any) -> None:
         self._session_version += 1
@@ -3269,10 +3285,7 @@ class ProjectsApi(EventEmitter):
                 project._update(
                     {
                         "status": "failed",
-                        "error": {
-                            "code": 0,
-                            "message": "The account changed. Submit this request again.",
-                        },
+                        "error": {"code": 0, "message": ACCOUNT_CHANGED_MESSAGE},
                     }
                 )
             project._dispose()
