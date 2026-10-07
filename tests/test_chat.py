@@ -245,6 +245,33 @@ def test_seedance25_uncensored_selector_keeps_its_own_model_id() -> None:
     assert "seedance2-5-uncensored" not in animate_photo["videoModel"]["enum"]
 
 
+def test_seedance_mini_uncensored_selector_keeps_its_own_model_id() -> None:
+    # Never seedance-2-0-mini or seedance-2-0, including on the sound and v2v
+    # paths where the plain seedance2-mini selector does not stay on Mini.
+    for tool_name, args in (
+        ("generate_video", {}),
+        ("generate_video", {"referenceImageIndices": [-1]}),
+        ("video_to_video", {}),
+        ("sound_to_video", {}),
+    ):
+        for selector in ("seedance2-mini-uncensored", "seedance-2-0-mini-uncensored"):
+            resolved = ChatToolsApi._resolve_model(tool_name, {**args, "videoModel": selector})
+            assert resolved == "seedance-2-0-mini-uncensored", (tool_name, selector)
+
+    definitions = {item["function"]["name"]: item for item in SogniTools.all}
+    for tool_name in (
+        "generate_video",
+        "sound_to_video",
+        "video_to_video",
+        "extend_video",
+        "replace_video_segment",
+    ):
+        enum = definitions[tool_name]["function"]["parameters"]["properties"]["videoModel"]["enum"]
+        assert enum[enum.index("seedance2-mini") + 1] == "seedance2-mini-uncensored", tool_name
+    animate_photo = definitions["animate_photo"]["function"]["parameters"]["properties"]
+    assert "seedance2-mini-uncensored" not in animate_photo["videoModel"]["enum"]
+
+
 def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -> None:
     def t2v(selector: str) -> str | None:
         return ChatToolsApi._resolve_model("generate_video", {"videoModel": selector})

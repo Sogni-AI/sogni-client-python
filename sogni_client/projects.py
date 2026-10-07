@@ -238,6 +238,8 @@ _MINIMAX_H3_MAX_REFERENCE_FILES = 12
 _SEEDANCE_REFERENCE_LIMITS = {
     "seedance-2-0": (9, 3, 3, 12),
     "seedance-2-0-mini": (9, 3, 3, 12),
+    # Seedance 2.0 Mini Uncensored: the same model and limits as Seedance 2.0 Mini.
+    "seedance-2-0-mini-uncensored": (9, 3, 3, 12),
     "seedance-2-0-fast": (9, 3, 3, 12),
     "seedance-2-5": (30, 10, 10, 50),
     # Seedance 2.5 Uncensored: the same model and limits as Seedance 2.5.

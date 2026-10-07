@@ -720,6 +720,64 @@ def test_seedance25_uncensored_keeps_its_id_and_every_seedance25_limit() -> None
     assert exported["keyFrames"][0]["returnLastFrame"] is True
 
 
+@pytest.mark.parametrize("model_id", ["seedance-2-0-mini", "seedance-2-0-mini-uncensored"])
+def test_seedance_mini_uncensored_keeps_its_id_and_every_mini_limit(model_id: str) -> None:
+    def mini(**overrides: Any) -> dict[str, Any]:
+        return _seedance_request(modelId=model_id, **overrides)
+
+    def urls(kind: str, count: int, extension: str) -> list[str]:
+        return [f"https://cdn.example/{kind}-{index}.{extension}" for index in range(count)]
+
+    maximum = mini(
+        referenceImageUrls=urls("image", 6, "jpg"),
+        referenceVideoUrls=urls("video", 3, "mp4"),
+        referenceAudioUrls=urls("audio", 3, "mp3"),
+    )["keyFrames"][0]
+    assert maximum["modelID"] == model_id
+    assert len(maximum["referenceImageURLs"]) == 6
+    assert len(maximum["referenceVideoURLs"]) == 3
+    assert len(maximum["referenceAudioURLs"]) == 3
+    assert (
+        len(mini(referenceImageUrls=urls("image", 9, "jpg"))["keyFrames"][0]["referenceImageURLs"])
+        == 9
+    )
+    for overrides, message in (
+        ({"referenceImageUrls": urls("image", 10, "jpg")}, "at most 9 image"),
+        ({"referenceVideoUrls": urls("video", 4, "mp4")}, "at most 3 video"),
+        (
+            {
+                "referenceImageUrls": urls("image", 1, "jpg"),
+                "referenceAudioUrls": urls("audio", 4, "mp3"),
+            },
+            "at most 3 audio",
+        ),
+        (
+            {
+                "referenceImageUrls": urls("image", 9, "jpg"),
+                "referenceVideoUrls": urls("video", 3, "mp4"),
+                "referenceAudioUrls": urls("audio", 1, "mp3"),
+            },
+            "at most 12 total",
+        ),
+    ):
+        with pytest.raises(ApiError, match=f"{model_id} supports {message}"):
+            mini(**overrides)
+    with pytest.raises(ApiError, match="audio references require at least one image or video"):
+        mini(referenceAudioUrls=["https://cdn.example/voice.mp3"])
+    with pytest.raises(ApiError, match="supported only by Seedance 2.5"):
+        mini(referenceVideoUrls=["https://cdn.example/source.mp4"], seedanceTaskType="edit")
+
+    assert mini(duration=15)["keyFrames"][0]["frames"] == 15 * 24 + 1
+    assert mini(duration=4)["keyFrames"][0]["frames"] == 4 * 24 + 1
+    for duration in (16, 3):
+        with pytest.raises(ValueError, match="between 4 and 15"):
+            mini(duration=duration)
+    with pytest.raises(ApiError, match="only by Seedance 2.5"):
+        mini(outputFormat="mov")
+    with pytest.raises(ApiError, match="only by Seedance 2.5"):
+        mini(returnLastFrame=True)
+
+
 @pytest.mark.asyncio
 async def test_model_consent_refusal_keeps_the_agreement_on_the_project_error() -> None:
     consent = {"key": "seedance-2-5-uncensored", "version": 1, "modelId": "seedance-2-5-uncensored"}
@@ -765,6 +823,50 @@ async def test_model_consent_refusal_keeps_the_agreement_on_the_project_error() 
     api._handle_job_error({"jobID": "other", "error": "4102", "error_message": "Too long."})
     assert "consentRequired" not in events[-1]["error"]
     assert not sogni_client.is_model_consent_required_error(events[-1]["error"])
+
+
+@pytest.mark.asyncio
+async def test_mini_uncensored_consent_refusal_names_the_shared_agreement() -> None:
+    # Seedance 2.0 Mini Uncensored shares the Seedance 2.5 Uncensored agreement:
+    # the key stays the shared one and modelId names the refused model.
+    consent = {
+        "key": "seedance-2-5-uncensored",
+        "version": 2,
+        "modelId": "seedance-2-0-mini-uncensored",
+    }
+    message = (
+        "Seedance 2.0 Mini Uncensored requires a one-time likeness and consent agreement. "
+        "Review and accept it in the Sogni app, then try again."
+    )
+    api = ProjectsApi(FakeClient())
+    project = Project(
+        {
+            "type": "video",
+            "modelId": "seedance-2-0-mini-uncensored",
+            "positivePrompt": "Harbor at dusk",
+            "numberOfMedia": 1,
+        },
+        api,
+    )
+    api._projects.append(project)
+    waiting = asyncio.create_task(project.wait_for_completion())
+
+    api._handle_job_error(
+        {
+            "jobID": project.id,
+            "isFromWorker": False,
+            "error": "4103",
+            "error_message": message,
+            "consentRequired": consent,
+        }
+    )
+
+    with pytest.raises(ProjectError) as raised:
+        await waiting
+    assert str(raised.value) == message
+    assert raised.value.code == sogni_client.MODEL_CONSENT_REQUIRED_ERROR_CODE
+    assert raised.value.consent_required == consent
+    assert sogni_client.is_model_consent_required_error(raised.value)
 
 
 async def test_model_not_yet_available_refusal_keeps_the_socket_message() -> None:

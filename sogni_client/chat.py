@@ -473,6 +473,9 @@ class ChatToolsApi:
         "wan22": "wan_v2.2-14b-fp8_t2v_lightx2v",
         "seedance2": "seedance-2-0",
         "seedance2-mini": "seedance-2-0-mini",
+        # Seedance 2.0 Mini Uncensored keeps its own id; never route it to
+        # seedance-2-0-mini or seedance-2-0.
+        "seedance2-mini-uncensored": "seedance-2-0-mini-uncensored",
         "seedance2-fast": "seedance-2-0-mini",
         "seedance2-5": "seedance-2-5",
         # Seedance 2.5 Uncensored keeps its own id; never route it to seedance-2-5.
@@ -506,6 +509,7 @@ class ChatToolsApi:
         "wan22": "wan_v2.2-14b-fp8_i2v_lightx2v",
         "seedance2": "seedance-2-0",
         "seedance2-mini": "seedance-2-0-mini",
+        "seedance2-mini-uncensored": "seedance-2-0-mini-uncensored",
         "seedance2-fast": "seedance-2-0-mini",
         "seedance2-5": "seedance-2-5",
         "seedance2-5-uncensored": "seedance-2-5-uncensored",
@@ -541,6 +545,7 @@ class ChatToolsApi:
         "wan-s2v": "wan_v2.2-14b-fp8_s2v_lightx2v",
         "seedance2": "seedance-2-0",
         "seedance2-mini": "seedance-2-0",
+        "seedance2-mini-uncensored": "seedance-2-0-mini-uncensored",
         "seedance2-fast": "seedance-2-0",
         "seedance2-5": "seedance-2-5",
         "seedance2-5-uncensored": "seedance-2-5-uncensored",
@@ -564,6 +569,7 @@ class ChatToolsApi:
         "ltx23": "ltx23-22b-fp8_v2v_distilled",
         "ltx23-v2v": "ltx23-22b-fp8_v2v_distilled",
         "seedance2": "seedance-2-0",
+        "seedance2-mini-uncensored": "seedance-2-0-mini-uncensored",
         "seedance2-5": "seedance-2-5",
         "seedance2-5-uncensored": "seedance-2-5-uncensored",
     }

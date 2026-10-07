@@ -139,6 +139,15 @@ def test_seedance25_uncensored_is_seedance25_under_its_own_id() -> None:
     assert calculate_video_frames("seedance-2-5-uncensored", 30, 24) == 721
 
 
+def test_seedance_mini_uncensored_is_mini_under_its_own_id() -> None:
+    assert is_seedance_model("seedance-2-0-mini-uncensored") is True
+    assert is_seedance25_model("seedance-2-0-mini-uncensored") is False
+    assert get_video_workflow_type("seedance-2-0-mini-uncensored") == get_video_workflow_type(
+        "seedance-2-0-mini"
+    )
+    assert calculate_video_frames("seedance-2-0-mini-uncensored", 15, 24) == 361
+
+
 def test_video_workflow_detection_rejects_family_invalid_suffixes() -> None:
     assert get_video_workflow_type("wan_v2.2-14b-fp8_v2v") is None
     assert get_video_workflow_type("seedance-2-0_a2v") is None
@@ -156,6 +165,11 @@ def test_video_workflow_detection_rejects_family_invalid_suffixes() -> None:
         ("seedance2-5-uncensored", False, False, False, False, False, False, False),
         ("seedance-2-5-uncensored-v2", False, False, False, False, False, False, False),
         ("seedance-2-5-spicy", False, False, False, False, False, False, False),
+        ("seedance-2-0-mini-uncensored", False, False, True, False, True, True, False),
+        # Explicit-id registry: near-miss ids are not Seedance 2.0 Mini Uncensored.
+        ("seedance2-mini-uncensored", False, False, False, False, False, False, False),
+        ("seedance-2-0-mini-uncensored-v2", False, False, False, False, False, False, False),
+        ("seedance-2-0-uncensored", False, False, False, False, False, False, False),
         ("happyhorse-1.1-r2v", False, False, False, True, True, True, False),
         ("ace_step_1.5_xl_turbo", False, False, False, False, False, False, True),
         (

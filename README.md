@@ -407,14 +407,18 @@ for an output format other than `mp4`/`mov`, or for a non-boolean
 `return_last_frame`. Chat tool results list `lastFrameUrls` when a frame was
 exported.
 
-## Seedance 2.5 Uncensored
+## Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored
 
 `seedance-2-5-uncensored` (hosted tool selector `seedance2-5-uncensored`) is
 Seedance 2.5 Uncensored: the same model with every Seedance 2.5 limit and option
-above, under its own model id. Each account must accept its one-time likeness
-and consent agreement in a Sogni app first; until then its jobs fail with
-`MODEL_CONSENT_REQUIRED_ERROR_CODE` (4103). The client never accepts the
-agreement, and retrying fails the same way until it is accepted.
+above, under its own model id. `seedance-2-0-mini-uncensored` (hosted tool
+selector `seedance2-mini-uncensored`) is Seedance 2.0 Mini Uncensored: Seedance
+2.0 Mini with every Mini limit (480p/720p, 4-15 s, 9 images / 3 videos / 3
+audios / 12 files) under its own model id. The two share one likeness and
+consent agreement: each account must accept it in a Sogni app first; until then
+their jobs fail with `MODEL_CONSENT_REQUIRED_ERROR_CODE` (4103). The client
+never accepts the agreement, and retrying fails the same way until it is
+accepted.
 
 A model that is not yet available on a network is refused with
 `MODEL_NOT_YET_AVAILABLE_ERROR_CODE` (4104). Show the error's message as is (it
@@ -427,7 +431,7 @@ try:
     await project.wait_for_completion()
 except ProjectError as error:
     if is_model_consent_required_error(error):
-        # error.consent_required == {"key": "seedance-2-5-uncensored", "version": 1, ...}
+        # error.consent_required == {"key": "seedance-2-5-uncensored", "version": 2, ...}
         print(error)  # tells the user to accept the agreement in the Sogni app
 ```
 
@@ -937,7 +941,8 @@ Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
 Two-Stage 720p/1080p/2K ids, plus intermediate keyframes on every mode but t2v),
-Seedance 2.5 and Seedance 2.5 Uncensored, Wan 3 and Wan 3.0 Enhanced,
+Seedance 2.5, Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored, Wan 3
+and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
 segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,

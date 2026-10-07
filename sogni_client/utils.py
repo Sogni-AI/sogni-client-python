@@ -40,6 +40,8 @@ _WAN_VIDEO_MODEL_IDS = {
 _SEEDANCE_VIDEO_MODEL_IDS = {
     "seedance-2-0",
     "seedance-2-0-mini",
+    # Seedance 2.0 Mini Uncensored: Mini under its own id, with Mini's limits.
+    "seedance-2-0-mini-uncensored",
     "seedance-2-0-fast",
     "seedance-2-5",
     "seedance-2-5-uncensored",
