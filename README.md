@@ -764,6 +764,45 @@ servers simply leave these fields empty. The SDK automatically requests the
 `projectQueue` socket subscription; integrations may explicitly disable it with
 `socket_event_subscriptions={"projectQueue": False}`.
 
+## Hosted world builds
+
+A hosted world build renders the paths, moments and collectibles a person chose
+for one scene of their Sogni World in the background, with the account's own
+key, while they are away. It starts from a signed-in session (an API key cannot
+author a world), pauses for the quote before anything paid, and pauses again
+when finished takes await review; publication stays in the World studio.
+
+```python
+run = await client.worlds.builds.start(
+    world_id=world_id,
+    node_id=opening_scene_id,
+    look="storybook watercolor",
+    hotspots=[
+        {"kind": "path", "object": "the red door", "leadsTo": "The Garden",
+         "action": {"verb": "Open", "subject": "the red door", "intent": "Step through into the garden"}},
+        {"kind": "moment", "object": "the brass bell",
+         "action": {"verb": "Ring", "subject": "the brass bell", "intent": "It tolls once"}},
+    ],
+)
+async for event in client.worlds.builds.stream_events(run["runId"]):
+    if event["type"] == "run_waiting":
+        break
+run = await client.worlds.builds.get(run["runId"])
+if run["waiting"]["reason"] == "cost_approval_required":
+    run = await client.worlds.builds.confirm_cost(run["runId"], "confirm")
+```
+
+`run["waiting"]["reason"]` says what the build needs: `cost_approval_required`
+(a quote is good for ten minutes; `confirm_cost(run_id, "requote")` asks for a
+fresh one), `review_required` (answer each take with
+`review(run_id, task_id, "approved")` or `review(run_id, task_id, "rejected", note=...)`;
+a rejection with a note buys one rewrite) or `insufficient_credit` (add credit,
+then `confirm_cost(run_id, "confirm")`). Each task's `generationId` (a path) or
+`interactionId` (a moment or collectible) is the World record to publish from
+the studio once approved. `list(world_id=...)`, `events(run_id, after=...)` and
+`cancel(run_id)` complete the surface; `stream_events` replays after
+`last_event_id` and skips the `run_status` snapshot frames.
+
 ## Announcements
 
 Admin-authored in-app announcements — maintenance notices, launches — arrive on
@@ -888,7 +927,7 @@ blur it.
 
 ## Compatibility
 
-This release tracks the TypeScript SDK at `5.61.0`. The
+This release tracks the TypeScript SDK at `5.62.0`. The
 REST, WebSocket, and SSE contracts are covered by credential-free protocol
 tests, including authentication refresh, uploads, project state recovery,
 streaming chat, workflows, templates, replay, and the canonical 30 hosted-tool

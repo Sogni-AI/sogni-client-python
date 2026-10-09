@@ -103,8 +103,14 @@ from .workflows import (
     CreativeWorkflowsApi,
     CreativeWorkflowTemplatesApi,
 )
+from .worlds import (
+    WORLD_BUILD_WAITING_REASONS,
+    WorldBuildsApi,
+    WorldsApi,
+    is_world_build_terminal,
+)
 
-__version__ = "5.61.0"
+__version__ = "5.62.0"
 
 __all__ = [
     "BIREFNET_BACKGROUND_REMOVAL_MODEL_ID",
@@ -146,6 +152,10 @@ __all__ = [
     "ProjectError",
     "ProjectsApi",
     "ReplayApi",
+    "WORLD_BUILD_WAITING_REASONS",
+    "WorldBuildsApi",
+    "WorldsApi",
+    "is_world_build_terminal",
     "SogniClient",
     "SogniError",
     "SogniTools",

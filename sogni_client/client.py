@@ -16,6 +16,7 @@ from .replay import ReplayApi
 from .stats import StatsApi
 from .transport import ApiClient
 from .workflows import CreativeWorkflowsApi
+from .worlds import WorldsApi
 
 
 class SogniClient:
@@ -37,6 +38,7 @@ class SogniClient:
         self.stats = StatsApi(api_client)
         self.chat = ChatApi(api_client, self.projects)
         self.workflows = CreativeWorkflowsApi(api_client)
+        self.worlds = WorldsApi(api_client)
         self.replay = ReplayApi(api_client)
         self.announcements = AnnouncementsApi(api_client)
         self._closed = False
