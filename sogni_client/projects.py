@@ -2116,6 +2116,8 @@ def create_job_request_message(
         template["embedPromptMetadata"] = params["embedPromptMetadata"]
     if params.get("appSource"):
         template["appSource"] = params["appSource"]
+    if params.get("promptExpanded") is not None:
+        template["promptExpanded"] = params["promptExpanded"]
     # JSON.stringify in the JS client omits undefined keys.
     return {key: value for key, value in template.items() if value is not None}
 

@@ -134,6 +134,9 @@ def project_params_from_recovered_project(project: Mapping[str, Any]) -> dict[st
         if isinstance(value, str) and value:
             base[target] = value
 
+    if project.get("promptExpanded") is not None:
+        base["promptExpanded"] = project["promptExpanded"]
+
     steps = (
         project.get("stepCount") if _is_number(project.get("stepCount")) else key_frame.get("steps")
     )

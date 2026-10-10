@@ -4,6 +4,8 @@ An async Python SDK for image, video, audio, and LLM inference on the Sogni
 Supernet. It follows the public surface and wire protocol of the TypeScript
 `sogni-client`, while using Python naming conventions and async iterators.
 
+Projects accept optional `promptExpanded` (Python: `prompt_expanded`), a boolean reporting whether the submitted prompt was expanded. Omission means unknown; this does not enable expansion.
+
 > The Python port is currently beta. Keep credentials in environment variables
 > or your system keychain; never commit them to source control.
 
