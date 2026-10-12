@@ -269,14 +269,22 @@ class TokenAuthManager(AuthManager):
                 body if isinstance(body, dict) else None,
                 response.headers.get("retry-after"),
             )
-        data = body.get("data", {})
-        token = data.get("token")
-        refresh_token = data.get("refreshToken")
-        if not token or not refresh_token:
+        data = body.get("data") if isinstance(body, dict) else None
+        token = data.get("token") if isinstance(data, dict) else None
+        refresh_token = data.get("refreshToken") if isinstance(data, dict) else None
+        # A 2xx body that is not a token pair (for example from another service on a
+        # misconfigured endpoint) signs out instead of keeping the old refresh token.
+        try:
+            if not isinstance(token, str) or not isinstance(refresh_token, str):
+                raise ValueError("missing token")
+            token_exp = float(_decode_jwt(token).get("exp", 0))
+            refresh_exp = float(_decode_jwt(refresh_token).get("exp", 0))
+        except ValueError as error:
             self.clear()
-            raise ValueError("Token refresh response did not include both tokens")
-        token_exp = float(_decode_jwt(token).get("exp", 0))
-        refresh_exp = float(_decode_jwt(refresh_token).get("exp", 0))
+            raise ValueError(
+                "Token refresh response did not include a valid token pair "
+                f"(HTTP {response.status_code})"
+            ) from error
         self._set_tokens(token, refresh_token, token_exp, refresh_exp)
         return token
 

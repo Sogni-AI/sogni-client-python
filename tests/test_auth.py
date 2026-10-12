@@ -245,24 +245,49 @@ async def test_non_json_refresh_failure_keeps_real_http_status() -> None:
     assert raised.value.error_code == 502
 
 
+# A service other than the Sogni API answering on a misconfigured endpoint can
+# return 2xx JSON that is not a token pair.
 @pytest.mark.asyncio
-async def test_refresh_success_without_both_tokens_is_rejected_and_cleared() -> None:
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(lambda access: {"status": "ok"}, id="no-data"),
+        pytest.param(lambda access: [], id="array"),
+        pytest.param(lambda access: {"status": "success", "data": None}, id="null-data"),
+        pytest.param(
+            lambda access: {"status": "success", "data": {"token": access}},
+            id="no-refresh-token",
+        ),
+        pytest.param(
+            lambda access: {"status": "success", "data": {"token": "x", "refreshToken": "y"}},
+            id="malformed-tokens",
+        ),
+        pytest.param(
+            lambda access: {"status": "success", "data": {"token": access, "refreshToken": "y"}},
+            id="malformed-refresh-token",
+        ),
+    ],
+)
+async def test_refresh_success_without_a_valid_token_pair_is_rejected_and_cleared(
+    body: Any,
+) -> None:
     now = time.time()
     access = make_jwt(now + 3600)
     refresh = make_jwt(now + 7200)
-    auth = TokenAuthManager(
-        "https://api.sogni.ai",
-        refresh_client=FakeRefreshClient(
-            json_response(200, {"status": "success", "data": {"token": access}})
-        ),
-    )
+    client = FakeRefreshClient(json_response(200, body(access)))
+    auth = TokenAuthManager("https://api.sogni.ai", refresh_client=client)
     await auth.authenticate(token=access, refresh_token=refresh)
     auth._token_expires_at = 0
+    updates: list[bool] = []
+    auth.on("updated", updates.append)
 
-    with pytest.raises(ValueError, match="both tokens"):
+    with pytest.raises(ValueError, match=r"did not include a valid token pair \(HTTP 200\)"):
         await auth.headers()
 
     assert auth.is_authenticated is False
+    assert updates == [False]
+    assert await auth.headers() == {}
+    assert len(client.calls) == 1
 
 
 @pytest.mark.asyncio
