@@ -594,7 +594,15 @@ def get_video_workflow_type(model_id: str) -> str | None:
     return None
 
 
-def detect_content_type(value: Any) -> str | None:
+def detect_content_type(value: Any, slot: str | None = None) -> str | None:
+    """The media type a reference carries, from its path or its first bytes.
+
+    ``slot`` is the keyframe slot the bytes fill (``"audio"`` or ``"video"``):
+    an Ogg or EBML (WebM) container carries either, and the bytes do not say
+    which, so the audio slots declare ``audio/ogg`` / ``audio/webm`` and the
+    video slots ``video/ogg`` / ``video/webm``. Mirrors the TypeScript client.
+    """
+
     if isinstance(value, (str, Path)):
         return mimetypes.guess_type(str(value))[0]
     raw = bytes(value) if isinstance(value, (bytes, bytearray, memoryview)) else b""
@@ -610,6 +618,12 @@ def detect_content_type(value: Any) -> str | None:
         return "audio/wav"
     if raw.startswith(b"ID3") or (len(raw) >= 2 and raw[0] == 0xFF and raw[1] & 0xE0 == 0xE0):
         return "audio/mpeg"
+    if raw.startswith(b"fLaC"):
+        return "audio/flac"
+    if raw.startswith(b"OggS"):
+        return "video/ogg" if slot == "video" else "audio/ogg"
+    if raw.startswith(b"\x1a\x45\xdf\xa3"):
+        return "audio/webm" if slot == "audio" else "video/webm"
     if len(raw) >= 12 and raw[4:8] == b"ftyp":
         brand = raw[8:12].lower()
         if b"m4a" in brand or b"m4b" in brand:

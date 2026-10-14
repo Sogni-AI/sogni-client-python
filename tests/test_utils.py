@@ -231,10 +231,28 @@ def test_get_video_workflow_type(model: str, expected: str | None) -> None:
         (b"\x00\x00\x00\x18ftypM4A ", "audio/mp4"),
         (b"\x00\x00\x00\x18ftypqt  ", "video/quicktime"),
         (b"\x00\x00\x00\x18ftypisom", "video/mp4"),
+        (b"fLaC\x00\x00\x00\x22", "audio/flac"),
     ],
 )
 def test_detect_content_type_by_signature(raw: bytes, expected: str) -> None:
     assert detect_content_type(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "slot", "expected"),
+    [
+        (b"OggS\x00\x02", "audio", "audio/ogg"),
+        (b"OggS\x00\x02", None, "audio/ogg"),
+        (b"OggS\x00\x02", "video", "video/ogg"),
+        (b"\x1a\x45\xdf\xa3\x9f\x42", "audio", "audio/webm"),
+        (b"\x1a\x45\xdf\xa3\x9f\x42", "video", "video/webm"),
+        (b"\x1a\x45\xdf\xa3\x9f\x42", None, "video/webm"),
+    ],
+)
+def test_detect_content_type_declares_ogg_and_webm_by_slot(
+    raw: bytes, slot: str | None, expected: str
+) -> None:
+    assert detect_content_type(raw, slot) == expected
 
 
 def test_detect_content_type_and_read_media_support_paths_and_binary_files(tmp_path) -> None:

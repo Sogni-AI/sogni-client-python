@@ -3683,7 +3683,14 @@ class ProjectsApi(EventEmitter):
 
     async def _upload_asset(self, job_id: str, role: str, value: Any, *, media: bool) -> str | None:
         assert_session = self._capture_session()
-        content_type = detect_content_type(value)
+        slot = (
+            "audio"
+            if role.startswith("referenceAudio")
+            else "video"
+            if role.startswith("referenceVideo")
+            else None
+        )
+        content_type = detect_content_type(value, slot)
         body = read_media(value)
         bound = await self.assets.try_bind_file(
             body, content_type, _saved_upload_binding(job_id, role)
