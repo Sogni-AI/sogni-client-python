@@ -604,6 +604,48 @@ def stop_timers(api: ProjectsApi) -> None:
             project._timeout_handle.cancel()
 
 
+async def test_reference_preparation_does_not_consume_admission_grace() -> None:
+    api, client, _events, _synced = restart_harness()
+    api._recovery_tuning["recently_created_grace_seconds"] = 5
+    api.get_model_options = AsyncMock(
+        return_value={
+            "type": "image",
+            "sampler": {"allowed": [], "default": None},
+            "scheduler": {"allowed": [], "default": None},
+        }
+    )
+
+    async def prepare(project: Project, _data: Any, _request: Any) -> None:
+        project._data["startedAt"] = datetime.now(timezone.utc) - timedelta(seconds=60)
+
+    api._process_assets = prepare
+    resolve = AsyncMock()
+    api.resolve_missing = resolve
+    project = await api.create(
+        {
+            "type": "image",
+            "modelId": "flux1-schnell-fp8",
+            "numberOfMedia": 1,
+            "positivePrompt": "a lighthouse at dusk",
+            "steps": 4,
+        }
+    )
+    resolve.return_value = {project.id: {"state": "lost"}}
+    try:
+        snapshot = {"activeProjects": [], "unclaimedCompletedProjects": []}
+        fresh = await api._reconcile(snapshot, "manual", time.time())
+        assert fresh["lost"] == []
+        assert not project.finished
+        resolve.assert_not_awaited()
+        assert client.rest.calls == []
+        absent = await api._reconcile(snapshot, "manual", time.time() + 6)
+        assert absent["lost"] == [project.id]
+        resolve.assert_awaited_once()
+    finally:
+        stop_timers(api)
+        settle(project)
+
+
 async def test_a_recoverable_drop_defers_project_timeouts_too() -> None:
     # `connecting` (the socket-deploy path) is a recoverable drop;
     # `disconnected` is only emitted for terminal closes.

@@ -3207,6 +3207,8 @@ class ProjectsApi(EventEmitter):
         self._unadmitted_requests: dict[str, dict[str, Any]] = {}
         # Projects waiting for a reconnect to be resubmitted on.
         self._awaiting_resubmit: set[str] = set()
+        # Initial sends finish after model lookups and reference preparation.
+        self._submitted_at: dict[str, float] = {}
         # When each resubmitted project was last sent (epoch seconds), for the
         # recently-created grace.
         self._resubmitted_at: dict[str, float] = {}
@@ -3296,6 +3298,7 @@ class ProjectsApi(EventEmitter):
         self._projects.clear()
         self._unadmitted_requests.clear()
         self._awaiting_resubmit.clear()
+        self._submitted_at.clear()
         self._resubmitted_at.clear()
         self._sent_on_generation.clear()
         self._recovered_completed_ids.clear()
@@ -3557,6 +3560,7 @@ class ProjectsApi(EventEmitter):
             await self.client.socket.send("jobRequest", request)
             assert_session()
             self._sent_on_generation[project.id] = self._transport_generation
+            self._submitted_at[project.id] = time.time()
             self._projects.append(project)
             return project
         except BaseException:
@@ -5762,6 +5766,7 @@ class ProjectsApi(EventEmitter):
 
     def _forget_submission(self, project_id: str) -> None:
         self._unadmitted_requests.pop(project_id, None)
+        self._submitted_at.pop(project_id, None)
         self._resubmitted_at.pop(project_id, None)
         self._sent_on_generation.pop(project_id, None)
 
@@ -5862,7 +5867,10 @@ class ProjectsApi(EventEmitter):
         )
 
     def _last_submitted_at(self, project: Project) -> float:
-        return max(project.started_at.timestamp(), self._resubmitted_at.get(project.id, 0.0))
+        return max(
+            self._submitted_at.get(project.id, project.started_at.timestamp()),
+            self._resubmitted_at.get(project.id, 0.0),
+        )
 
     def _handle_connect(self, _data: Any) -> None:
         self._transport_disconnected = False
