@@ -350,6 +350,14 @@ def test_gpt_image_models_share_reference_and_size_limits(model_id: str) -> None
         gpt_request(modelId=model_id, contextImages=[PNG] * 17)
 
 
+def test_flux3_image_klein_takes_sizes_up_to_4096() -> None:
+    assert _custom_image_size_bounds("flux3_image_klein_sd_int8_convrot") == (256, 4096)
+    keyframe = gpt_request(modelId="flux3_image_klein_sd_int8_convrot", width=4096, height=4096)
+    assert (keyframe["width"], keyframe["height"]) == (4096, 4096)
+    with pytest.raises(ValueError, match="Width"):
+        gpt_request(modelId="flux3_image_klein_sd_int8_convrot", width=4112, height=1024)
+
+
 def test_gpt_image_quality_background_and_compression_follow_the_model() -> None:
     with pytest.raises(ApiError, match=r"auto\. Choose low, medium or high, xhigh or max\."):
         gpt_request(modelId="gpt-image-2.5-flare", gptImageQuality="auto")

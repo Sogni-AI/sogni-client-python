@@ -286,7 +286,7 @@ _KREA_IDENTITY_EDIT_MODEL_IDS = {
     "krea2_identity_edit_v1_2",
     "dark_beast_krea2_identity_edit_v1_2",
 }
-# FLUX 3 Image Klein: text-to-image, start image and edits from 1-10 references.
+# FLUX 3 Image Klein: text-to-image, start image and edits from 1-10 references, 256-4096px.
 FLUX3_IMAGE_KLEIN_MODEL_ID = "flux3_image_klein_sd_int8_convrot"
 _PROJECT_TIMEOUT_SECONDS = 2 * 60
 _MAX_FAILED_SYNC_ATTEMPTS = 3
@@ -581,6 +581,8 @@ def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
         return 512, 2048
     if is_gpt_image_model(model_id):
         return 256, 3840
+    if model_id == FLUX3_IMAGE_KLEIN_MODEL_ID:
+        return 256, 4096
     if model_id in _EXTENDED_IMAGE_SIZE_MODEL_IDS:
         return 256, 2560
     return 256, 2048
