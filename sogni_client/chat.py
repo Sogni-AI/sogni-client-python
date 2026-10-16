@@ -455,7 +455,7 @@ class ChatToolsApi:
         "z-turbo": "z_image_turbo_bf16",
         "krea2-turbo": "krea2_turbo_fp8_scaled",
         "krea-2-turbo": "krea2_turbo_fp8_scaled",
-        # FLUX 3 Image Klein serves generate_image and edit_image (1-6 references).
+        # FLUX 3 Image Klein serves generate_image and edit_image (1-10 references).
         "flux-3-klein": "flux3_image_klein_sd_int8_convrot",
         "flux3-klein": "flux3_image_klein_sd_int8_convrot",
         "flux-3-image-klein": "flux3_image_klein_sd_int8_convrot",
