@@ -1311,6 +1311,48 @@ async def test_krea_identity_edit_uploads_context_image_and_enforces_limit() -> 
 
 
 @pytest.mark.asyncio
+async def test_flux3_image_klein_is_a_comfy_model_with_six_references() -> None:
+    client = FakeClient([{"data": {"uploadUrl": f"https://upload.example/{i}"}} for i in range(6)])
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(
+        return_value=model_options(
+            "image",
+            sampler={"allowed": ["euler", "er_sde"], "default": "euler"},
+            scheduler={"allowed": ["simple"], "default": "simple"},
+        )
+    )
+
+    await api.create(
+        type="image",
+        model_id="flux3_image_klein_sd_int8_convrot",
+        positive_prompt="The person from the first image in the jacket from the sixth image.",
+        number_of_media=1,
+        width=1024,
+        height=1024,
+        steps=16,
+        sampler="euler",
+        scheduler="simple",
+        context_images=[PNG] * 6,
+    )
+
+    keyframe = client.socket.sent[-1][1]["keyFrames"][0]
+    assert keyframe["modelID"] == "flux3_image_klein_sd_int8_convrot"
+    assert keyframe["comfySampler"] == "euler"
+    assert keyframe["comfyScheduler"] == "simple"
+    assert all(keyframe[f"hasContextImage{i}"] is True for i in range(1, 7))
+    assert keyframe["hasContextImage7"] is False
+
+    with pytest.raises(ApiError, match="Up to 6 context images"):
+        await api.create(
+            type="image",
+            model_id="flux3_image_klein_sd_int8_convrot",
+            positive_prompt="Too many references.",
+            number_of_media=1,
+            context_images=[PNG] * 7,
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_normalizes_nested_control_net_python_names() -> None:
     client = FakeClient()
     api = ProjectsApi(client)

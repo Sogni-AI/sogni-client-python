@@ -1130,6 +1130,13 @@ async def test_chat_tools_forward_seedance_export_options_and_report_last_frames
     assert "lastFrameUrls" not in json.loads(plain["content"])
 
 
+def test_flux3_image_klein_selectors_route_on_generate_and_edit() -> None:
+    for tool_name in ("generate_image", "edit_image"):
+        for selector in ("flux-3-klein", "flux3-klein", "FLUX 3 Image Klein"):
+            resolved = ChatToolsApi._resolve_model(tool_name, {"model": selector})
+            assert resolved == "flux3_image_klein_sd_int8_convrot"
+
+
 @pytest.mark.asyncio
 async def test_chat_tools_generate_music_defaults_to_minimax_music3() -> None:
     class MusicProjects(FakeProjects):

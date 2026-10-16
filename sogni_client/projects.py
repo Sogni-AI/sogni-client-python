@@ -286,6 +286,8 @@ _KREA_IDENTITY_EDIT_MODEL_IDS = {
     "krea2_identity_edit_v1_2",
     "dark_beast_krea2_identity_edit_v1_2",
 }
+# FLUX 3 Image Klein: text-to-image, start image and edits from 1-6 references.
+FLUX3_IMAGE_KLEIN_MODEL_ID = "flux3_image_klein_sd_int8_convrot"
 _PROJECT_TIMEOUT_SECONDS = 2 * 60
 _MAX_FAILED_SYNC_ATTEMPTS = 3
 # How long after `connected` to wait for the server's `authenticated` frame
@@ -1760,6 +1762,7 @@ def create_job_request_message(
                 "krea2_",
                 "dark_beast_krea2_",
                 "qwen_image_",
+                "flux3_",
                 "wan_",
                 "ace_step",
                 "rtx_vsr_",
@@ -3589,6 +3592,8 @@ class ProjectsApi(EventEmitter):
             max_context = (
                 16
                 if is_gpt_image_model(data["modelId"])
+                else 6
+                if data["modelId"] == FLUX3_IMAGE_KLEIN_MODEL_ID
                 else 2
                 if "kontext" in data["modelId"] or "identity_edit" in data["modelId"]
                 else 3
