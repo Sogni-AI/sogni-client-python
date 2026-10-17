@@ -575,6 +575,8 @@ def _saved_upload_binding(project_id: str, role: str) -> dict[str, Any]:
 
 
 def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
+    if model_id in ("moss_image_sft_int8_convrot", "moss_image_sft_dmd8_int8_convrot"):
+        return 512, 2048
     if model_id == "rtx_vsr_pro":
         return 512, 15360
     if model_id in _KREA_IDENTITY_EDIT_MODEL_IDS:
@@ -1752,6 +1754,10 @@ def create_job_request_message(
 
     if project_type == "image":
         keyframe["sizePreset"] = params.get("sizePreset")
+        if params["modelId"] in ("moss_image_sft_int8_convrot", "moss_image_sft_dmd8_int8_convrot") and (
+            params.get("startingImage") or params.get("contextImages")
+        ):
+            raise _api_error("MOSS-Image SFT generates from text and does not accept guide or reference images.")
         contexts = params.get("contextImages") or []
         for index in range(1, 17):
             keyframe[f"hasContextImage{index}"] = (
@@ -1765,6 +1771,7 @@ def create_job_request_message(
                 "dark_beast_krea2_",
                 "qwen_image_",
                 "flux3_",
+                "moss_image_",
                 "wan_",
                 "ace_step",
                 "rtx_vsr_",

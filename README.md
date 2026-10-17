@@ -4,6 +4,15 @@ An async Python SDK for image, video, audio, and LLM inference on the Sogni
 Supernet. It follows the public surface and wire protocol of the TypeScript
 `sogni-client`, while using Python naming conventions and async iterators.
 
+MOSS-Image SFT uses `model_id="moss_image_sft_int8_convrot"` (hosted
+`model="moss-image"`), 50 steps, guidance 3, `sampler="euler"`, and
+`scheduler="sgm_uniform"`. Start at 1024×1024; dimensions are 512–2048 pixels,
+aligned to 16. It generates from text or experimental JSON layouts and accepts
+no guide or reference images. See the [model guide](https://docs.sogni.ai/models/moss-image/).
+The fast preset uses `model_id="moss_image_sft_dmd8_int8_convrot"` (hosted
+`model="moss-image-8step"`), exactly 8 steps and guidance 1. Sampler, scheduler
+and dimensions are the same. Both presets accept compatible Personal LoRAs.
+
 Projects accept optional `promptExpanded` (Python: `prompt_expanded`), a boolean reporting whether the submitted prompt was expanded. Omission means unknown; this does not enable expansion.
 
 > The Python port is currently beta. Keep credentials in environment variables

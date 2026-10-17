@@ -1137,6 +1137,14 @@ def test_flux3_image_klein_selectors_route_on_generate_and_edit() -> None:
             assert resolved == "flux3_image_klein_sd_int8_convrot"
 
 
+def test_moss_image_selectors_only_route_to_generation() -> None:
+    for selector in ("moss-image", "MOSS Image SFT"):
+        assert ChatToolsApi._resolve_model("generate_image", {"model": selector}) == "moss_image_sft_int8_convrot"
+        assert ChatToolsApi._resolve_model("edit_image", {"model": selector}) != "moss_image_sft_int8_convrot"
+    assert ChatToolsApi._resolve_model("generate_image", {"model": "moss-image-8step"}) == "moss_image_sft_dmd8_int8_convrot"
+    assert ChatToolsApi._resolve_model("edit_image", {"model": "moss-image-8step"}) != "moss_image_sft_dmd8_int8_convrot"
+
+
 @pytest.mark.asyncio
 async def test_chat_tools_generate_music_defaults_to_minimax_music3() -> None:
     class MusicProjects(FakeProjects):

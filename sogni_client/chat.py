@@ -455,6 +455,9 @@ class ChatToolsApi:
         "z-turbo": "z_image_turbo_bf16",
         "krea2-turbo": "krea2_turbo_fp8_scaled",
         "krea-2-turbo": "krea2_turbo_fp8_scaled",
+        "moss-image": "moss_image_sft_int8_convrot",
+        "moss-image-sft": "moss_image_sft_int8_convrot",
+        "moss-image-8step": "moss_image_sft_dmd8_int8_convrot",
         # FLUX 3 Image Klein serves generate_image and edit_image (1-10 references).
         "flux-3-klein": "flux3_image_klein_sd_int8_convrot",
         "flux3-klein": "flux3_image_klein_sd_int8_convrot",
@@ -462,7 +465,7 @@ class ChatToolsApi:
         "flux3-image-klein": "flux3_image_klein_sd_int8_convrot",
     }
     _EDIT_SELECTORS = {
-        **_IMAGE_SELECTORS,
+        **{key: value for key, value in _IMAGE_SELECTORS.items() if not key.startswith("moss-image")},
         "qwen-lightning": "qwen_image_edit_2511_fp8_lightning",
         "qwen": "qwen_image_edit_2511_fp8",
         "krea2-identity-edit": "krea2_identity_edit_v1_2",
