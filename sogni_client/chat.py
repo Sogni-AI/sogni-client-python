@@ -465,7 +465,11 @@ class ChatToolsApi:
         "flux3-image-klein": "flux3_image_klein_sd_int8_convrot",
     }
     _EDIT_SELECTORS = {
-        **{key: value for key, value in _IMAGE_SELECTORS.items() if not key.startswith("moss-image")},
+        **{
+            key: value
+            for key, value in _IMAGE_SELECTORS.items()
+            if not key.startswith("moss-image")
+        },
         "qwen-lightning": "qwen_image_edit_2511_fp8_lightning",
         "qwen": "qwen_image_edit_2511_fp8",
         "krea2-identity-edit": "krea2_identity_edit_v1_2",

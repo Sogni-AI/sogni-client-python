@@ -366,6 +366,18 @@ def test_hosted_two_stage_selectors_describe_the_delivered_canvas_classes() -> N
 
 
 def test_direct_hosted_tool_schemas_match_standalone_golden_fingerprints() -> None:
+    def sdk_key_order(value: object) -> object:
+        # Mirror the SDK's case-insensitive ordering for these ASCII schema keys.
+        # Python's default puts "loraStrengths" before "loras"; the SDK does not.
+        if isinstance(value, dict):
+            return {
+                key: sdk_key_order(child)
+                for key, child in sorted(value.items(), key=lambda item: item[0].casefold())
+            }
+        if isinstance(value, list):
+            return [sdk_key_order(child) for child in value]
+        return value
+
     fixture_path = Path(__file__).parent / "fixtures" / "hosted-tool-alias-parity.generated.json"
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     definitions = {item["function"]["name"]: item for item in SogniTools.all}
@@ -375,10 +387,9 @@ def test_direct_hosted_tool_schemas_match_standalone_golden_fingerprints() -> No
         parameters = definition["function"].get("parameters", {})
         value = {"name": definition["function"]["name"], "parameters": parameters}
         serialized = json.dumps(
-            value,
+            sdk_key_order(value),
             ensure_ascii=False,
             separators=(",", ":"),
-            sort_keys=True,
         )
         fingerprint = hashlib.sha256(serialized.encode()).hexdigest()
         properties = parameters.get("properties", {})
@@ -1139,10 +1150,22 @@ def test_flux3_image_klein_selectors_route_on_generate_and_edit() -> None:
 
 def test_moss_image_selectors_only_route_to_generation() -> None:
     for selector in ("moss-image", "MOSS Image SFT"):
-        assert ChatToolsApi._resolve_model("generate_image", {"model": selector}) == "moss_image_sft_int8_convrot"
-        assert ChatToolsApi._resolve_model("edit_image", {"model": selector}) != "moss_image_sft_int8_convrot"
-    assert ChatToolsApi._resolve_model("generate_image", {"model": "moss-image-8step"}) == "moss_image_sft_dmd8_int8_convrot"
-    assert ChatToolsApi._resolve_model("edit_image", {"model": "moss-image-8step"}) != "moss_image_sft_dmd8_int8_convrot"
+        assert (
+            ChatToolsApi._resolve_model("generate_image", {"model": selector})
+            == "moss_image_sft_int8_convrot"
+        )
+        assert (
+            ChatToolsApi._resolve_model("edit_image", {"model": selector})
+            != "moss_image_sft_int8_convrot"
+        )
+    assert (
+        ChatToolsApi._resolve_model("generate_image", {"model": "moss-image-8step"})
+        == "moss_image_sft_dmd8_int8_convrot"
+    )
+    assert (
+        ChatToolsApi._resolve_model("edit_image", {"model": "moss-image-8step"})
+        != "moss_image_sft_dmd8_int8_convrot"
+    )
 
 
 @pytest.mark.asyncio

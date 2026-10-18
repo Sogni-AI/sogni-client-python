@@ -358,16 +358,28 @@ def test_flux3_image_klein_takes_sizes_up_to_4096() -> None:
         gpt_request(modelId="flux3_image_klein_sd_int8_convrot", width=4112, height=1024)
 
 
-@pytest.mark.parametrize("model_id", ["moss_image_sft_int8_convrot", "moss_image_sft_dmd8_int8_convrot"])
+@pytest.mark.parametrize(
+    "model_id", ["moss_image_sft_int8_convrot", "moss_image_sft_dmd8_int8_convrot"]
+)
 def test_moss_image_uses_comfy_sampler_and_refuses_reference_assets(model_id: str) -> None:
     assert _custom_image_size_bounds(model_id) == (512, 2048)
-    frame = create_job_request_message("moss-wire", {
-        "type": "image", "modelId": model_id, "positivePrompt": "山海",
-        "width": 1024, "height": 1024, "sampler": "euler", "scheduler": "sgm_uniform",
-    }, {
-        "type": "image", "sampler": {"allowed": ["euler"], "default": "euler"},
-        "scheduler": {"allowed": ["sgm_uniform"], "default": "sgm_uniform"},
-    })["keyFrames"][0]
+    frame = create_job_request_message(
+        "moss-wire",
+        {
+            "type": "image",
+            "modelId": model_id,
+            "positivePrompt": "山海",
+            "width": 1024,
+            "height": 1024,
+            "sampler": "euler",
+            "scheduler": "sgm_uniform",
+        },
+        {
+            "type": "image",
+            "sampler": {"allowed": ["euler"], "default": "euler"},
+            "scheduler": {"allowed": ["sgm_uniform"], "default": "sgm_uniform"},
+        },
+    )["keyFrames"][0]
     assert frame["comfySampler"] == "euler"
     assert frame["comfyScheduler"] == "sgm_uniform"
     for assets in ({"startingImage": PNG}, {"contextImages": [PNG]}):
