@@ -1754,6 +1754,24 @@ def create_job_request_message(
 
     if project_type == "image":
         keyframe["sizePreset"] = params.get("sizePreset")
+        for name in ("mossRopeScaleX", "mossRopeScaleY"):
+            if name not in params:
+                continue
+            value = params[name]
+            if params["modelId"] not in (
+                "moss_image_sft_int8_convrot",
+                "moss_image_sft_dmd8_int8_convrot",
+            ):
+                raise _api_error(f"{name} is only supported by MOSS-Image")
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or not 0 <= value <= 100
+            ):
+                raise _api_error(f"{name} must be a finite number between 0 and 100")
+            if value != 1:
+                keyframe[name] = value
         if params["modelId"] in (
             "moss_image_sft_int8_convrot",
             "moss_image_sft_dmd8_int8_convrot",

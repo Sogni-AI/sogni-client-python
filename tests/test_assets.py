@@ -387,6 +387,25 @@ def test_moss_image_uses_comfy_sampler_and_refuses_reference_assets(model_id: st
             gpt_request(modelId=model_id, **assets)
 
 
+def test_moss_rope_scales_are_optional_and_match_js_wire_fields() -> None:
+    model = "moss_image_sft_int8_convrot"
+    base = {"modelId": model, "type": "image", "positivePrompt": "portrait"}
+    frame = create_job_request_message(
+        "scaled", {**base, "mossRopeScaleX": 0.5, "mossRopeScaleY": 0}, {"type": "image"}
+    )["keyFrames"][0]
+    assert frame["mossRopeScaleX"] == 0.5
+    assert frame["mossRopeScaleY"] == 0
+    neutral = create_job_request_message(
+        "neutral", {**base, "mossRopeScaleX": 1}, {"type": "image"}
+    )["keyFrames"][0]
+    assert "mossRopeScaleX" not in neutral
+    for value in (-1, 101, float("nan"), float("inf"), True, "0.5"):
+        with pytest.raises(ApiError, match="must be a finite number between 0 and 100"):
+            create_job_request_message(
+                "invalid", {**base, "mossRopeScaleX": value}, {"type": "image"}
+            )
+
+
 def test_gpt_image_quality_background_and_compression_follow_the_model() -> None:
     with pytest.raises(ApiError, match=r"auto\. Choose low, medium or high, xhigh or max\."):
         gpt_request(modelId="gpt-image-2.5-flare", gptImageQuality="auto")
