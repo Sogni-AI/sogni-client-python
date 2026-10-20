@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import timedelta
 from typing import Any
 from unittest.mock import ANY, AsyncMock
@@ -12,9 +13,11 @@ import sogni_client
 from sogni_client.errors import ApiError, ProjectError
 from sogni_client.events import EventEmitter
 from sogni_client.projects import (
+    _MINIMAX_H3_T2V_ASSETS,
     VIDEO_WORKFLOW_ASSETS,
     Project,
     ProjectsApi,
+    _video_asset_requirements,
     create_job_request_message,
 )
 from sogni_client.projects import _now as project_now
@@ -22,6 +25,7 @@ from sogni_client.utils import (
     calculate_video_frames,
     get_video_workflow_type,
     is_minimax_h3_balanced_model,
+    is_minimax_h3_extend_model,
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
     is_minimax_h3_turbo_model,
@@ -3314,6 +3318,197 @@ async def test_video_estimate_sends_the_minimax_h3_keyframe_count() -> None:
     await api.estimate_video_cost({**base, "keyframeCount": True})
     sent = [(query or {}).get("keyframeCount") for _path, query in client.socket.get_calls]
     assert sent == [8, 3, None, None]
+
+
+# MiniMax H3 video extension, mirroring sogni-client's
+# `scripts/check-minimax-h3-extend.cjs`: a text-to-video job that carries
+# `referenceVideo` continues that video from its last 22 frames and their audio.
+_H3_EXTEND_ID = "minimax-h3-fastvideo-int8_t2v_turbo"
+# Each tier pins its own step count.
+_H3_EXTEND_STEPS = {
+    "minimax-h3-fl2va-fp8_t2v": 20,
+    "minimax-h3-fl2va-fp8_t2v_balanced": 8,
+    _H3_EXTEND_ID: 4,
+    "minimax-h3-fastvideo-int8_t2v_turbo_2stage": 4,
+}
+_H3_LIGHTX2V_TURBO = "minimax-h3-fl2va-fp8_t2v_turbo"
+_H3_EXTEND_ONLY = (
+    "extendOutput applies only to a MiniMax H3 video extension: a referenceVideo on a "
+    "model that extends (isMinimaxH3ExtendModel)."
+)
+_H3_EXTEND_VALUES = (
+    "extendOutput must be 'extended' (the source and the new footage as one video) or "
+    "'continuation' (the new footage alone)."
+)
+MP4 = b"\x00\x00\x00\x18ftypisom" + b"\0" * 16
+
+
+def _h3_extend_frame(**changes: Any) -> dict[str, Any]:
+    model_id = changes.get("modelId", _H3_EXTEND_ID)
+    params = {
+        "type": "video",
+        "modelId": model_id,
+        "numberOfMedia": 1,
+        "positivePrompt": "The vendor laughs and hands her the bowl.",
+        "frames": 141,
+        "width": 1344,
+        "height": 768,
+        "steps": _H3_EXTEND_STEPS.get(model_id, 4),
+        "guidance": 1,
+        **changes,
+    }
+    return create_job_request_message("h3-extend", params, model_options("video"))["keyFrames"][0]
+
+
+def test_minimax_h3_extend_models_accept_an_optional_source_video() -> None:
+    for model_id in _H3_EXTEND_STEPS:
+        assert is_minimax_h3_extend_model(model_id), model_id
+        assert _video_asset_requirements(model_id) is _MINIMAX_H3_T2V_ASSETS, model_id
+        frame = _h3_extend_frame(modelId=model_id, referenceVideo=b"v")
+        assert frame["hasReferenceVideo"] is True, model_id
+    for model_id in (
+        "minimax-h3-fastvideo-int8_i2v_turbo_2stage",
+        "minimax-h3-fastvideo-int8_a2v_turbo",
+        "minimax-h3-ref2va-fp8_r2v_turbo",
+    ):
+        assert not is_minimax_h3_extend_model(model_id), model_id
+    # LightX2V Turbo lost the source a few frames after the join in testing, so
+    # it still refuses one.
+    assert not is_minimax_h3_extend_model(_H3_LIGHTX2V_TURBO)
+    assert _video_asset_requirements(_H3_LIGHTX2V_TURBO)["referenceVideo"] == "forbidden"
+    with pytest.raises(ApiError, match="t2v workflow does not support referenceVideo"):
+        _h3_extend_frame(modelId=_H3_LIGHTX2V_TURBO, referenceVideo=b"v")
+    # Only referenceVideo differs from generic t2v.
+    assert {
+        **_MINIMAX_H3_T2V_ASSETS,
+        "referenceVideo": VIDEO_WORKFLOW_ASSETS["t2v"]["referenceVideo"],
+    } == VIDEO_WORKFLOW_ASSETS["t2v"]
+    assert _MINIMAX_H3_T2V_ASSETS["referenceVideo"] == "optional"
+    assert VIDEO_WORKFLOW_ASSETS["t2v"]["referenceVideo"] == "forbidden"
+    assert _video_asset_requirements("wan_v2.2-14b-fp8_t2v")["referenceVideo"] == "forbidden"
+    for model_id in ("minimax-h3-fastvideo-int8_i2v_turbo", "minimax-h3-fl2va-fp8_flf2v"):
+        assert _video_asset_requirements(model_id)["referenceVideo"] == "forbidden", model_id
+
+
+async def test_minimax_h3_extend_asset_config_reports_the_optional_source() -> None:
+    api = ProjectsApi(FakeClient())
+    config = await api.get_video_asset_config(_H3_EXTEND_ID)
+    assert config == {"workflowType": "t2v", "assets": _MINIMAX_H3_T2V_ASSETS}
+    lightx2v = await api.get_video_asset_config(_H3_LIGHTX2V_TURBO)
+    assert lightx2v["assets"]["referenceVideo"] == "forbidden"
+
+
+def test_minimax_h3_extension_source_rides_the_unnumbered_reference_video_upload() -> None:
+    source = b"source video"
+    extended = _h3_extend_frame(referenceVideo=source)
+    assert extended["hasReferenceVideo"] is True
+    assert [key for key in extended if re.match(r"^hasReferenceVideo\d", key)] == []
+    # The job renders the full frame count; the worker trims the pinned head.
+    assert extended["frames"] == 141
+    # Without a source it is ordinary text-to-video.
+    assert "hasReferenceVideo" not in _h3_extend_frame()
+    # The worker needs a Sogni upload, so external video URLs stay refused.
+    with pytest.raises(ApiError) as caught:
+        _h3_extend_frame(referenceVideoUrls=["https://example.com/source.mp4"])
+    assert str(caught.value) == (
+        "External reference URLs are supported only by Seedance, HappyHorse, and Wan 3 models."
+    )
+    with pytest.raises(ApiError, match="i2v workflow does not support referenceVideo"):
+        _h3_extend_frame(
+            modelId="minimax-h3-fastvideo-int8_i2v_turbo",
+            referenceImage=source,
+            referenceVideo=source,
+        )
+
+
+def test_minimax_h3_extend_output_is_sent_only_when_asked_on_an_extension() -> None:
+    source = b"source video"
+    # Delivery: left to the default (the whole extended video) unless asked; the
+    # new footage alone on request.
+    assert "extendOutput" not in _h3_extend_frame(referenceVideo=source)
+    assert "extendOutput" not in _h3_extend_frame(referenceVideo=source, extendOutput=None)
+    for value in ("continuation", "extended"):
+        frame = _h3_extend_frame(referenceVideo=source, extendOutput=value)
+        assert frame["extendOutput"] == value
+    for value in ("both", "", True):
+        with pytest.raises(ApiError) as caught:
+            _h3_extend_frame(referenceVideo=source, extendOutput=value)
+        assert str(caught.value) == _H3_EXTEND_VALUES
+    for changes in (
+        {"extendOutput": "continuation"},
+        {
+            "modelId": "minimax-h3-fastvideo-int8_i2v_turbo",
+            "referenceImage": b"i",
+            "extendOutput": "continuation",
+        },
+        {"modelId": _H3_LIGHTX2V_TURBO, "extendOutput": "extended"},
+    ):
+        with pytest.raises(ApiError) as caught:
+            _h3_extend_frame(**changes)
+        assert str(caught.value) == _H3_EXTEND_ONLY
+
+
+async def test_minimax_h3_extension_uploads_its_source_and_takes_python_names() -> None:
+    client, keyframe = await _create_keyframe_project(
+        ["source"],
+        type="video",
+        model_id=_H3_EXTEND_ID,
+        positive_prompt="The vendor laughs and hands her the bowl.",
+        number_of_media=1,
+        frames=141,
+        width=1344,
+        height=768,
+        steps=4,
+        reference_video=MP4,
+        extend_output="continuation",
+    )
+    assert _upload_types(client) == ["referenceVideo"]
+    assert _upload_bodies(client) == [MP4]
+    assert keyframe["hasReferenceVideo"] is True
+    assert keyframe["referenceVideoContentType"] == "video/mp4"
+    assert keyframe["extendOutput"] == "continuation"
+
+
+async def test_minimax_h3_extension_estimate_carries_the_video_input_flag() -> None:
+    quote = {
+        "quote": {
+            "project": {
+                "costInToken": "1",
+                "costInUSD": "0.01",
+                "costInSpark": "2",
+                "costInSogni": "3",
+            }
+        }
+    }
+
+    class QuoteSocket(FakeSocket):
+        async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+            self.get_calls.append((path, params))
+            return quote
+
+    client = FakeClient()
+    client.socket = QuoteSocket()
+    api = ProjectsApi(client)
+    base = {
+        "tokenType": "spark",
+        "model": _H3_EXTEND_ID,
+        "width": 1344,
+        "height": 768,
+        "frames": 141,
+        "fps": 24,
+        "steps": 4,
+        "numberOfMedia": 1,
+    }
+    # The estimate carries the flag the socket prices the extension on.
+    await api.estimate_video_cost({**base, "reference_video": b"source video"})
+    await api.estimate_video_cost(base)
+    sent = [
+        (path, {key: value for key, value in (query or {}).items() if value is not None})
+        for path, query in client.socket.get_calls
+    ]
+    plain = f"/api/v1/job-video/estimate/spark/{_H3_EXTEND_ID}/1344/768/141/24/4/1"
+    # A plain text-to-video quote is unchanged.
+    assert sent == [(plain, {"hasVideoInput": 1}), (plain, {})]
 
 
 def test_cost_estimates_carry_live_benchmark_seconds_only_when_the_server_has_samples() -> None:

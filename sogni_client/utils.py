@@ -269,6 +269,31 @@ def is_minimax_h3_keyframe_model(model_id: str) -> bool:
     ) or is_minimax_h3_audio_guide_model(model_id)
 
 
+# MiniMax H3 models that extend a video. Mirrors the TypeScript
+# ``MINIMAX_H3_EXTEND_MODEL_IDS``.
+_MINIMAX_H3_EXTEND_MODEL_IDS = frozenset(
+    {
+        "minimax-h3-fl2va-fp8_t2v",
+        "minimax-h3-fl2va-fp8_t2v_balanced",
+        "minimax-h3-fastvideo-int8_t2v_turbo",
+        "minimax-h3-fastvideo-int8_t2v_turbo_2stage",
+    }
+)
+
+
+def is_minimax_h3_extend_model(model_id: str) -> bool:
+    """A MiniMax H3 model that extends a video carried in ``referenceVideo``.
+
+    Standard, Balanced and FastH3 text-to-video and FastH3 two-stage. The clip
+    continues the source from its last 22 frames and their audio. LightX2V Turbo
+    (``minimax-h3-fl2va-fp8_t2v_turbo``) does not: it lost the source a few
+    frames after the join in testing. Mirrors the TypeScript
+    ``isMinimaxH3ExtendModel``.
+    """
+
+    return model_id in _MINIMAX_H3_EXTEND_MODEL_IDS
+
+
 def is_external_video_model(model_id: str) -> bool:
     return is_seedance_model(model_id) or is_happyhorse_model(model_id) or is_wan3_model(model_id)
 

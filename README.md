@@ -390,6 +390,43 @@ project = await sogni.projects.create(
 )
 ```
 
+## MiniMax H3 video extension
+
+Four H3 text-to-video ids accept an optional `reference_video`, the source video
+to extend (`is_minimax_h3_extend_model()` in `sogni_client.utils`): Standard
+`minimax-h3-fl2va-fp8_t2v`, Balanced `minimax-h3-fl2va-fp8_t2v_balanced`, FastH3
+`minimax-h3-fastvideo-int8_t2v_turbo` and FastH3 Two-Stage
+`minimax-h3-fastvideo-int8_t2v_turbo_2stage`. The worker continues the source
+from its last 22 frames (0.92 s at 24 fps) and their audio, and the new footage
+starts on the frame after the source's last frame, `frames - 22` frames long.
+LightX2V Turbo
+(`minimax-h3-fl2va-fp8_t2v_turbo`) and every other model refuse a source. The
+source must be an upload; `reference_video_urls` is refused. Without a source the
+request is ordinary text-to-video.
+
+`extend_output` chooses what the extension delivers: `"extended"`, the default,
+returns the source and the new footage as one video, its audio crossfaded at the
+join; `"continuation"` returns the new footage alone. It is sent only when you set
+it, and it is refused without a `reference_video` on one of these ids. The price
+is the same either way. `estimate_video_cost()` with the same `reference_video`
+quotes the extension the job is charged for.
+
+```python
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id="minimax-h3-fastvideo-int8_t2v_turbo",
+    number_of_media=1,
+    steps=4,
+    positive_prompt="The vendor laughs and hands her the bowl.",
+    reference_video="source.mp4",
+    extend_output="continuation",  # omit for the source and the new footage as one video
+    frames=141,
+    width=1344,
+    height=768,
+)
+```
+
 ## GPT Image 2.5
 
 `gpt-image-2.5-flare` and `gpt-image-2.5-sunburst` join `gpt-image-2`. All three

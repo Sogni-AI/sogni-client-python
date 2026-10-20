@@ -58,6 +58,7 @@ from .utils import (
     is_ltx_model,
     is_minimax_h3_audio_guide_model,
     is_minimax_h3_balanced_model,
+    is_minimax_h3_extend_model,
     is_minimax_h3_keyframe_model,
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
@@ -231,6 +232,16 @@ _MINIMAX_H3_I2V_ASSETS = {
     "referenceVideo": "forbidden",
     "referenceMask": "forbidden",
 }
+# MiniMax H3 text-to-video on the models that extend (`is_minimax_h3_extend_model`):
+# with `referenceVideo` the worker continues the source from its last 22 frames
+# (0.92 s at 24 fps) and their audio, and the new footage starts on the frame
+# after the source's last frame (`frames - 22` long). Without a source it is
+# ordinary text-to-video. Every other entry matches the generic `t2v` table.
+_MINIMAX_H3_T2V_ASSETS = {
+    **VIDEO_WORKFLOW_ASSETS["t2v"],
+    "referenceVideo": "optional",
+}
+_MINIMAX_H3_EXTEND_OUTPUTS = ("extended", "continuation")
 _MINIMAX_H3_MAX_REFERENCE_IMAGES = 9
 _MINIMAX_H3_MAX_REFERENCE_VIDEOS = 3
 _MINIMAX_H3_MAX_REFERENCE_AUDIOS = 3
@@ -719,6 +730,8 @@ def _video_asset_requirements(model_id: str) -> dict[str, str] | None:
         return _MINIMAX_H3_R2V_ASSETS
     if workflow == "i2v" and is_minimax_h3_model(model_id):
         return _MINIMAX_H3_I2V_ASSETS
+    if workflow == "t2v" and is_minimax_h3_extend_model(model_id):
+        return _MINIMAX_H3_T2V_ASSETS
     return VIDEO_WORKFLOW_ASSETS[workflow]
 
 
@@ -1950,6 +1963,21 @@ def create_job_request_message(
         ):
             if params.get(source):
                 keyframe[target] = params[source]
+        # MiniMax H3 video extension delivery: sent only when set, and only with a
+        # source on a model that extends.
+        extend_output = params.get("extendOutput")
+        if extend_output is not None:
+            if not params.get("referenceVideo") or not is_minimax_h3_extend_model(
+                params["modelId"]
+            ):
+                raise _api_error(
+                    "extendOutput applies only to a MiniMax H3 video extension: a referenceVideo on a model that extends (isMinimaxH3ExtendModel)."
+                )
+            if extend_output not in _MINIMAX_H3_EXTEND_OUTPUTS:
+                raise _api_error(
+                    "extendOutput must be 'extended' (the source and the new footage as one video) or 'continuation' (the new footage alone)."
+                )
+            keyframe["extendOutput"] = extend_output
         for source, target in (
             ("referenceFileUrl", "referenceFileURL"),
             ("referenceLinkUrl", "referenceLinkURL"),
