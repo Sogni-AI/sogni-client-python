@@ -993,8 +993,8 @@ Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
 Two-Stage 720p/1080p/2K ids, FastH3 Reference
-`minimax-h3-fastvideo-omni-int8_r2v_turbo` with its Two-Stage id (catalog LoRAs only;
-Personal LoRAs are not available on it), plus intermediate
+`minimax-h3-fastvideo-omni-int8_r2v_turbo` with its Two-Stage id (catalog and
+Personal LoRAs), plus intermediate
 keyframes on every mode but t2v),
 Seedance 2.5, Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored, Wan 3
 and Wan 3.0 Enhanced,
