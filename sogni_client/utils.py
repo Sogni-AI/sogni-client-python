@@ -79,6 +79,8 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-ref2va-fp8_r2v_balanced",
     "minimax-h3-ref2va-fp8_r2v_2stage",
     "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
+    "minimax-h3-fastvideo-omni-int8_r2v_turbo",
+    "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
 }
 _MINIMAX_H3_TURBO_PATTERN = re.compile(
     r"^minimax-h3-(?:fl2va-fp8_(?:t2v|i2v|flf2v)_turbo"
@@ -86,6 +88,9 @@ _MINIMAX_H3_TURBO_PATTERN = re.compile(
     r"|fastvideo-int8_(?:ia2v|flfa2v|a2v)_turbo(?:_2stage)?)$"
 )
 _MINIMAX_H3_BALANCED_PATTERN = re.compile(r"^minimax-h3-fl2va-fp8_(?:t2v|i2v|flf2v)_balanced$")
+_MINIMAX_H3_FASTH3_REFERENCE_PATTERN = re.compile(
+    r"^minimax-h3-fastvideo-omni-int8_r2v_turbo(?:_2stage)?$"
+)
 _MINIMAX_H3_AUDIO_GUIDE_PATTERN = re.compile(
     r"^minimax-h3-fastvideo-int8_(?:ia2v|flfa2v|a2v)_turbo(?:_2stage)?$"
 )
@@ -194,7 +199,9 @@ def is_minimax_h3_turbo_model(model_id: str) -> bool:
 
     FL2VA and FastH3 both cover t2v/i2v/flf2v, and FastH3 also covers the
     ia2v/flfa2v/a2v audio guide; Ref2VA uses its dedicated r2v Turbo LoRA.
-    FastH3 has no r2v mode. The FastH3 Two-Stage ids
+    FastH3 Reference (``minimax-h3-fastvideo-omni-int8_r2v_turbo[_2stage]``)
+    is not one of them: it runs 8 steps
+    (``is_minimax_h3_fasth3_reference_model``). The FastH3 Two-Stage ids
     (``..._turbo_2stage``) share FastH3's 4-step sampling and request; they
     deliver the clip at twice the canvas width and height, and one ``_2stage``
     id per workflow serves every canvas class (672x384 for 720p, 960x544 for
@@ -209,6 +216,19 @@ def is_minimax_h3_turbo_model(model_id: str) -> bool:
     return bool(_MINIMAX_H3_TURBO_PATTERN.match(model_id)) or (
         model_id == "minimax-h3-ref2va-fp8_r2v_turbo"
     )
+
+
+def is_minimax_h3_fasth3_reference_model(model_id: str) -> bool:
+    """MiniMax H3 FastH3 Reference (FastVideo's FastH3 Omni) or its two-stage id.
+
+    ``minimax-h3-fastvideo-omni-int8_r2v_turbo`` is the FastH3 tier's own
+    reference-to-video checkpoint and ``..._r2v_turbo_2stage`` delivers the same
+    request at twice the canvas. Both are r2v ids (``is_minimax_h3_reference_model``)
+    whose steps are fixed at 8 even though the ids end in ``_turbo``. Mirrors the
+    TypeScript ``isMinimaxH3FastH3ReferenceModel``.
+    """
+
+    return bool(_MINIMAX_H3_FASTH3_REFERENCE_PATTERN.match(model_id))
 
 
 def is_minimax_h3_audio_guide_model(model_id: str) -> bool:
@@ -252,12 +272,12 @@ def is_minimax_h3_keyframe_model(model_id: str) -> bool:
 
     Keyframes are still images the worker pins (ComfyUI ``MiniMaxH3AddGuide``) at
     chosen frames between the first and last frame. Every MiniMax H3 workflow
-    except text-to-video accepts them, 21 ids in all: image-to-video (``i2v``)
+    except text-to-video accepts them, 23 ids in all: image-to-video (``i2v``)
     and first/last-frame (``flf2v``) on every tier (Standard, Balanced, LightX2V
     Turbo, FastH3 Turbo and FastH3 Two-Stage), the FastH3 Sound to Video audio
-    guide (``ia2v``, ``flfa2v``, ``a2v``, one- and two-stage) and Ref2VA
-    Reference to Video (``r2v``: Standard, Turbo, Balanced and both two-stage
-    ids). Mirrors the TypeScript ``isMinimaxH3KeyframeModel``.
+    guide (``ia2v``, ``flfa2v``, ``a2v``, one- and two-stage) and Reference to
+    Video (``r2v``: Standard, Turbo, Balanced, FastH3 Reference and their three
+    two-stage ids). Mirrors the TypeScript ``isMinimaxH3KeyframeModel``.
     """
 
     if not is_minimax_h3_model(model_id):

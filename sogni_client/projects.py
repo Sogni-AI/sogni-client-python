@@ -59,6 +59,7 @@ from .utils import (
     is_minimax_h3_audio_guide_model,
     is_minimax_h3_balanced_model,
     is_minimax_h3_extend_model,
+    is_minimax_h3_fasth3_reference_model,
     is_minimax_h3_keyframe_model,
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
@@ -904,11 +905,22 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
         return
     if params.get("fps") is not None and params["fps"] != 24:
         raise _api_error("MiniMax H3 fps is fixed at 24. Omit fps or set it to 24.")
+    # FastH3 Reference ends in ``_turbo`` but is distilled to 8 steps, so it is
+    # neither a 4-step Turbo id nor a Balanced one.
+    is_fasth3_reference = is_minimax_h3_fasth3_reference_model(params["modelId"])
     is_turbo = is_minimax_h3_turbo_model(params["modelId"])
     is_balanced = is_minimax_h3_balanced_model(params["modelId"])
-    expected_steps = 4 if is_turbo else 8 if is_balanced else 20
+    expected_steps = 8 if is_fasth3_reference else 4 if is_turbo else 8 if is_balanced else 20
     if params.get("steps") is not None and params["steps"] != expected_steps:
-        suffix = " Turbo" if is_turbo else " Balanced" if is_balanced else ""
+        suffix = (
+            " FastH3 Reference"
+            if is_fasth3_reference
+            else " Turbo"
+            if is_turbo
+            else " Balanced"
+            if is_balanced
+            else ""
+        )
         raise _api_error(f"MiniMax H3{suffix} steps are fixed at {expected_steps}.")
     if params.get("guidance") is not None and params["guidance"] != 1:
         raise _api_error("MiniMax H3 guidance is fixed at 1.")

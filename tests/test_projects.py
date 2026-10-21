@@ -26,6 +26,7 @@ from sogni_client.utils import (
     get_video_workflow_type,
     is_minimax_h3_balanced_model,
     is_minimax_h3_extend_model,
+    is_minimax_h3_fasth3_reference_model,
     is_minimax_h3_model,
     is_minimax_h3_reference_model,
     is_minimax_h3_turbo_model,
@@ -2128,6 +2129,9 @@ _MINIMAX_H3_TIERS = {
         "minimax-h3-fl2va-fp8_flf2v_balanced",
         "minimax-h3-ref2va-fp8_r2v_balanced",
         "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
+        # FastH3 Reference: 8 steps although its ids end in _turbo.
+        "minimax-h3-fastvideo-omni-int8_r2v_turbo",
+        "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
     ),
     4: (
         "minimax-h3-fl2va-fp8_t2v_turbo",
@@ -2278,6 +2282,48 @@ def test_minimax_h3_two_stage_r2v_ids_are_their_tier_requests_delivered_at_twice
             )
 
 
+# FastH3 Reference (FastVideo's FastH3 Omni): the FastH3 tier's own r2v
+# checkpoint and its two-stage id, which takes the same request.
+_MINIMAX_H3_FASTH3_REFERENCE_IDS = (
+    "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
+    "minimax-h3-fastvideo-omni-int8_r2v_turbo",
+)
+
+
+def test_minimax_h3_fasth3_reference_ids_are_8_step_r2v_requests() -> None:
+    model_id, base_id = _MINIMAX_H3_FASTH3_REFERENCE_IDS
+    for candidate in _MINIMAX_H3_FASTH3_REFERENCE_IDS:
+        assert is_video_model(candidate)
+        assert is_minimax_h3_model(candidate)
+        assert is_minimax_h3_reference_model(candidate)
+        assert is_minimax_h3_fasth3_reference_model(candidate)
+        assert not is_minimax_h3_turbo_model(candidate)
+        assert not is_minimax_h3_balanced_model(candidate)
+        assert get_video_workflow_type(candidate) == "r2v"
+        # The id ends in _turbo, but any steps other than 8 are refused.
+        with pytest.raises(ApiError, match=r"^MiniMax H3 FastH3 Reference steps are fixed at 8\.$"):
+            create_job_request_message(
+                "h3-fasth3-reference-steps", _h3_params(candidate, 4), model_options("video")
+            )
+    assert not is_minimax_h3_fasth3_reference_model("minimax-h3-fastvideo-int8_i2v_turbo")
+    assert not is_minimax_h3_fasth3_reference_model("minimax-h3-ref2va-fp8_r2v_turbo")
+    for width, height in ((1344, 768), (960, 544), (672, 384), (384, 672)):
+        sent = create_job_request_message(
+            "h3-fasth3-reference-2stage",
+            _h3_params(model_id, 8, width=width, height=height),
+            model_options("video"),
+        )["keyFrames"][0]
+        base = create_job_request_message(
+            "h3-fasth3-reference",
+            _h3_params(base_id, 8, width=width, height=height),
+            model_options("video"),
+        )["keyFrames"][0]
+        # The two-stage request is the one-stage request with only the model id changed.
+        assert sent["modelID"] == model_id
+        assert {**sent, "modelID": base_id} == base
+        assert (sent["width"], sent["height"], sent["steps"]) == (width, height, 8)
+
+
 def test_minimax_h3_retired_720p_two_stage_ids_are_not_h3_ids() -> None:
     for model_id in _MINIMAX_H3_RETIRED_720P_IDS:
         assert not is_minimax_h3_model(model_id)
@@ -2311,7 +2357,7 @@ def test_minimax_h3_requests_refuse_the_retired_output_scale() -> None:
                     )
                 assert raised.value.status == 400
             covered += 1
-    assert covered == 20
+    assert covered == 22
 
     # The retired field is refused on every video model, not only on MiniMax H3.
     with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):
@@ -2542,6 +2588,8 @@ _MINIMAX_H3_KEYFRAME_IDS = (
     "minimax-h3-ref2va-fp8_r2v_balanced",
     "minimax-h3-ref2va-fp8_r2v_2stage",
     "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
+    "minimax-h3-fastvideo-omni-int8_r2v_turbo",
+    "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
 )
 # Every H3 id without keyframe support: text-to-video.
 _MINIMAX_H3_NON_KEYFRAME_IDS = (
@@ -2595,6 +2643,8 @@ def _keyframes_wrong_model(model_id: str) -> str:
 
 
 def _keyframe_steps(model_id: str) -> int:
+    if is_minimax_h3_fasth3_reference_model(model_id):
+        return 8
     if is_minimax_h3_turbo_model(model_id):
         return 4
     return 8 if is_minimax_h3_balanced_model(model_id) else 20
@@ -2663,9 +2713,9 @@ def _frame_index_error(
 def test_minimax_h3_keyframe_models_are_every_workflow_except_t2v() -> None:
     assert sogni_client.MINIMAX_H3_MAX_KEYFRAMES == 8
     assert sogni_client.isMinimaxH3KeyframeModel is sogni_client.is_minimax_h3_keyframe_model
-    assert len(_MINIMAX_H3_KEYFRAME_IDS) == 21
+    assert len(_MINIMAX_H3_KEYFRAME_IDS) == 23
     every_id = (*_MINIMAX_H3_KEYFRAME_IDS, *_MINIMAX_H3_NON_KEYFRAME_IDS)
-    assert len(every_id) == 26
+    assert len(every_id) == 28
     assert all(is_minimax_h3_model(model_id) for model_id in every_id)
     assert (
         tuple(filter(sogni_client.is_minimax_h3_keyframe_model, every_id))

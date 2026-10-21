@@ -478,7 +478,8 @@ class ChatToolsApi:
     # Existing "minimax-h3-*-turbo" selectors stay on LightX2V Turbo; FastH3 is the
     # separate FastVideo VSA four-step engine and needs its own explicit aliases.
     # FastH3 Two-Stage ("-2stage") is the same request delivered at twice the
-    # canvas. FastH3 has no r2v mode.
+    # canvas. FastH3 Reference ("minimax-h3-fasth3-r2v-turbo[-2stage]") is the
+    # FastH3 tier's r2v on its own checkpoint.
     _VIDEO_SELECTORS = {
         "ltx25": "ltx25-22b-int8_t2v_distilled",
         "ltx23": "ltx23-22b-fp8_t2v_distilled",
@@ -507,6 +508,8 @@ class ChatToolsApi:
         "minimax-h3-r2v-balanced": "minimax-h3-ref2va-fp8_r2v_balanced",
         "minimax-h3-r2v-2stage": "minimax-h3-ref2va-fp8_r2v_2stage",
         "minimax-h3-r2v-balanced-2stage": "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
+        "minimax-h3-fasth3-r2v-turbo": "minimax-h3-fastvideo-omni-int8_r2v_turbo",
+        "minimax-h3-fasth3-r2v-turbo-2stage": "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
         "happyhorse": "happyhorse-1.1-t2v",
         "happyhorse1.1": "happyhorse-1.1-t2v",
         "wan3": "wan3.0-video",
@@ -545,6 +548,8 @@ class ChatToolsApi:
         "minimax-h3-r2v-balanced": "minimax-h3-ref2va-fp8_r2v_balanced",
         "minimax-h3-r2v-2stage": "minimax-h3-ref2va-fp8_r2v_2stage",
         "minimax-h3-r2v-balanced-2stage": "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
+        "minimax-h3-fasth3-r2v-turbo": "minimax-h3-fastvideo-omni-int8_r2v_turbo",
+        "minimax-h3-fasth3-r2v-turbo-2stage": "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
         "happyhorse": "happyhorse-1.1-i2v",
         "happyhorse1.1": "happyhorse-1.1-i2v",
         "happyhorse-1.1-i2v": "happyhorse-1.1-i2v",

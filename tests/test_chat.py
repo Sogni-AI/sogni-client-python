@@ -315,8 +315,16 @@ def test_minimax_h3_selectors_route_fasth3_and_balanced_without_moving_turbo() -
     assert i2v("minimax-h3-r2v-2stage") == "minimax-h3-ref2va-fp8_r2v_2stage"
     assert i2v("minimax-h3-r2v-balanced-2stage") == "minimax-h3-ref2va-fp8_r2v_balanced_2stage"
 
-    # FastH3 has no r2v mode, and t2v-only aliases must not leak into the
-    # image-conditioned table.
+    # FastH3 Reference is the FastH3 tier's r2v (FastVideo's FastH3 Omni), on
+    # both tables like every R2V selector.
+    for resolve in (t2v, i2v):
+        assert resolve("minimax-h3-fasth3-r2v-turbo") == "minimax-h3-fastvideo-omni-int8_r2v_turbo"
+        assert (
+            resolve("minimax-h3-fasth3-r2v-turbo-2stage")
+            == "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage"
+        )
+
+    # t2v-only aliases must not leak into the image-conditioned table.
     assert i2v("minimax-h3-t2v-turbo") == "minimax-h3-t2v-turbo"
     assert i2v("minimax-h3-fasth3-t2v-turbo-2stage") == "minimax-h3-fasth3-t2v-turbo-2stage"
 
@@ -363,6 +371,18 @@ def test_hosted_two_stage_selectors_describe_the_delivered_canvas_classes() -> N
             "672x384 delivers 1344x768",
         ):
             assert delivery in video_model["description"]
+
+
+def test_hosted_generate_video_offers_the_fasth3_reference_selectors() -> None:
+    definitions = {item["function"]["name"]: item for item in SogniTools.all}
+    properties = definitions["generate_video"]["function"]["parameters"]["properties"]
+    for selector in ("minimax-h3-fasth3-r2v-turbo", "minimax-h3-fasth3-r2v-turbo-2stage"):
+        assert selector in properties["videoModel"]["enum"]
+        assert f'"{selector}"' in properties["loras"]["description"]
+    assert "MiniMax H3 FastH3 Reference" in properties["videoModel"]["description"]
+    for tool_name in ("generate_video", "animate_photo"):
+        video_model = definitions[tool_name]["function"]["parameters"]["properties"]["videoModel"]
+        assert "FastH3 has no R2V mode" not in video_model["description"]
 
 
 def test_direct_hosted_tool_schemas_match_standalone_golden_fingerprints() -> None:

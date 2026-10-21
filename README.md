@@ -202,10 +202,12 @@ ids, not a request option: `minimax-h3-fastvideo-int8_t2v_turbo_2stage`,
 `minimax-h3-fastvideo-int8_flfa2v_turbo_2stage` and
 `minimax-h3-fastvideo-int8_a2v_turbo_2stage`, plus the Ref2VA Two-Stage ids
 `minimax-h3-ref2va-fp8_r2v_2stage` (Standard, 20 steps) and
-`minimax-h3-ref2va-fp8_r2v_balanced_2stage` (Balanced, 8 steps). Each FastH3 id
-takes exactly the request of its FastH3 Turbo id (canvas, frames, 4 steps,
-Euler/simple, inputs, LoRAs), and each Ref2VA id the request of its one-stage
-R2V id (canvas, frames, steps, sampling, references, LoRAs).
+`minimax-h3-ref2va-fp8_r2v_balanced_2stage` (Balanced, 8 steps) and FastH3
+Reference Two-Stage `minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage`. Each FastH3
+id takes exactly the request of its FastH3 Turbo id (canvas, frames, 4 steps,
+Euler/simple, inputs, LoRAs), each Ref2VA id the request of its one-stage
+R2V id (canvas, frames, steps, sampling, references, LoRAs), and FastH3 Reference
+Two-Stage the request of `minimax-h3-fastvideo-omni-int8_r2v_turbo`.
 The tier renders the canvas, then the worker enlarges it 2× and refines it, so the
 clip is delivered at exactly twice the canvas width and height with the same
 frame count, 24 fps timing and audio. Keep `width`/`height` on the normal H3 grid
@@ -229,8 +231,10 @@ answers them with "Model not found". Only a `_2stage` id renders two-stage: a ba
 FastH3 id always runs one-stage at the canvas it sends. Hosted chat tools select these ids with
 `minimax-h3-fasth3-turbo-2stage` (text or first frame),
 `minimax-h3-fasth3-t2v-turbo-2stage`, `minimax-h3-fasth3-i2v-turbo-2stage` and
-`minimax-h3-fasth3-flf2v-turbo-2stage`, and Ref2VA Two-Stage with
-`minimax-h3-r2v-2stage` and `minimax-h3-r2v-balanced-2stage`; on those selectors `targetResolution`
+`minimax-h3-fasth3-flf2v-turbo-2stage`, Ref2VA Two-Stage with
+`minimax-h3-r2v-2stage` and `minimax-h3-r2v-balanced-2stage`, and FastH3 Reference
+with `minimax-h3-fasth3-r2v-turbo` and `minimax-h3-fasth3-r2v-turbo-2stage`; on those
+selectors `targetResolution`
 names the delivered class (`720` renders the 384 px canvas, `1080` the 544 px
 canvas, `1440` or omitted the 768p canvas for 2K).
 
@@ -295,11 +299,11 @@ project = await sogni.projects.create(
 
 Available in version 5.58.0 and later.
 
-Every H3 workflow except text-to-video accepts `keyframes`, 21 ids in all
+Every H3 workflow except text-to-video accepts `keyframes`, 23 ids in all
 (`is_minimax_h3_keyframe_model()`): image-to-video and first/last-frame on every
 tier (Standard, Balanced, LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage), the
-six FastH3 Sound to Video ids (ia2v, flfa2v, a2v, one- and two-stage) and the five
-Ref2VA r2v ids. A request takes up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images
+six FastH3 Sound to Video ids (ia2v, flfa2v, a2v, one- and two-stage) and the seven
+r2v ids. A request takes up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images
 pinned at chosen frames between the first and last frame, alongside the
 workflow's own uploads. Each entry is
 `{"image": ..., "frame_index": ...}` (`frameIndex` works too). `frame_index` is the
@@ -325,7 +329,7 @@ validation errors match the JavaScript SDK's word for word.
 
 Pricing: the first two keyframes are included; each extra keyframe adds output
 time at the job's per-second rate, 0.75 s on FastH3 and 0.3 s on every other
-tier (an 8 s FastH3 clip with 8 keyframes: 32 + 18 = 50 Spark). Pass
+tier, FastH3 Reference included (an 8 s FastH3 clip with 8 keyframes: 32 + 18 = 50 Spark). Pass
 `keyframe_count` (or the job's `keyframes`) to `estimate_video_cost` to quote it.
 
 Writing the prompt for keyframes:
@@ -988,7 +992,10 @@ schemas.
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
 tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
-Two-Stage 720p/1080p/2K ids, plus intermediate keyframes on every mode but t2v),
+Two-Stage 720p/1080p/2K ids, FastH3 Reference
+`minimax-h3-fastvideo-omni-int8_r2v_turbo` with its Two-Stage id (catalog LoRAs only;
+Personal LoRAs are not available on it), plus intermediate
+keyframes on every mode but t2v),
 Seedance 2.5, Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored, Wan 3
 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
