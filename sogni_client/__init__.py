@@ -113,7 +113,7 @@ from .worlds import (
     is_world_build_terminal,
 )
 
-__version__ = "5.68.1"
+__version__ = "5.69.0"
 
 __all__ = [
     "BIREFNET_BACKGROUND_REMOVAL_MODEL_ID",
