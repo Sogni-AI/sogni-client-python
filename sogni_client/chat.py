@@ -21,7 +21,9 @@ from .events import EventEmitter
 from .projects import ProjectsApi
 from .transport import SWITCH_CONNECTION, ApiClient
 from .utils import (
+    SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
     is_minimax_h3_model,
+    is_seedream_model,
     is_wan3_model,
     new_id,
     normalize_params,
@@ -463,6 +465,14 @@ class ChatToolsApi:
         "flux3-klein": "flux3_image_klein_sd_int8_convrot",
         "flux-3-image-klein": "flux3_image_klein_sd_int8_convrot",
         "flux3-image-klein": "flux3_image_klein_sd_int8_convrot",
+        # Seedream 5.0 Pro Uncensored serves generate_image and edit_image (1-10
+        # references). Every selector names the uncensored model: no standard
+        # Seedream ships, and a bare "seedream" is left free for one.
+        "seedream-5-pro-uncensored": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
+        "seedream-5.0-pro-uncensored": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
+        "seedream-uncensored": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
+        "seedream-5-pro-spicy": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
+        "seedream-5.0-pro-spicy": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
     }
     _EDIT_SELECTORS = {
         **{
@@ -674,7 +684,12 @@ class ChatToolsApi:
             elif name == "generate_music":
                 model_id = next(m for m in music_order if m in available)
             else:
-                model_id = max(candidates, key=lambda model: model.get("workerCount", 0))["id"]
+                # Seedream 5.0 Pro Uncensored needs a one-time agreement and is
+                # Spark-only, so it is chosen only when the call names it.
+                model_id = max(
+                    (model for model in candidates if not is_seedream_model(model.get("id"))),
+                    key=lambda model: model.get("workerCount", 0),
+                )["id"]
             project_params: dict[str, Any] = {
                 "type": media,
                 "modelId": model_id,
@@ -692,8 +707,10 @@ class ChatToolsApi:
                     ),
                 ),
             }
+            # Seedream takes no negative prompt or seed.
+            takes_sampling = not is_seedream_model(model_id)
             negative_prompt = args.get("negativePrompt", args.get("negative_prompt"))
-            if negative_prompt:
+            if negative_prompt and takes_sampling:
                 project_params["negativePrompt"] = negative_prompt
             for source, target in (
                 ("duration", "duration"),
@@ -707,6 +724,8 @@ class ChatToolsApi:
                 ("output_format", "outputFormat"),
             ):
                 if model_id == "minimax_music3" and source in self._ACE_ONLY_MUSIC_ARGS:
+                    continue
+                if source == "seed" and not takes_sampling:
                     continue
                 if args.get(source) is not None:
                     project_params[target] = args[source]

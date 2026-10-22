@@ -374,6 +374,21 @@ SAM3_IMAGE_SEGMENT_MODEL_ID = "sam3_image_segment_bf16"
 #: Canonical id of the standalone BiRefNet background-removal workflow.
 BIREFNET_BACKGROUND_REMOVAL_MODEL_ID = "birefnet_image_background_removal_fp16"
 
+#: Seedream 5.0 Pro Uncensored: ByteDance's Seedream 5.0 Pro, an external API
+#: image model for text-to-image and edits from 1-10 reference images
+#: (``contextImages``). Spark-only, with no negative prompt, seed or steps. It
+#: shares the Seedance 2.5 Uncensored one-time likeness and consent agreement
+#: (key ``seedance-2-5-uncensored``); until the account accepts it in a Sogni
+#: app its jobs fail with error code 4103 (``MODEL_CONSENT_REQUIRED_ERROR_CODE``).
+SEEDREAM_5_PRO_UNCENSORED_MODEL_ID = "seedream-5-0-pro-uncensored"
+_SEEDREAM_MODEL_IDS = frozenset({SEEDREAM_5_PRO_UNCENSORED_MODEL_ID})
+
+
+def is_seedream_model(model_id: str | None) -> bool:
+    """Whether ``model_id`` is a Seedream image model (today only Seedream 5.0 Pro Uncensored)."""
+
+    return model_id in _SEEDREAM_MODEL_IDS
+
 
 def is_model_artifact_model(model_id: str) -> bool:
     """Check if a model returns a downloadable 3D model artifact."""
@@ -511,6 +526,7 @@ isSegmentationModel = is_segmentation_model
 requiresStartingImage = requires_starting_image
 isPixal3dModel = is_pixal3d_model
 isPixal3dMultiViewModel = is_pixal3d_multiview_model
+isSeedreamModel = is_seedream_model
 getPixal3dOrbitViewSlots = get_pixal3d_orbit_view_slots
 
 

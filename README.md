@@ -447,6 +447,32 @@ URI under 50 MB, which is uploaded like `gpt_image_mask`). Transparent mask
 regions are edited. In chat tools, `gpt-image-2.5` and `flare` select Flare;
 `sunburst` selects Sunburst.
 
+## Seedream 5.0 Pro Uncensored
+
+`seedream-5-0-pro-uncensored` (`SEEDREAM_5_PRO_UNCENSORED_MODEL_ID`; test ids with
+`is_seedream_model()`) is ByteDance's Seedream 5.0 Pro: text-to-image, or edits
+from 1-10 `context_images` in source order. It is Spark-only and takes no negative
+prompt, seed or steps; the client never sends it a negative prompt. Custom sizes
+run from 921,600 to 4,194,304 pixels at an aspect ratio from 1:16 to 16:1, for
+example 1536x1536, 2048x2048, 2560x1440 or 3024x1296.
+
+```python
+project = await sogni.projects.create(
+    type="image",
+    model_id="seedream-5-0-pro-uncensored",
+    positive_prompt="A candid portrait in warm window light, 35mm film grain",
+    width=1536,
+    height=1536,
+    token_type="spark",
+)
+```
+
+It shares the Seedance 2.5 Uncensored likeness and consent agreement described
+below: until the account accepts it in a Sogni app, its jobs fail with
+`MODEL_CONSENT_REQUIRED_ERROR_CODE` (4103) and `error.consent_required` names
+`{"key": "seedance-2-5-uncensored", "version": ..., "modelId": "seedream-5-0-pro-uncensored"}`.
+Chat tools use it only when the call names it.
+
 ## Seedance 2.5 export options
 
 `seedance-2-5` can deliver a MOV container (`output_format="mov"`; video

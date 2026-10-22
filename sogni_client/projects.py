@@ -69,6 +69,7 @@ from .utils import (
     is_pixal3d_multiview_model,
     is_seedance25_model,
     is_seedance_model,
+    is_seedream_model,
     is_segmentation_model,
     is_video_model,
     is_video_upscale_model,
@@ -578,6 +579,49 @@ def _validate_gpt_image_options(params: dict[str, Any]) -> None:
             raise _api_error("GPT Image output compression requires JPEG or WebP")
 
 
+_SEEDREAM_MAX_CONTEXT_IMAGES = 10
+# Output limits: 921,600 (1280x720) to 4,194,304 (2048x2048) pixels, aspect
+# ratio from 1:16 to 16:1. Together they bound each edge to 240-8192 px
+# (3840x240 and 8192x512 are the extremes).
+_SEEDREAM_MIN_PIXELS = 921_600
+_SEEDREAM_MAX_PIXELS = 4_194_304
+_SEEDREAM_MAX_ASPECT_RATIO = 16
+
+
+def _validate_seedream_options(params: dict[str, Any]) -> None:
+    """Mirror sogni-client's validateSeedreamOptions: at most 10 non-empty
+    references in source order, and a custom size inside the pixel and
+    aspect-ratio limits."""
+    model_id = params.get("modelId")
+    if not is_seedream_model(model_id):
+        return
+    contexts = params.get("contextImages")
+    if contexts is not None and (
+        not isinstance(contexts, list)
+        or len(contexts) > _SEEDREAM_MAX_CONTEXT_IMAGES
+        or any(not image for image in contexts)
+    ):
+        raise _api_error(
+            f"{model_id} accepts up to {_SEEDREAM_MAX_CONTEXT_IMAGES} non-empty "
+            "reference images in source order"
+        )
+    width, height = params.get("width"), params.get("height")
+    if params.get("sizePreset") not in (None, "custom") or not width or not height:
+        return
+    width, height = float(width), float(height)
+    pixels = width * height
+    aspect_ratio = max(width, height) / min(width, height)
+    if (
+        pixels < _SEEDREAM_MIN_PIXELS
+        or pixels > _SEEDREAM_MAX_PIXELS
+        or aspect_ratio > _SEEDREAM_MAX_ASPECT_RATIO
+    ):
+        raise _api_error(
+            f"{model_id} renders 921,600 to 4,194,304 pixels at an aspect ratio "
+            f"from 1:16 to 16:1; got {params.get('width')}x{params.get('height')}"
+        )
+
+
 def _saved_upload_binding(project_id: str, role: str) -> dict[str, Any]:
     """Project input slot for a saved upload, in sogni-client's wire shape."""
     slot = re.fullmatch(r"(referenceAudio|referenceVideo)([1-3])", role)
@@ -595,6 +639,8 @@ def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
         return 512, 2048
     if is_gpt_image_model(model_id):
         return 256, 3840
+    if is_seedream_model(model_id):
+        return 240, 8192
     if model_id == FLUX3_IMAGE_KLEIN_MODEL_ID:
         return 256, 4096
     if model_id in _EXTENDED_IMAGE_SIZE_MODEL_IDS:
@@ -1756,8 +1802,11 @@ def create_job_request_message(
     for undefined_key in ("steps", "guidanceScale", "seed"):
         if keyframe[undefined_key] is None:
             keyframe.pop(undefined_key)
+    # Seedream images take no negative prompt, like external API video.
+    seedream_image = project_type == "image" and is_seedream_model(params["modelId"])
     if params.get("negativePrompt") and not (
         project_type == "audio"
+        or seedream_image
         or (
             project_type == "video"
             and (
@@ -1766,7 +1815,7 @@ def create_job_request_message(
         )
     ):
         keyframe["negativePrompt"] = params["negativePrompt"]
-    elif project_type in {"audio", "video"}:
+    elif project_type in {"audio", "video"} or seedream_image:
         keyframe.pop("negativePrompt", None)
     if params.get("stylePrompt"):
         keyframe["stylePrompt"] = params["stylePrompt"]
@@ -1915,6 +1964,7 @@ def create_job_request_message(
         elif size_preset is None:
             keyframe.pop("sizePreset", None)
         _validate_gpt_image_options(params)
+        _validate_seedream_options(params)
         if params.get("gptImageQuality") is not None:
             keyframe["gptImageQuality"] = params["gptImageQuality"]
         if params.get("gptImageBackground") is not None:
@@ -3664,6 +3714,7 @@ class ProjectsApi(EventEmitter):
                 if is_gpt_image_model(data["modelId"])
                 else 10
                 if data["modelId"] == FLUX3_IMAGE_KLEIN_MODEL_ID
+                or is_seedream_model(data["modelId"])
                 else 2
                 if "kontext" in data["modelId"] or "identity_edit" in data["modelId"]
                 else 3
