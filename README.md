@@ -238,6 +238,11 @@ selectors `targetResolution`
 names the delivered class (`720` renders the 384 px canvas, `1080` the 544 px
 canvas, `1440` or omitted the 768p canvas for 2K).
 
+One-stage MiniMax H3 Reference to Video accepts `reference_video_compression="vpack"`
+with an uploaded reference video to reduce reference-video memory use. Fine detail
+and motion may change. Omit it or use `"none"` for ordinary processing; image-only
+references and two-stage output do not support it.
+
 ```python
 project = await sogni.projects.create(
     type="video",

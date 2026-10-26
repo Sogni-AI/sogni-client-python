@@ -37,6 +37,49 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
 MP3 = b"ID3" + b"\0" * 16
 
 
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "minimax-h3-ref2va-fp8_r2v",
+        "minimax-h3-ref2va-fp8_r2v_balanced",
+        "minimax-h3-ref2va-fp8_r2v_turbo",
+        "minimax-h3-fastvideo-omni-int8_r2v_turbo",
+    ],
+)
+def test_minimax_reference_compression_is_explicit(model_id: str) -> None:
+    params = {
+        "type": "video",
+        "modelId": model_id,
+        "numberOfMedia": 1,
+        "positivePrompt": "A character walks.",
+        "frames": 124,
+        "width": 960,
+        "height": 544,
+        "referenceVideo": True,
+    }
+
+    def build(extra):
+        return create_job_request_message(
+            "vpack-contract", {**params, **extra}, model_options("video")
+        )["keyFrames"][0]
+
+    plain = build({})
+    assert build({"referenceVideoCompression": "none"}) == plain
+    assert build({"referenceVideoCompression": "vpack"}) == {
+        **plain,
+        "referenceVideoCompression": "vpack",
+    }
+    with pytest.raises(ValueError, match="none or vpack"):
+        build({"referenceVideoCompression": "auto"})
+    with pytest.raises(ValueError, match="uploaded reference video"):
+        build(
+            {"referenceVideoCompression": "vpack", "referenceVideo": None, "referenceImage": True}
+        )
+    if model_id != "minimax-h3-ref2va-fp8_r2v_turbo":
+        with pytest.raises(ValueError, match="one-stage"):
+            build({"referenceVideoCompression": "vpack", "modelId": model_id + "_2stage"})
+
+
 @pytest.mark.parametrize("strength,denoise", [(0, 1), (1, 0), (0.25, 0.75), (None, 0.5)])
 @pytest.mark.parametrize("output_format", ["png", "jpg", "webp"])
 def test_worker_image_export_and_zero_strength(strength, denoise, output_format) -> None:

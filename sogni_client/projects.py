@@ -1986,6 +1986,20 @@ def create_job_request_message(
         if is_upscale:
             upscale_resolution, upscale_frames = _validate_video_upscale_params(params)
         _validate_h3_params(params)
+        compression = params.get("referenceVideoCompression")
+        if compression is not None:
+            if compression not in ("none", "vpack"):
+                raise ValueError("referenceVideoCompression must be none or vpack.")
+            if compression == "vpack":
+                if (
+                    not is_minimax_h3_reference_model(params["modelId"])
+                    or params["modelId"].endswith("_2stage")
+                    or not _media_slots(params.get("referenceVideo"), params.get("referenceVideos"))
+                ):
+                    raise ValueError(
+                        "VPack requires an uploaded reference video on a one-stage MiniMax H3 Reference to Video model."
+                    )
+                keyframe["referenceVideoCompression"] = "vpack"
         if params.get("referenceImage"):
             keyframe["hasReferenceImage"] = True
         for slot, _value in _video_context_slots(params):
