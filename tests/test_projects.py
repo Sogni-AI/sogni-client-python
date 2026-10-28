@@ -827,6 +827,33 @@ def test_seedance_mini_uncensored_keeps_its_id_and_every_mini_limit(model_id: st
 
 
 @pytest.mark.asyncio
+async def test_api_key_refusal_preserves_limit_without_changing_existing_errors() -> None:
+    limit = {
+        "window": "daily", "currency": "spark", "limit": "25", "used": "24.5",
+        "requested": "1.2", "resetAt": 1790899200000,
+    }
+    api = ProjectsApi(FakeClient())
+    events: list[dict[str, Any]] = []
+    api.on("project", events.append)
+    api.on("job", events.append)
+    for code in sogni_client.API_KEY_ERROR_CODES.values():
+        for img_id in (None, "job"):
+            details = {"apiKeyLimit": limit} if code in (4202, 4203, 4204) else {}
+            api._handle_job_error({
+                "jobID": "project", "imgID": img_id, "error": str(code),
+                "error_message": "This key does not allow this request.", **details,
+            })
+            error = events[-1]["error"]
+            assert error == {
+                "code": code, "message": "This key does not allow this request.", **details,
+            }
+            assert not sogni_client.is_model_consent_required_error(error)
+            assert ProjectError(error).api_key_limit == details.get("apiKeyLimit")
+    api._handle_job_error({"jobID": "old", "error": "4102", "error_message": "Too long."})
+    assert events[-1]["error"] == {"code": 4102, "message": "Too long."}
+
+
+@pytest.mark.asyncio
 async def test_model_consent_refusal_keeps_the_agreement_on_the_project_error() -> None:
     consent = {"key": "seedance-2-5-uncensored", "version": 1, "modelId": "seedance-2-5-uncensored"}
     message = (

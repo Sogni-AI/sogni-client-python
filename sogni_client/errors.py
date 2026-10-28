@@ -15,6 +15,16 @@ SUBSCRIPTION_ERROR_CODES = {
     "SUBSCRIPTION_FEATURE_REQUIRES_UPGRADE": 4081,
 }
 
+API_KEY_ERROR_CODES = {
+    "KEY_UNUSABLE": 4200,
+    "LIMIT_CHECK_UNAVAILABLE": 4201,
+    "DAILY_LIMIT": 4202,
+    "MONTHLY_LIMIT": 4203,
+    "LIFETIME_LIMIT": 4204,
+    "MODEL_NOT_ALLOWED": 4205,
+    "IP_NOT_ALLOWED": 4206,
+}
+
 # Socket error code for a job refused because its model requires a one-time
 # likeness and consent agreement the account has not accepted. Seedance 2.5
 # Uncensored (``seedance-2-5-uncensored``) and Seedance 2.0 Mini Uncensored
@@ -172,6 +182,9 @@ class ProjectError(SogniError):
     def __init__(self, error: dict[str, Any]) -> None:
         self.error = error
         self.code = error.get("code")
+        limit = error.get("apiKeyLimit")
+        self.api_key_limit: dict[str, Any] | None = limit if isinstance(limit, dict) else None
+        self.apiKeyLimit = self.api_key_limit
         consent = error.get("consentRequired")
         self.consent_required: dict[str, Any] | None = (
             consent if isinstance(consent, dict) else None

@@ -5838,6 +5838,8 @@ class ProjectsApi(EventEmitter):
         for key in ("subscriptionLimit", "requiredPlans", "feature", "limitation"):
             if data.get(key) is not None:
                 error[key] = data[key]
+        if isinstance(data.get("apiKeyLimit"), dict):
+            error["apiKeyLimit"] = dict(data["apiKeyLimit"])
         # A model consent refusal (4103) names the agreement so apps can open it.
         consent = data.get("consentRequired")
         if isinstance(consent, dict) and isinstance(consent.get("key"), str):
