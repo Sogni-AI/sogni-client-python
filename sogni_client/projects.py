@@ -2247,6 +2247,10 @@ def create_job_request_message(
     )
     if params.get("network"):
         template["network"] = params["network"]
+    if "priorityMode" in params:
+        if not isinstance(params["priorityMode"], bool):
+            raise ValueError("Priority mode must be true or false.")
+        template["priorityMode"] = params["priorityMode"]
     if project_type == "image" and "embedPromptMetadata" in params:
         if not isinstance(params["embedPromptMetadata"], bool):
             raise ValueError("embedPromptMetadata must be a boolean")
@@ -5134,6 +5138,8 @@ class ProjectsApi(EventEmitter):
             for key in ("gptImageQuality", "outputFormat", "billingMode")
             if data.get(key)
         }
+        if "priorityMode" in data:
+            query["priorityMode"] = str(data["priorityMode"]).lower()
         response = await self.client.socket.get(
             f"/api/v{version}/job/estimate/" + "/".join(map(str, path)), query
         )
@@ -5243,6 +5249,7 @@ class ProjectsApi(EventEmitter):
                 # quote that one.
                 "network": data.get("network") or self._current_network(),
                 "billingMode": data.get("billingMode"),
+                **({"priorityMode": str(data["priorityMode"]).lower()} if "priorityMode" in data else {}),
             },
         )
         return self._cost(response)
@@ -5267,6 +5274,7 @@ class ProjectsApi(EventEmitter):
                 # quote that one.
                 "network": data.get("network") or self._current_network(),
                 "billingMode": data.get("billingMode"),
+                **({"priorityMode": str(data["priorityMode"]).lower()} if "priorityMode" in data else {}),
             },
         )
         return self._cost(response)

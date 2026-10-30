@@ -160,6 +160,8 @@ def project_params_from_recovered_project(project: Mapping[str, Any]) -> dict[st
     billing_mode = project.get("billingMode") or request.get("billingMode")
     if billing_mode:
         base["billingMode"] = billing_mode
+    if "priorityMode" in project:
+        base["priorityMode"] = project["priorityMode"]
     if request.get("disableSafety") is True:
         base["disableNSFWFilter"] = True
     output_format = request.get("outputFormat")

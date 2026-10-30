@@ -37,6 +37,33 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
 MP3 = b"ID3" + b"\0" * 16
 
 
+@pytest.mark.parametrize("enabled", [True, False, None])
+def test_priority_mode_is_explicit_on_generation_requests(enabled: bool | None) -> None:
+    params = {"type": "image", "modelId": "flux", "positivePrompt": "A garden", "numberOfMedia": 1,
+              "width": 1024, "height": 1024}
+    if enabled is not None:
+        params["priorityMode"] = enabled
+    wire = create_job_request_message("priority-project", params, model_options("image"))
+    if enabled is None:
+        assert "priorityMode" not in wire
+    else:
+        assert wire["priorityMode"] is enabled
+    params["priorityMode"] = "true"
+    with pytest.raises(ValueError, match="Priority mode must be true or false"):
+        create_job_request_message("invalid", params, model_options("image"))
+
+
+async def test_priority_mode_quotes_accept_python_parameter_names() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    client.socket.get = AsyncMock(return_value={"quote": {"project": {
+        "costInToken": "1", "costInUSD": "0.01", "costInSpark": "2", "costInSogni": "3"
+    }}})
+    await api.estimate_audio_cost(token_type="spark", model="minimax_music3", duration=30,
+                                  steps=30, number_of_media=1, network="fast", priority_mode=True)
+    assert client.socket.get.await_args.args[1]["priorityMode"] == "true"
+
+
 @pytest.mark.parametrize(
     "model_id",
     [

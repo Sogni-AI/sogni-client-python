@@ -26,6 +26,13 @@ from sogni_client.recovery import (
 from sogni_client.utils import b64_json_encode
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_recovery_retains_priority_mode(enabled: bool) -> None:
+    params = project_params_from_recovered_project({"model": {"id": "flux", "type": "image"},
+                                                  "priorityMode": enabled})
+    assert params["priorityMode"] is enabled
+
+
 class FakeRest:
     def __init__(self, responses: list[Any] | None = None) -> None:
         self.responses = list(responses or [])

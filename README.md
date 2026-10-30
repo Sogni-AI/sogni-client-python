@@ -15,6 +15,15 @@ and dimensions are the same. Both presets accept compatible Personal LoRAs.
 
 Projects accept optional `promptExpanded` (Python: `prompt_expanded`), a boolean reporting whether the submitted prompt was expanded. Omission means unknown; this does not enable expansion.
 
+Paid Unlimited members can pass `priority_mode=True`, `network="fast"`,
+`token_type="spark"`, and `billing_mode="subscription"` to `projects.create()`
+for earlier Fast queue placement, behind Premium Spark. Priority uses 1.5×
+the usual daily and monthly usage credits with unchanged plan caps and concurrency.
+It changes queue placement, not render speed, quality or GPU guarantees. Omit it
+to preserve usage and standard behavior. Trials, Relaxed and token-paid generations
+cannot use it. The image, video and audio estimate helpers accept the same option
+and include its weighted daily usage in `dailyFairUsePct`.
+
 > The Python port is currently beta. Keep credentials in environment variables
 > or your system keychain; never commit them to source control.
 
