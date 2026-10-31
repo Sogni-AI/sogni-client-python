@@ -658,6 +658,10 @@ the optional `vendorFailureCategory` string sent by the server. Known values
 include `content_policy`, `input_validation`, `timeout`, `result_storage`,
 `cancelled`, `vendor_failed`, `asset_resolution`, and `vendor_transient`.
 Servers may add categories; use a generic failure message for unknown strings.
+They also keep the provider's own `vendorErrorCode` when it gave one, such as
+`OutputAudioSensitiveContentDetected.PolicyViolation` (the provider flagged the
+soundtrack it generated, usually as possibly matching copyrighted audio) or
+`OutputVideoSensitiveContentDetected` (the picture).
 
 ### Retrying safely: `retry_after`, `details`, and idempotency keys
 
@@ -825,7 +829,10 @@ A completed render without a `url` says why in `urlUnavailable`:
 `sensitiveContent` (the Sensitive Content Filter withheld it), `unknownMediaKind`
 (neither the model nor the result says what media it is; pass `kind`), or
 `downloadUrlFailed` (the API could not sign one; ask again later). Failed and
-cancelled renders keep their `reason`.
+cancelled renders keep their `reason`. A failed project also carries `failure`
+(`{"code"?, "category"?, "message"?}`) when the server recorded why it failed:
+the provider's code, its category and the message its owner was shown, kept
+with the project's status for a day.
 
 ## Queue explanations
 

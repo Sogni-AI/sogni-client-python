@@ -382,6 +382,19 @@ def _job_index(value: Any) -> int | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _project_failure(value: Any) -> dict[str, str] | None:
+    """A stored project's ``failure`` text fields, or ``None`` when it has none."""
+
+    if not isinstance(value, dict):
+        return None
+    failure = {
+        key: value[key]
+        for key in ("code", "category", "message")
+        if isinstance(value.get(key), str) and value[key]
+    }
+    return failure or None
+
+
 def _format_runtime_limit(seconds: float) -> str:
     minutes = round(seconds / 60)
     if minutes % 60 == 0:
@@ -3908,9 +3921,12 @@ class ProjectsApi(EventEmitter):
         wait ``ApiError.retry_after`` seconds before the next request.
 
         Returns ``{"id", "status", "finished", "modelId"?, "waitingReason"?,
-        "jobs"}``. ``status`` is one of the :meth:`get_status` names and
-        ``finished`` is true for ``completed``, ``failed`` and ``canceled``. Each
-        entry of ``jobs`` is one render:
+        "failure"?, "jobs"}``. ``status`` is one of the :meth:`get_status` names
+        and ``finished`` is true for ``completed``, ``failed`` and ``canceled``.
+        ``failure`` (``{"code"?, "category"?, "message"?}``) is the explanation
+        a failed project's owner was shown, for example a provider refusing the
+        soundtrack it generated, kept for a client that was not listening when
+        it failed. Each entry of ``jobs`` is one render:
 
         - ``id``: the render's result id (the ``imgID`` of its events).
         - ``status``: ``completed``, ``failed`` or ``canceled`` once it has
@@ -4025,6 +4041,9 @@ class ProjectsApi(EventEmitter):
             result["modelId"] = model_id
         if "waitingReason" in snapshot:
             result["waitingReason"] = snapshot["waitingReason"]
+        failure = _project_failure(snapshot.get("failure"))
+        if failure:
+            result["failure"] = failure
         result["jobs"] = jobs
         return result
 
@@ -5835,6 +5854,8 @@ class ProjectsApi(EventEmitter):
             }
         if data.get("vendorFailureCategory"):
             error["vendorFailureCategory"] = data["vendorFailureCategory"]
+        if isinstance(data.get("vendorErrorCode"), str) and data["vendorErrorCode"]:
+            error["vendorErrorCode"] = data["vendorErrorCode"]
         for key in ("subscriptionLimit", "requiredPlans", "feature", "limitation"):
             if data.get(key) is not None:
                 error[key] = data[key]

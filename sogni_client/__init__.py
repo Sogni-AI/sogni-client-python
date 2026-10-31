@@ -114,7 +114,7 @@ from .worlds import (
     is_world_build_terminal,
 )
 
-__version__ = "5.70.0"
+__version__ = "5.71.1"
 
 __all__ = [
     "API_KEY_ERROR_CODES",
