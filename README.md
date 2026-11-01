@@ -1064,6 +1064,31 @@ await sogni.set_tokens(token=access_token, refresh_token=refresh_token)
 Username/password login and signing are available through `sogni.account.login`.
 API-key use does not require storing a wallet password.
 
+### Restoring a deleted account at sign-in
+
+When someone signs in to an account they deleted and the account can be
+restored, `login()` raises `ApiError` with HTTP status 400 and `error_code`
+`ACCOUNT_RESTORABLE_ERROR_CODE` (196). `error.details["deletedAt"]` is when the
+account was deleted, in Unix seconds. Ask the person whether to restore it; if
+they agree, call `login()` again with `restore_deleted_account=True` (or
+`restoreDeletedAccount=True`) to restore the account and sign in. The option
+changes nothing for an account that has not been deleted.
+
+```python
+from datetime import datetime, timezone
+
+from sogni_client import ACCOUNT_RESTORABLE_ERROR_CODE, ApiError
+
+try:
+    await sogni.account.login(username, password)
+except ApiError as error:
+    if error.error_code != ACCOUNT_RESTORABLE_ERROR_CODE:
+        raise
+    deleted_at = datetime.fromtimestamp(error.details["deletedAt"], timezone.utc)
+    # Ask the person whether to restore the account deleted on `deleted_at`. If they agree:
+    await sogni.account.login(username, password, restore_deleted_account=True)
+```
+
 ## Development
 
 ```bash
