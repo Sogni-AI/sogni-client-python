@@ -7,6 +7,7 @@ from email.utils import format_datetime
 import pytest
 
 from sogni_client.errors import (
+    ACCOUNT_RESTORABLE_ERROR_CODE,
     MODEL_CONSENT_REQUIRED_ERROR_CODE,
     MODEL_NOT_YET_AVAILABLE_ERROR_CODE,
     SUBSCRIPTION_ERROR_CODES,
@@ -278,6 +279,10 @@ def test_model_consent_required_error_code_matches_javascript_contract() -> None
 def test_model_not_yet_available_error_code_matches_javascript_contract() -> None:
     assert MODEL_NOT_YET_AVAILABLE_ERROR_CODE == 4104
     assert not is_model_consent_required_error(MODEL_NOT_YET_AVAILABLE_ERROR_CODE)
+
+
+def test_account_restorable_error_code_matches_javascript_contract() -> None:
+    assert ACCOUNT_RESTORABLE_ERROR_CODE == 196
 
 
 @pytest.mark.parametrize(
