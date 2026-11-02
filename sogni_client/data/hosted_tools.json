@@ -321,6 +321,14 @@
             "returnLastFrame": {
               "type": "boolean",
               "description": "Seedance 2.5 only. Set true to export a separate image of the final frame alongside the video. The result includes lastFrameUrl, which can be used as the first-frame image for a subsequent clip. Defaults to false; this does not extend the video automatically."
+            },
+            "referenceVideoCompression": {
+              "type": "string",
+              "enum": [
+                "none",
+                "vpack"
+              ],
+              "description": "Legacy compatibility preference for MiniMax H3 reference video. Current services select compression automatically; this field no longer selects compression. Leave it unset for new requests."
             }
           },
           "required": [
