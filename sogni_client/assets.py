@@ -12,6 +12,7 @@ import hashlib
 import time
 import weakref
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 from urllib.parse import quote
 
@@ -52,12 +53,25 @@ class _AutomaticSaveBlockedError(Exception):
     pass
 
 
+@dataclass
+class _PendingUpload:
+    upload: asyncio.Task[dict[str, Any]]
+    users: int = 0
+
+
+@dataclass
+class _BindingQueue:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
 class ReusableUploads:
     """Manage subscriber uploads once and reuse them across projects."""
 
     def __init__(self, rest: Any) -> None:
         self._rest = rest
-        self._pending: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self._pending: dict[str, _PendingUpload] = {}
+        self._bindings: dict[str, _BindingQueue] = {}
         # Bound hashing/upload memory even when a project has many reference files.
         self._lanes = asyncio.Semaphore(2)
         self._session = 0
@@ -71,6 +85,7 @@ class ReusableUploads:
     def _reset(self, _data: Any = None) -> None:
         self._session += 1
         self._pending.clear()
+        self._bindings.clear()
         self._availability = None
         self._automatic_save_blocked_until = 0.0
 
@@ -117,8 +132,16 @@ class ReusableUploads:
                 f"/v1/assets/{quote(asset_id, safe='')}/bind", dict(binding)
             )
 
-        await self._retry_busy(post)
-        self._assert_session(session)
+        queue = self._bindings.setdefault(asset_id, _BindingQueue())
+        queue.users += 1
+        try:
+            async with queue.lock:
+                await self._retry_busy(post)
+                self._assert_session(session)
+        finally:
+            queue.users -= 1
+            if queue.users == 0 and self._bindings.get(asset_id) is queue:
+                del self._bindings[asset_id]
 
     async def _retry_busy(self, operation: Callable[[], Awaitable[T]]) -> T:
         attempt = 0
@@ -138,36 +161,50 @@ class ReusableUploads:
         return await self._upload_internal(data, content_type, name, automatic=False)
 
     async def _upload_internal(
-        self, data: bytes, content_type: str, name: str, *, automatic: bool
+        self,
+        data: bytes,
+        content_type: str,
+        name: str,
+        *,
+        automatic: bool,
+        binding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         session = self._session
         if not data or len(data) > MAX_SAVED_UPLOAD_BYTES:
             raise _upload_error(400, "Choose a saved upload no larger than 100 MiB.")
-        async with self._lanes:
+        pending = None
+        try:
+            async with self._lanes:
+                self._assert_session(session)
+                # Recheck queued automatic saves before hashing or probing.
+                if automatic and self._automatic_save_blocked_until > time.monotonic():
+                    raise _AutomaticSaveBlockedError
+                sha256 = (
+                    await asyncio.to_thread(lambda: hashlib.sha256(data).hexdigest())
+                    if len(data) > 8 * 1024 * 1024
+                    else hashlib.sha256(data).hexdigest()
+                )
+                self._assert_session(session)
+                key = f"{sha256}:{content_type}"
+                pending = self._pending.get(key)
+                if pending is None:
+                    pending = _PendingUpload(
+                        asyncio.ensure_future(
+                            self._perform_upload(data, sha256, content_type, name, session)
+                        )
+                    )
+                    self._pending[key] = pending
+                pending.users += 1
+                saved = await asyncio.shield(pending.upload)
+            # Transfer lanes remain available while the server copies a saved file.
             self._assert_session(session)
-            # Concurrent project helpers can all pass the capability check before
-            # the first quota response arrives. Recheck once this lane reaches the
-            # front so queued automatic saves fall back without hashing or probing.
-            if automatic and self._automatic_save_blocked_until > time.monotonic():
-                raise _AutomaticSaveBlockedError
-            sha256 = (
-                await asyncio.to_thread(lambda: hashlib.sha256(data).hexdigest())
-                if len(data) > 8 * 1024 * 1024
-                else hashlib.sha256(data).hexdigest()
-            )
-            self._assert_session(session)
-            key = f"{sha256}:{content_type}"
-            existing = self._pending.get(key)
-            if existing is not None:
-                return await asyncio.shield(existing)
-            task = asyncio.ensure_future(
-                self._perform_upload(data, sha256, content_type, name, session)
-            )
-            self._pending[key] = task
-            try:
-                return await asyncio.shield(task)
-            finally:
-                if self._pending.get(key) is task:
+            if binding is not None:
+                await self.bind(saved["id"], binding)
+            return saved
+        finally:
+            if pending is not None:
+                pending.users -= 1
+                if pending.users == 0 and self._pending.get(key) is pending:
                     del self._pending[key]
 
     async def _perform_upload(
@@ -228,9 +265,8 @@ class ReusableUploads:
             return False
         self._assert_session(session)
         try:
-            saved = await self._upload_internal(data, content_type, name, automatic=True)
+            await self._upload_internal(data, content_type, name, automatic=True, binding=binding)
             self._assert_session(session)
-            await self.bind(saved["id"], binding)
             return True
         except _AutomaticSaveBlockedError:
             return False

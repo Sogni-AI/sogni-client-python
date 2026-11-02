@@ -271,6 +271,112 @@ async def test_account_change_mid_upload_fails_instead_of_binding_to_the_new_acc
     assert not any(path.endswith("/bind") for _, path, _ in rest.calls)
 
 
+async def test_same_file_bindings_share_preparation_and_leave_other_files_free() -> None:
+    rest = AssetsRest()
+    uploads = ReusableUploads(rest)
+    original = rest.post
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+    max_active = 0
+
+    async def controlled_post(path: str, body: Any = None, **kwargs: Any) -> Any:
+        nonlocal active, max_active
+        if path == "/v1/assets/prepare":
+            result = await original(path, body, **kwargs)
+            result["data"]["id"] = body["name"]
+            return result
+        if path == "/v1/assets/same/bind":
+            active += 1
+            max_active = max(max_active, active)
+            entered.set()
+            try:
+                await release.wait()
+                return await original(path, body, **kwargs)
+            finally:
+                active -= 1
+        return await original(path, body, **kwargs)
+
+    rest.post = controlled_post  # type: ignore[method-assign]
+    first = asyncio.create_task(
+        uploads.try_bind_file(PNG, "image/png", {"projectId": "first"}, name="same")
+    )
+    await asyncio.wait_for(entered.wait(), 1)
+    followers = [
+        asyncio.create_task(
+            uploads.try_bind_file(PNG, "image/png", {"projectId": str(i)}, name="same")
+        )
+        for i in range(5)
+    ]
+    try:
+        # This transfer follows the duplicate files in the upload lanes. It must
+        # complete even while every binding of the first file is still waiting.
+        assert await asyncio.wait_for(
+            uploads.try_bind_file(
+                PNG + b"other", "image/png", {"projectId": "other"}, name="other"
+            ),
+            1,
+        )
+        assert paths(rest).count("POST /v1/assets/prepare") == 2
+        assert not first.done()
+    finally:
+        release.set()
+        results = await asyncio.gather(first, *followers)
+    assert results == [True] * 6
+    assert max_active == 1
+    assert paths(rest).count("POST /v1/assets/same/bind") == 6
+
+
+async def test_account_change_cancels_queued_bindings_before_the_next_request() -> None:
+    rest = AssetsRest()
+    uploads = ReusableUploads(rest)
+    original = rest.post
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_post(path: str, body: Any = None, **kwargs: Any) -> Any:
+        result = await original(path, body, **kwargs)
+        if path.endswith("/bind") and body["projectId"] == "first":
+            entered.set()
+            await release.wait()
+        return result
+
+    rest.post = blocked_post  # type: ignore[method-assign]
+    first = asyncio.create_task(uploads.bind("asset-1", {"projectId": "first"}))
+    await asyncio.wait_for(entered.wait(), 1)
+    queued = asyncio.create_task(uploads.bind("asset-1", {"projectId": "queued"}))
+    await asyncio.sleep(0)
+    rest.auth.emit("updated", False)
+    release.set()
+    results = await asyncio.gather(first, queued, return_exceptions=True)
+    assert all(isinstance(result, SogniError) for result in results)
+    assert paths(rest).count("POST /v1/assets/asset-1/bind") == 1
+    await uploads.bind("asset-1", {"projectId": "new-account"})
+    assert paths(rest).count("POST /v1/assets/asset-1/bind") == 2
+
+
+async def test_failed_binding_does_not_block_the_next_binding_of_that_file() -> None:
+    rest = AssetsRest()
+    uploads = ReusableUploads(rest)
+    original = rest.post
+
+    async def failing_post(path: str, body: Any = None, **kwargs: Any) -> Any:
+        if path.endswith("/bind") and body["projectId"] == "first":
+            await asyncio.sleep(0)
+            raise ApiError(500, {"message": "Copy failed"})
+        return await original(path, body, **kwargs)
+
+    rest.post = failing_post  # type: ignore[method-assign]
+    results = await asyncio.gather(
+        uploads.bind("asset-1", {"projectId": "first"}),
+        uploads.bind("asset-1", {"projectId": "next"}),
+        return_exceptions=True,
+    )
+    assert isinstance(results[0], ApiError)
+    assert results[1] is None
+    assert paths(rest).count("POST /v1/assets/asset-1/bind") == 1
+
+
 def test_media_slots_bind_in_the_typescript_client_wire_shape() -> None:
     assert _saved_upload_binding("p", "referenceAudio2") == {
         "projectId": "p",
