@@ -43,6 +43,16 @@ MODEL_CONSENT_REQUIRED_ERROR_CODE = 4103
 # until the server makes it available.
 MODEL_NOT_YET_AVAILABLE_ERROR_CODE = 4104
 
+# REST error code ``account.login()`` raises when the account was deleted and
+# signing in can restore it. It arrives as an ``ApiError`` with HTTP status 400
+# and ``error_code`` set to this code; ``details["deletedAt"]`` is when the
+# account was deleted, in Unix seconds. Ask the person whether to restore the
+# account. If they agree, call ``login()`` again with the same username and
+# password and ``restore_deleted_account=True``: the account is restored and the
+# call signs in as usual. The error's message reads as is for apps that do not
+# handle this code.
+ACCOUNT_RESTORABLE_ERROR_CODE = 196
+
 # Error types for an LLM request that did not complete because the connection to
 # Sogni was interrupted, not because of the request itself:
 #

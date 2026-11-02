@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
+from sogni_client import ACCOUNT_RESTORABLE_ERROR_CODE
 from sogni_client.account import AccountApi, CurrentAccount, _parse_ether
 from sogni_client.auth import ApiKeyAuthManager
 from sogni_client.errors import ApiError
 from sogni_client.events import EventEmitter
+from sogni_client.transport import RestClient
 
 
 class FakeRest:
@@ -286,6 +290,103 @@ async def test_login_and_create_serialize_aliases_and_optional_fields(
             },
         },
     ]
+
+
+_LOGIN_WALLET = SimpleNamespace(address="0x0000000000000000000000000000000000000abc")
+
+
+def _stub_login_signing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(AccountApi, "get_wallet", staticmethod(lambda _u, _p: _LOGIN_WALLET))
+    monkeypatch.setattr(AccountApi, "_sign_authentication", lambda _self, _w, _n: "login-sig")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "restore"),
+    [
+        ({}, False),
+        ({"restore_deleted_account": False}, False),
+        ({"restoreDeletedAccount": False}, False),
+        ({"restore_deleted_account": True}, True),
+        ({"restoreDeletedAccount": True}, True),
+    ],
+)
+async def test_login_sends_restore_deleted_account_only_when_set(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, bool], restore: bool
+) -> None:
+    rest = FakeRest(
+        [
+            {"data": {"nonce": "login-nonce"}},
+            {"data": {"token": "t", "refreshToken": "r", "user": "ada"}},
+        ]
+    )
+    api = AccountApi(FakeClient(rest))
+    _stub_login_signing(monkeypatch)
+
+    await api.login("Ada", "secret", **options)
+
+    expected = [
+        ("walletAddress", _LOGIN_WALLET.address),
+        ("signature", "login-sig"),
+        ("rememberMe", False),
+        ("appSource", "pytest-source"),
+    ]
+    if restore:
+        expected.append(("restoreDeletedAccount", True))
+    assert rest.calls[1]["path"] == "/v1/account/login"
+    # Same keys in the same order as before the option existed, plus the flag last.
+    assert list(rest.calls[1]["body"].items()) == expected
+
+
+@pytest.mark.asyncio
+async def test_login_raises_restorable_error_then_restores_on_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleted_at = 1761955200
+    restorable = {
+        "status": "error",
+        "errorCode": 196,
+        "message": "This account was deleted. Sign in at app.sogni.ai to restore it.",
+        "details": {"deletedAt": deleted_at},
+    }
+    login_bodies: list[list[tuple[str, Any]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/account/nonce":
+            return httpx.Response(200, json={"status": "success", "data": {"nonce": "n"}})
+        assert request.url.path == "/v1/account/login"
+        body = json.loads(request.content)
+        login_bodies.append(list(body.items()))
+        if body.get("restoreDeletedAccount") is True:
+            return httpx.Response(200, json={"status": "success", "data": {"token": "t"}})
+        return httpx.Response(400, json=restorable)
+
+    _stub_login_signing(monkeypatch)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        rest = RestClient("https://api.sogni.ai", ApiKeyAuthManager(), http_client=http)
+        api = AccountApi(FakeClient(rest))
+
+        with pytest.raises(ApiError) as raised:
+            await api.login("Ada", "secret")
+        restored = await api.login("Ada", "secret", restore_deleted_account=True)
+
+    error = raised.value
+    assert ACCOUNT_RESTORABLE_ERROR_CODE == 196
+    assert error.status == 400
+    assert error.error_code == error.errorCode == ACCOUNT_RESTORABLE_ERROR_CODE
+    assert str(error) == restorable["message"]
+    assert error.details == {"deletedAt": deleted_at}
+    assert datetime.fromtimestamp(error.details["deletedAt"], timezone.utc) == datetime(
+        2025, 11, 1, tzinfo=timezone.utc
+    )
+    assert restored == {"token": "t"}
+    existing = [
+        ("walletAddress", _LOGIN_WALLET.address),
+        ("signature", "login-sig"),
+        ("rememberMe", False),
+        ("appSource", "pytest-source"),
+    ]
+    assert login_bodies == [existing, [*existing, ("restoreDeletedAccount", True)]]
 
 
 @pytest.mark.asyncio

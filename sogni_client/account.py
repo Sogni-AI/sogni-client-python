@@ -562,10 +562,24 @@ class AccountApi(EventEmitter):
         password: str,
         remember_me: bool = False,
         app_source: str | None = None,
+        *,
+        restore_deleted_account: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        """Sign in with a username and password.
+
+        Pass ``restore_deleted_account=True`` (``restoreDeletedAccount``) to
+        restore a deleted account and sign in, after the person confirms. A
+        deleted account that can be restored makes ``login()`` raise an
+        :class:`ApiError` whose ``error_code`` is
+        :data:`~sogni_client.errors.ACCOUNT_RESTORABLE_ERROR_CODE` (196) and whose
+        ``details["deletedAt"]`` is when it was deleted, in Unix seconds. The
+        option changes nothing for an account that has not been deleted.
+        """
+
         remember_me = bool(kwargs.get("rememberMe", remember_me))
         app_source = kwargs.get("appSource", app_source)
+        restore_deleted_account = kwargs.get("restoreDeletedAccount", restore_deleted_account)
         wallet = self.get_wallet(username, password)
         nonce = await self.get_nonce(wallet.address)
         resolved_source = (
@@ -578,6 +592,8 @@ class AccountApi(EventEmitter):
         }
         if resolved_source:
             body["appSource"] = resolved_source
+        if restore_deleted_account:
+            body["restoreDeletedAccount"] = True
         response = await self.client.rest.post("/v1/account/login", body)
         data = _unwrap_data(response)
         if not isinstance(data, dict):

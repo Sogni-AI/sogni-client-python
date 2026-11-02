@@ -25,6 +25,7 @@ from .chat import (
 )
 from .client import AsyncSogniClient, SogniClient
 from .errors import (
+    ACCOUNT_RESTORABLE_ERROR_CODE,
     API_KEY_ERROR_CODES,
     MODEL_CONSENT_REQUIRED_ERROR_CODE,
     MODEL_NOT_YET_AVAILABLE_ERROR_CODE,
@@ -114,9 +115,10 @@ from .worlds import (
     is_world_build_terminal,
 )
 
-__version__ = "5.70.0"
+__version__ = "5.72.0"
 
 __all__ = [
+    "ACCOUNT_RESTORABLE_ERROR_CODE",
     "API_KEY_ERROR_CODES",
     "BIREFNET_BACKGROUND_REMOVAL_MODEL_ID",
     "FLASHVSR_VIDEO_UPSCALE_MODEL_ID",

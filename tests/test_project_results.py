@@ -244,6 +244,48 @@ async def test_a_null_waiting_reason_is_reported_as_null() -> None:
     assert result["jobs"] == [{"id": "P2-0", "status": "jobStarted"}]
 
 
+async def test_a_failed_project_says_why_it_failed() -> None:
+    # A Seedance soundtrack refusal read back as nothing at all when nobody was listening (2026-10-30).
+    message = (
+        "Seedance blocked this video because it did not pass the provider's content policy. "
+        "No video was returned. Its generated soundtrack may match copyrighted audio."
+    )
+    failed = {
+        "id": "F1",
+        "status": "failed",
+        "finished": True,
+        "statusOnly": True,
+        "reason": "genfailure",
+        "workerJobs": [],
+        "completedWorkerJobs": [],
+    }
+    api, _ = make_api(
+        status={
+            "F1": {
+                **failed,
+                "failure": {
+                    "code": "OutputAudioSensitiveContentDetected.PolicyViolation",
+                    "category": "content_policy",
+                    "message": message,
+                    "extra": 7,
+                },
+            },
+            "F2": {**failed, "id": "F2"},
+        }
+    )
+
+    result = await api.get_result("F1")
+
+    assert result["status"] == "failed"
+    assert result["jobs"] == []
+    assert result["failure"] == {
+        "code": "OutputAudioSensitiveContentDetected.PolicyViolation",
+        "category": "content_policy",
+        "message": message,
+    }
+    assert "failure" not in await api.get_result("F2")
+
+
 UNKNOWN_MODEL_PROJECT: dict[str, Any] = {
     "id": "P3",
     "status": "completed",

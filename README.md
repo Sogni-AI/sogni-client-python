@@ -667,6 +667,10 @@ the optional `vendorFailureCategory` string sent by the server. Known values
 include `content_policy`, `input_validation`, `timeout`, `result_storage`,
 `cancelled`, `vendor_failed`, `asset_resolution`, and `vendor_transient`.
 Servers may add categories; use a generic failure message for unknown strings.
+They also keep the provider's own `vendorErrorCode` when it gave one, such as
+`OutputAudioSensitiveContentDetected.PolicyViolation` (the provider flagged the
+soundtrack it generated, usually as possibly matching copyrighted audio) or
+`OutputVideoSensitiveContentDetected` (the picture).
 
 ### Retrying safely: `retry_after`, `details`, and idempotency keys
 
@@ -834,7 +838,10 @@ A completed render without a `url` says why in `urlUnavailable`:
 `sensitiveContent` (the Sensitive Content Filter withheld it), `unknownMediaKind`
 (neither the model nor the result says what media it is; pass `kind`), or
 `downloadUrlFailed` (the API could not sign one; ask again later). Failed and
-cancelled renders keep their `reason`.
+cancelled renders keep their `reason`. A failed project also carries `failure`
+(`{"code"?, "category"?, "message"?}`) when the server recorded why it failed:
+the provider's code, its category and the message its owner was shown, kept
+with the project's status for a day.
 
 ## Queue explanations
 
@@ -1065,6 +1072,31 @@ await sogni.set_tokens(token=access_token, refresh_token=refresh_token)
 
 Username/password login and signing are available through `sogni.account.login`.
 API-key use does not require storing a wallet password.
+
+### Restoring a deleted account at sign-in
+
+When someone signs in to an account they deleted and the account can be
+restored, `login()` raises `ApiError` with HTTP status 400 and `error_code`
+`ACCOUNT_RESTORABLE_ERROR_CODE` (196). `error.details["deletedAt"]` is when the
+account was deleted, in Unix seconds. Ask the person whether to restore it; if
+they agree, call `login()` again with `restore_deleted_account=True` (or
+`restoreDeletedAccount=True`) to restore the account and sign in. The option
+changes nothing for an account that has not been deleted.
+
+```python
+from datetime import datetime, timezone
+
+from sogni_client import ACCOUNT_RESTORABLE_ERROR_CODE, ApiError
+
+try:
+    await sogni.account.login(username, password)
+except ApiError as error:
+    if error.error_code != ACCOUNT_RESTORABLE_ERROR_CODE:
+        raise
+    deleted_at = datetime.fromtimestamp(error.details["deletedAt"], timezone.utc)
+    # Ask the person whether to restore the account deleted on `deleted_at`. If they agree:
+    await sogni.account.login(username, password, restore_deleted_account=True)
+```
 
 ## Development
 
