@@ -215,6 +215,8 @@ class AccountApi(EventEmitter):
         self.currentAccount = self.current_account
         self._last_subscription_version: int | float | None = None
         self._subscription_socket_writes = 0
+        self._account_session_version = self.client.auth.session_version
+        self._socket_priority_availability: tuple[int, bool] | None = None
 
         self.current_account._update(
             {
@@ -235,6 +237,7 @@ class AccountApi(EventEmitter):
         self.client.on("disconnected", self._on_disconnected)
         self.client.auth.on("updated", self._on_auth_updated)
         self.client.on("sessionChanged", lambda _data: self._on_auth_updated(False))
+        self.client.auth.on("sessionChanged", self._clear_changed_account_session)
 
     @property
     def _eip712_domain(self) -> dict[str, Any]:
@@ -257,22 +260,70 @@ class AccountApi(EventEmitter):
         self.current_account._update({"network": network, "network_status": "connected"})
 
     def _on_connecting(self, data: Any) -> None:
+        self._clear_socket_priority_availability()
         network = data.get("network") if isinstance(data, dict) else data
         self.current_account._update({"network": network, "network_status": "connecting"})
 
     def _on_connected(self, data: Any) -> None:
+        self._clear_socket_priority_availability()
         network = data.get("network") if isinstance(data, dict) else data
         self.current_account._update({"network": network, "network_status": "connected"})
 
     def _on_disconnected(self, _data: Any) -> None:
+        self._clear_socket_priority_availability()
         self.current_account._update({"network": None, "network_status": "disconnected"})
+
+    def _clear_socket_priority_availability(self) -> None:
+        self._socket_priority_availability = None
+        subscription = self.current_account.subscription
+        capabilities = subscription.get("capabilities") if subscription else None
+        if not isinstance(capabilities, dict) or not capabilities.get("priorityMode"):
+            return
+        capabilities = {key: value for key, value in capabilities.items() if key != "priorityMode"}
+        self.current_account._update(
+            {"subscription": {**subscription, "capabilities": capabilities}}
+        )
+
+    def _with_socket_priority_availability(self, subscription: dict[str, Any]) -> dict[str, Any]:
+        """A REST plan refresh cannot replace the current connection's Priority verdict."""
+        verdict = self._socket_priority_availability
+        available = bool(
+            verdict
+            and verdict[0] == self.client.auth.session_version
+            and verdict[1]
+            and self.client.socket.is_connected
+            and subscription.get("active")
+            and subscription.get("status") != "trialing"
+            and subscription.get("tier") in {"unlimited", "unlimited_pro"}
+        )
+        raw_capabilities = subscription.get("capabilities")
+        capabilities = raw_capabilities if isinstance(raw_capabilities, dict) else {}
+        if available == (capabilities.get("priorityMode") is True):
+            return subscription
+        capabilities = dict(capabilities)
+        if available:
+            capabilities["priorityMode"] = True
+        else:
+            capabilities.pop("priorityMode", None)
+        return {**subscription, "capabilities": capabilities}
+
+    def _clear_changed_account_session(self, _data: Any = None) -> None:
+        if self._account_session_version == self.client.auth.session_version:
+            return
+        self._account_session_version = self.client.auth.session_version
+        self._last_subscription_version = None
+        self._subscription_socket_writes = 0
+        self._socket_priority_availability = None
+        self.current_account._clear()
 
     def _on_auth_updated(self, authenticated: bool) -> Any:
         if not authenticated:
             self._last_subscription_version = None
             self._subscription_socket_writes = 0
+            self._socket_priority_availability = None
             self.current_account._clear()
             return None
+        self._clear_changed_account_session()
         return self.me()
 
     @staticmethod
@@ -396,7 +447,14 @@ class AccountApi(EventEmitter):
             self._last_subscription_version = version
         if source == "socket":
             self._subscription_socket_writes += 1
-        self.current_account._update({"subscription": subscription})
+            capabilities = subscription.get("capabilities")
+            self._socket_priority_availability = (
+                self.client.auth.session_version,
+                isinstance(capabilities, dict) and capabilities.get("priorityMode") is True,
+            )
+        self.current_account._update(
+            {"subscription": self._with_socket_priority_availability(subscription)}
+        )
         return True
 
     def _on_subscription_entitlement_updated(self, data: Any) -> None:
@@ -686,6 +744,11 @@ class AccountApi(EventEmitter):
             query["provider"] = str(provider)
         if offset:
             query["offset"] = str(offset)
+        include_priority = (
+            _first(values, "includePriorityAccounting", "include_priority_accounting") is True
+        )
+        if include_priority:
+            query["includePriorityAccounting"] = "true"
         data = _unwrap_data(await self.client.rest.get("/v1/transactions/list", query))
         if not isinstance(data, dict):
             raise ValueError("Transaction response did not include data")
@@ -715,6 +778,8 @@ class AccountApi(EventEmitter):
             entry["createTime"] = _date_from_milliseconds(raw.get("createTime", 0))
             entry["updateTime"] = _date_from_milliseconds(raw.get("updateTime", 0))
             entry["endTime"] = _date_from_milliseconds(raw.get("endTime", 0))
+            if include_priority and raw.get("priorityUsage"):
+                entry["priorityUsage"] = raw["priorityUsage"]
             entries.append(entry)
         next_params = dict(values)
         next_params["offset"] = data.get("next")
@@ -883,7 +948,7 @@ class AccountApi(EventEmitter):
         )
         if not applied and self.current_account.subscription is not None:
             return self.current_account.subscription
-        return subscription
+        return self.current_account.subscription or subscription
 
     async def get_subscription_usage(self) -> dict[str, Any]:
         data = _unwrap_data(await self.client.rest.get("/v1/subscriptions/usage"))

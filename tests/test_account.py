@@ -15,7 +15,8 @@ from sogni_client.account import AccountApi, CurrentAccount, _parse_ether
 from sogni_client.auth import ApiKeyAuthManager
 from sogni_client.errors import ApiError
 from sogni_client.events import EventEmitter
-from sogni_client.transport import RestClient
+from sogni_client.transport import ApiClient, RestClient
+from sogni_client.utils import b64_json_encode
 
 
 class FakeRest:
@@ -69,6 +70,231 @@ class FakeClient(EventEmitter):
         self.auth = ApiKeyAuthManager()
         self.app_id = app_id
         self.app_source = app_source
+
+
+@pytest.fixture
+async def priority_account_connection():
+    """Use real transport event forwarding and decoded authenticated frames, without a network."""
+    state = {
+        "snapshot": {
+            "active": True,
+            "status": "active",
+            "tier": "unlimited",
+            "version": 8,
+            "capabilities": {"unlimited": True, "priorityMode": True},
+        },
+        "handshake": None,
+    }
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/account/me":
+            return httpx.Response(200, json={"data": {"walletAddress": "0xabc"}})
+        assert request.url.path == "/v1/subscriptions/status"
+        return httpx.Response(200, json={"data": {"subscription": state["snapshot"]}})
+
+    class Socket:
+        def __init__(self) -> None:
+            self.messages: asyncio.Queue[str] = asyncio.Queue()
+
+        async def recv(self) -> str:
+            return await self.messages.get()
+
+        async def close(self, **_kwargs: Any) -> None:
+            pass
+
+    async def socket_factory(_url: str, **_kwargs: Any) -> Socket:
+        socket = Socket()
+        socket.messages.put_nowait(
+            json.dumps({"type": "authenticated", "data": b64_json_encode(state["handshake"])})
+        )
+        return socket
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    client = ApiClient(
+        base_url="https://api.example.test",
+        socket_url="wss://socket.example.test",
+        app_id="priority-account-test",
+        network="fast",
+        auth_type="apiKey",
+        disable_socket=True,
+        http_client=http,
+        websocket_factory=socket_factory,
+    )
+    account = AccountApi(client)
+    me_ready = asyncio.Event()
+    account.current_account.on(
+        "updated",
+        lambda _data: me_ready.set() if account.current_account.wallet_address else None,
+    )
+    await client.auth.authenticate("test-key-one")
+    await asyncio.wait_for(me_ready.wait(), 1)
+
+    async def connect(capabilities: dict[str, Any] | None, *, version: int = 8) -> None:
+        await client.socket.disconnect()
+        state["handshake"] = {
+            "address": "0xabc",
+            "subscriptionEntitlement": {
+                "active": True,
+                "subscription": {
+                    "status": "active",
+                    "tier": "unlimited",
+                    "version": version,
+                    **({"capabilities": capabilities} if capabilities is not None else {}),
+                },
+            },
+        }
+        authenticated = asyncio.Event()
+        client.socket.once("authenticated", lambda _data: authenticated.set())
+        await client.socket.connect()
+        await asyncio.wait_for(authenticated.wait(), 1)
+
+    try:
+        yield SimpleNamespace(client=client, account=account, state=state, connect=connect)
+    finally:
+        await client.aclose()
+        await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_priority_uses_current_authenticated_socket_verdict_over_rest(
+    priority_account_connection,
+) -> None:
+    harness = priority_account_connection
+    account = harness.account
+
+    # A REST-only readiness claim never enables Priority before a Socket verdict.
+    snapshot = await account.get_subscription_status()
+    assert snapshot is account.current_account.subscription
+    assert snapshot["capabilities"] == {"unlimited": True}
+
+    await harness.connect({"unlimited": True, "priorityMode": True})
+    assert account.current_account.network_status == "connected"
+    assert account.current_account.subscription["capabilities"]["priorityMode"] is True
+
+    # Equal-version billing refreshes retain readiness while allowing ordinary fields to change.
+    harness.state["snapshot"] = {
+        **harness.state["snapshot"],
+        "paymentPending": True,
+        "capabilities": {"unlimited": True, "otherFeature": True},
+    }
+    refreshed = await account.getSubscriptionStatus()
+    assert refreshed is account.current_account.subscription
+    assert refreshed["paymentPending"] is True
+    assert refreshed["capabilities"] == {
+        "unlimited": True,
+        "otherFeature": True,
+        "priorityMode": True,
+    }
+
+    # A reconnect to a dark/unavailable Socket removes the prior connection's verdict.
+    await harness.connect(None)
+    harness.state["snapshot"]["capabilities"]["priorityMode"] = True
+    refreshed = await account.get_subscription_status()
+    assert refreshed["capabilities"] == {"unlimited": True, "otherFeature": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event", ["connecting", "connected", "disconnected"])
+async def test_priority_verdict_clears_on_connection_lifecycle(
+    priority_account_connection, event: str
+) -> None:
+    harness = priority_account_connection
+    await harness.connect({"unlimited": True, "priorityMode": True})
+    # Connecting is an ApiClient event; the other two are forwarded from its real socket.
+    emitter = harness.client if event == "connecting" else harness.client.socket
+    emitter.emit(event, {"network": "fast", "code": 1000})
+    assert harness.account.current_account.subscription["capabilities"] == {"unlimited": True}
+    refreshed = await harness.account.get_subscription_status()
+    assert refreshed["capabilities"] == {"unlimited": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["account", "logout"])
+async def test_priority_verdict_does_not_cross_auth_sessions(
+    priority_account_connection, change: str
+) -> None:
+    harness = priority_account_connection
+    await harness.connect({"unlimited": True, "priorityMode": True})
+    if change == "account":
+        await harness.client.auth.authenticate("test-key-two")
+    else:
+        harness.client.auth.clear()
+    assert harness.account.current_account.subscription is None
+    snapshot = await harness.account.get_subscription_status()
+    assert snapshot["capabilities"] == {"unlimited": True}
+
+
+@pytest.mark.asyncio
+async def test_client_session_event_preserves_legacy_account_clear(
+    priority_account_connection,
+) -> None:
+    harness = priority_account_connection
+    await harness.connect({"unlimited": True, "priorityMode": True})
+    version = harness.client.auth.session_version
+
+    harness.client.emit("sessionChanged", None)
+
+    assert harness.client.auth.session_version == version
+    assert harness.account.current_account.wallet_address is None
+    assert harness.account.current_account.subscription is None
+    snapshot = await harness.account.get_subscription_status()
+    assert snapshot["capabilities"] == {"unlimited": True}
+
+
+@pytest.mark.asyncio
+async def test_real_client_close_clears_account_and_priority(priority_account_connection) -> None:
+    harness = priority_account_connection
+    await harness.connect({"unlimited": True, "priorityMode": True})
+
+    await harness.client.aclose()
+
+    assert harness.account.current_account.subscription is None
+    assert harness.account.current_account.wallet_address is None
+    assert harness.account.current_account.network_status == "disconnected"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changes", [{"status": "trialing"}, {"active": False}, {"tier": "limited"}]
+)
+async def test_priority_connection_capability_still_requires_paid_active_plan(
+    priority_account_connection, changes: dict[str, Any]
+) -> None:
+    harness = priority_account_connection
+    await harness.connect({"unlimited": True, "priorityMode": True})
+    harness.state["snapshot"].update(changes)
+    snapshot = await harness.account.get_subscription_status()
+    assert "priorityMode" not in snapshot["capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_stale_socket_snapshot_cannot_restore_priority_after_newer_withdrawal(
+    priority_account_connection,
+) -> None:
+    harness = priority_account_connection
+    await harness.connect({"unlimited": True, "priorityMode": True})
+    harness.client.socket.emit(
+        "subscriptionEntitlementUpdated",
+        {
+            "active": True,
+            "subscription": {"status": "active", "tier": "unlimited", "version": 9},
+        },
+    )
+    harness.client.socket.emit(
+        "subscriptionEntitlementUpdated",
+        {
+            "active": True,
+            "subscription": {
+                "status": "active",
+                "tier": "unlimited",
+                "version": 8,
+                "capabilities": {"unlimited": True, "priorityMode": True},
+            },
+        },
+    )
+    harness.state["snapshot"]["version"] = 9
+    snapshot = await harness.account.get_subscription_status()
+    assert snapshot["capabilities"] == {"unlimited": True}
 
 
 def test_current_account_defaults_aliases_and_unlimited_entitlement() -> None:
@@ -504,6 +730,37 @@ async def test_transaction_history_serializes_query_and_converts_millisecond_dat
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", ["include_priority_accounting", "includePriorityAccounting"])
+async def test_transaction_history_priority_metadata_requires_explicit_opt_in(option: str) -> None:
+    metadata = {
+        "priorityMode": True,
+        "usageMultiplier": 1.5,
+        "rawSparkValue": 20,
+        "weightedUsageCredits": 30,
+        "dailyChargedSpark": 36,
+        "dailyRefundedSpark": 6,
+    }
+    raw = {"id": "priority-tx", "priorityUsage": metadata}
+    response = {"data": {"transactions": [raw, {"id": "ordinary-tx"}], "next": 2}}
+    rest = FakeRest([response, response, response])
+    api = AccountApi(FakeClient(rest))
+    params = {"status": "complete", "address": "0xabc", "limit": 20}
+
+    ordinary = await api.transaction_history(params)
+    disabled = await api.transaction_history(params, **{option: False})
+    opted_in = await api.transaction_history(params, **{option: True})
+
+    assert "includePriorityAccounting" not in rest.calls[0]["params"]
+    assert "includePriorityAccounting" not in rest.calls[1]["params"]
+    assert rest.calls[2]["params"]["includePriorityAccounting"] == "true"
+    assert "priorityUsage" not in ordinary["entries"][0]
+    assert disabled["entries"] == ordinary["entries"]
+    assert opted_in["entries"][0]["priorityUsage"] is metadata
+    assert "priorityUsage" not in opted_in["entries"][1]
+    assert opted_in["next"] == {**params, option: True, "offset": 2}
 
 
 @pytest.mark.asyncio

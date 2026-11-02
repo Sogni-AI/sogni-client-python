@@ -5268,7 +5268,11 @@ class ProjectsApi(EventEmitter):
                 # quote that one.
                 "network": data.get("network") or self._current_network(),
                 "billingMode": data.get("billingMode"),
-                **({"priorityMode": str(data["priorityMode"]).lower()} if "priorityMode" in data else {}),
+                **(
+                    {"priorityMode": str(data["priorityMode"]).lower()}
+                    if "priorityMode" in data
+                    else {}
+                ),
             },
         )
         return self._cost(response)
@@ -5293,7 +5297,11 @@ class ProjectsApi(EventEmitter):
                 # quote that one.
                 "network": data.get("network") or self._current_network(),
                 "billingMode": data.get("billingMode"),
-                **({"priorityMode": str(data["priorityMode"]).lower()} if "priorityMode" in data else {}),
+                **(
+                    {"priorityMode": str(data["priorityMode"]).lower()}
+                    if "priorityMode" in data
+                    else {}
+                ),
             },
         )
         return self._cost(response)

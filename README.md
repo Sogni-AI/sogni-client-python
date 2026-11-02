@@ -20,8 +20,8 @@ Paid Unlimited members can pass `priority_mode=True`, `network="fast"`,
 for earlier Fast queue placement, behind Premium Spark. Priority uses 1.5×
 the usual daily and monthly usage credits with unchanged plan caps and concurrency.
 It changes queue placement, not render speed, quality or GPU guarantees. Omit it
-to preserve usage and standard behavior. Trials, Relaxed and token-paid generations
-cannot use it. The image, video and audio estimate helpers accept the same option
+to preserve usage and standard behavior. Trials, Relaxed, token-paid generations
+and third-party vendor models cannot use it. The image, video and audio estimate helpers accept the same option
 and include its weighted daily usage in `dailyFairUsePct`.
 
 > The Python port is currently beta. Keep credentials in environment variables
