@@ -90,3 +90,8 @@ async def test_estimate_uses_same_gif_dimensions_as_create(extra):
         "gptImageFrameDurationMs": 200,
         "gptImageComplexity": "low",
     }
+
+@pytest.mark.parametrize("width,height,count", [(1280, 1280, 5), (16, 16, 9), (256, 256, 3)])
+def test_rejects_provider_invalid_gif_sheets_before_sending(width: int, height: int, count: int) -> None:
+    with pytest.raises(Exception, match="supported sheet"):
+        create_job_request_message("invalid-sheet", {"type": "image", "modelId": "gpt-image-2.6-flare", "positivePrompt": "A lantern loop", "numberOfMedia": 1, "outputFormat": "gif", "width": width, "height": height, "gptImageFrameCount": count}, OPTIONS)

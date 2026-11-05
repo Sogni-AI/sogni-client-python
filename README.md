@@ -39,7 +39,9 @@ accept `output_format="gif"`, `gpt_image_frame_count=9`, and
 size such as 320 × 320 or 896 × 896 and `gpt_image_quality="medium"`.
 The same settings belong in `projects.estimate_cost()` and `projects.create()`.
 GIFs accept no references, mask, annotation, transparency, or compression;
-2–16 frames must fit a total budget of 8,294,400 pixels.
+2–16 frames must fit a 655,360–8,294,400-pixel sheet, including unused cells,
+with at most 3840 pixels per sheet edge. Frame-size limits depend on count;
+omitting dimensions lets the client choose a valid size.
 
 `gpt_image_complexity` controls planning (`low`, `medium`, `high`) independently
 of rendering quality. For still edits, `gpt_image_markup_url` is a separate

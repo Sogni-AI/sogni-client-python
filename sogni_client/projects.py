@@ -541,11 +541,16 @@ def _gif_frame_size(params: dict[str, Any]) -> dict[str, int]:
     count = params.get("gptImageFrameCount", 9)
     if isinstance(count, bool) or not isinstance(count, int) or not 2 <= count <= 16:
         raise _api_error("GIF frame count must be 2–16")
-    side = min(896, int(math.sqrt(8294400 / count) / 16) * 16)
+    layouts = [(4, 2), (2, 4)] if count <= 8 else ([(3, 3)] if count == 9 else ([(4, 3), (3, 4)] if count <= 12 else [(4, 4)]))
+    cells = layouts[0][0] * layouts[0][1]
+    side = min(896, int(math.sqrt(8294400 / cells) / 16) * 16)
     width = params.get("width", params.get("height", side))
     height = params.get("height", params.get("width", side))
-    if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 or n % 16 for n in (width, height)) or max(width, height) > 3840 or max(width, height) / min(width, height) > 3 or width * height * count > 8294400:
-        raise _api_error("GIF frame dimensions must be multiples of 16, within 3:1 and the 8294400 total pixel budget")
+    if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 or n % 16 for n in (width, height)) or max(width, height) / min(width, height) > 3:
+        raise _api_error("GIF frame dimensions must be positive multiples of 16 within 3:1")
+    sheets = [(width * columns, height * rows) for columns, rows in layouts]
+    if not any(max(w, h) <= 3840 and max(w, h) / min(w, h) <= 3 and 655360 <= w * h <= 8294400 for w, h in sheets):
+        raise _api_error("GIF frames cannot fit a supported sheet within the 655360–8294400 pixel budget and 3840 sheet edge limit")
     return {"width": width, "height": height}
 
 
