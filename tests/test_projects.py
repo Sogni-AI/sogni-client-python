@@ -761,12 +761,46 @@ def test_seedance25_export_options_reach_the_wire_and_are_validated() -> None:
     assert raised.value.status == 400
     with pytest.raises(ApiError, match=r"^MOV output is supported only by Seedance 2\.5\.$"):
         _seedance_request(modelId="seedance-2-0", outputFormat="mov")
-    with pytest.raises(ApiError, match=r"^Last-frame export is supported only by Seedance 2\.5\.$"):
+    with pytest.raises(
+        ApiError, match=r"^Last-frame export is supported only by Seedance 2\.5 and MiniMax H3\.$"
+    ):
         _seedance_request(modelId="seedance-2-0", returnLastFrame=True)
     with pytest.raises(ApiError, match=r"^returnLastFrame must be a boolean\.$"):
         _seedance_request(returnLastFrame="true")
     # Other video models keep mp4, which stays valid everywhere.
     assert _seedance_request(modelId="seedance-2-0", outputFormat="mp4")["outputFormat"] == "mp4"
+
+
+@pytest.mark.parametrize(
+    "model_id,steps",
+    [
+        ("minimax-h3-fl2va-fp8_t2v", 20),
+        ("minimax-h3-ref2va-fp8_r2v", 20),
+        ("minimax-h3-fastvideo-int8_t2v_turbo", 4),
+    ],
+)
+def test_minimax_last_frame_export_is_explicit(model_id: str, steps: int) -> None:
+    params = {
+        "type": "video",
+        "modelId": model_id,
+        "positivePrompt": "Harbor at dusk",
+        "numberOfMedia": 1,
+        "width": 1344,
+        "height": 768,
+        "duration": 124 / 24,
+        "steps": steps,
+        "tokenType": "spark",
+    }
+    options = model_options("video")
+    if "_r2v" in model_id:
+        params["referenceImage"] = "uploaded-image"
+    assert (
+        "returnLastFrame"
+        not in create_job_request_message("video", params, options)["keyFrames"][0]
+    )
+    for enabled in (True, False):
+        wire = create_job_request_message("video", {**params, "returnLastFrame": enabled}, options)
+        assert wire["keyFrames"][0]["returnLastFrame"] is enabled
 
 
 def test_seedance25_uncensored_keeps_its_id_and_every_seedance25_limit() -> None:
@@ -1273,7 +1307,7 @@ async def test_seedance25_job_result_carries_the_exported_last_frame() -> None:
     completed = [event for event in events if event.get("type") == "completed"]
     assert completed[-1]["lastFrameUrl"] == "https://cdn.example/clip-last.png"
     assert completed[-1]["outputFormat"] == "mov"
-    assert "lastFrameKey" not in completed[-1]
+    assert completed[-1]["lastFrameKey"] == "clip-1/lastFrame.png"
 
     api.media_download_url = AsyncMock(return_value="https://cdn.example/clip-last-fresh.png")
     assert await job.get_last_frame_url() == "https://cdn.example/clip-last-fresh.png"

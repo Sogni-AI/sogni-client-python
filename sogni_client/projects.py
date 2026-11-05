@@ -768,7 +768,7 @@ _SEEDANCE_DRAFT_FIELDS = ("seedanceDraft", "seedanceDraftExpiresAt", "seedanceDr
 def _video_export_fields(
     data: dict[str, Any], fields: tuple[str, ...] = _VIDEO_EXPORT_FIELDS
 ) -> dict[str, Any]:
-    """Seedance 2.5 export and draft fields a job record or result frame carries.
+    """Video export and Seedance draft fields a job record or result frame carries.
 
     Read from the record itself, falling back to its worker ``result`` receipt.
     Absent fields are left out so a later update never erases a known value.
@@ -1446,7 +1446,7 @@ def _validate_wan3_references(params: dict[str, Any]) -> None:
 
 
 def _validate_video_export_options(params: dict[str, Any]) -> None:
-    """Seedance 2.5 export options: a MOV container and a separate final-frame image."""
+    """Video export options: a supported container and separate final-frame image."""
 
     output_format = params.get("outputFormat")
     return_last_frame = params.get("returnLastFrame")
@@ -1457,8 +1457,8 @@ def _validate_video_export_options(params: dict[str, Any]) -> None:
         raise _api_error("MOV output is supported only by Seedance 2.5.")
     if return_last_frame is not None and not isinstance(return_last_frame, bool):
         raise _api_error("returnLastFrame must be a boolean.")
-    if return_last_frame is True and not is_25:
-        raise _api_error("Last-frame export is supported only by Seedance 2.5.")
+    if return_last_frame is True and not (is_25 or is_minimax_h3_model(params["modelId"])):
+        raise _api_error("Last-frame export is supported only by Seedance 2.5 and MiniMax H3.")
 
 
 def _validate_video_assets(params: dict[str, Any]) -> None:
@@ -2530,7 +2530,7 @@ class Job(DataEntity):
 
     @property
     def last_frame_url(self) -> str | None:
-        """Exported final-frame image URL, when requested (Seedance 2.5 ``returnLastFrame``)."""
+        """Exported final-frame image URL (Seedance 2.5 or MiniMax H3 ``returnLastFrame``)."""
 
         return self._data.get("lastFrameUrl")
 
@@ -4879,7 +4879,7 @@ class ProjectsApi(EventEmitter):
                     frame["nsfwDetected"] = job["nsfwDetected"]
                 if isinstance(job.get("nsfwSources"), list):
                     frame["nsfwSources"] = job["nsfwSources"]
-                frame.update(_video_export_fields(job, ("lastFrameUrl", "outputFormat")))
+                frame.update(_video_export_fields(job))
                 if isinstance(job.get("result"), dict):
                     frame.update(_job_provenance_from_result(job["result"]) or {})
                 await self._apply_job_result(frame)
@@ -6039,7 +6039,7 @@ class ProjectsApi(EventEmitter):
             "resultUrl": url,
             **{
                 field: export[field]
-                for field in ("lastFrameUrl", "outputFormat", *_SEEDANCE_DRAFT_FIELDS)
+                for field in (*_VIDEO_EXPORT_FIELDS, *_SEEDANCE_DRAFT_FIELDS)
                 if field in export
             },
             "isNSFW": nsfw,
