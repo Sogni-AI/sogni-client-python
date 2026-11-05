@@ -530,16 +530,48 @@ def _js_length(value: Any) -> int:
     return len(value) if isinstance(value, (str, list, tuple)) else 0
 
 
-_GPT_IMAGE_MODEL_IDS = frozenset({"gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"})
+_GPT_IMAGE_MODEL_IDS = frozenset({"gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare", "gpt-image-2.6-sunburst", "gpt-image-2.6-flare"})
 
 
 def is_gpt_image_model(model_id: str | None) -> bool:
     return model_id in _GPT_IMAGE_MODEL_IDS
 
 
+def _gif_frame_size(params: dict[str, Any]) -> dict[str, int]:
+    count = params.get("gptImageFrameCount", 9)
+    if isinstance(count, bool) or not isinstance(count, int) or not 2 <= count <= 16:
+        raise _api_error("GIF frame count must be 2–16")
+    side = min(896, int(math.sqrt(8294400 / count) / 16) * 16)
+    width = params.get("width", params.get("height", side))
+    height = params.get("height", params.get("width", side))
+    if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 or n % 16 for n in (width, height)) or max(width, height) > 3840 or max(width, height) / min(width, height) > 3 or width * height * count > 8294400:
+        raise _api_error("GIF frame dimensions must be multiples of 16, within 3:1 and the 8294400 total pixel budget")
+    return {"width": width, "height": height}
+
+
 def _validate_gpt_image_options(params: dict[str, Any]) -> None:
     """Mirror sogni-client's validateGptImageOptions (5.41.0)."""
     model_id = params.get("modelId")
+    is_26 = model_id in {"gpt-image-2.6-sunburst", "gpt-image-2.6-flare"}
+    advanced_keys = ("gptImageComplexity", "gptImageFrameCount", "gptImageFrameDurationMs", "gptImageMarkupUrl")
+    if not is_26 and (params.get("outputFormat") == "gif" or any(params.get(k) is not None for k in advanced_keys)):
+        raise _api_error("GIF and advanced image options require GPT Image 2.6")
+    if is_26:
+        complexity = params.get("gptImageComplexity")
+        if complexity is not None and complexity not in ("low", "medium", "high"):
+            raise _api_error("Complexity must be low, medium or high")
+        gif = params.get("outputFormat") == "gif"
+        for key, minimum, maximum in (("gptImageFrameCount", 2, 16), ("gptImageFrameDurationMs", 20, 2000)):
+            value = params.get(key)
+            if value is not None and (not gif or isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum):
+                raise _api_error(f"{key} requires GIF output and an integer from {minimum} to {maximum}")
+        if gif and (params.get("contextImages") or params.get("gptImageMask") or params.get("gptImageMaskUrl") or params.get("gptImageMarkupUrl")):
+            raise _api_error("GIF output requires text-to-image generation")
+        markup = params.get("gptImageMarkupUrl")
+        if markup is not None and (not isinstance(markup, str) or not markup.strip() or not params.get("contextImages") or params.get("gptImageMask") or params.get("gptImageMaskUrl")):
+            raise _api_error("Markup requires a first reference and cannot combine with a mask")
+        if gif and params.get("gptImageBackground") == "transparent":
+            raise _api_error("Transparent output requires PNG or WebP")
     if not is_gpt_image_model(model_id):
         if params.get("gptImageMask") or params.get("gptImageMaskUrl"):
             raise _api_error("GPT Image masks require a GPT Image model")
@@ -1960,7 +1992,10 @@ def create_job_request_message(
         if params.get("width") and params.get("height") and not size_preset:
             size_preset = "custom"
         keyframe["sizePreset"] = size_preset
-        if size_preset == "custom" and params.get("width") and params.get("height"):
+        if params.get("outputFormat") == "gif" and (not size_preset or size_preset == "custom" or params.get("width") or params.get("height")):
+            keyframe.update(_gif_frame_size(params))
+            keyframe["sizePreset"] = "custom"
+        elif size_preset == "custom" and params.get("width") and params.get("height"):
             minimum, maximum = _custom_image_size_bounds(params["modelId"])
             keyframe["width"] = _validate_number(
                 params["width"],
@@ -1978,6 +2013,9 @@ def create_job_request_message(
             keyframe.pop("sizePreset", None)
         _validate_gpt_image_options(params)
         _validate_seedream_options(params)
+        for field in ("gptImageComplexity", "gptImageFrameCount", "gptImageFrameDurationMs", "gptImageMarkupUrl"):
+            if params.get(field) is not None:
+                keyframe[field] = params[field]
         if params.get("gptImageQuality") is not None:
             keyframe["gptImageQuality"] = params["gptImageQuality"]
         if params.get("gptImageBackground") is not None:
@@ -5128,6 +5166,9 @@ class ProjectsApi(EventEmitter):
         network = data.get("network", "fast")
         model = data["model"]
         await self.get_model_options(model)
+        if data.get("outputFormat") == "gif" and (not data.get("sizePreset") or data.get("sizePreset") == "custom" or data.get("width") or data.get("height")):
+            data = {**data, **_gif_frame_size(data)}
+            data.pop("sizePreset", None)
         path: list[Any] = [
             data.get("tokenType", "spark"),
             network,
@@ -5154,7 +5195,7 @@ class ProjectsApi(EventEmitter):
             )
         query = {
             key: data[key]
-            for key in ("gptImageQuality", "outputFormat", "billingMode")
+            for key in ("gptImageQuality", "gptImageComplexity", "gptImageFrameCount", "gptImageFrameDurationMs", "outputFormat", "billingMode")
             if data.get(key)
         }
         if "priorityMode" in data:

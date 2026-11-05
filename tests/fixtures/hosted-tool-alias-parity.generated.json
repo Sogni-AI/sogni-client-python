@@ -13,7 +13,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_image",
       "sdkToolName": "generate_image",
-      "hostedSchemaSha256": "1a3efa17a56a26aedba53cbf8c9052194fec152cbc9ebe62bdce31fd963f3877",
+      "hostedSchemaSha256": "4c24dad9387f25bde19705789a08de71b2fb2fcd98097e0e6c10c9ea2168baed",
       "hostedRequired": [
         "prompt"
       ],
@@ -28,13 +28,18 @@
         "sourceImageIndex",
         "seed",
         "guidance",
+        "mossRopeScaleX",
+        "mossRopeScaleY",
+        "loras",
+        "loraStrengths",
+        "gptImageComplexity",
+        "gptImageFrameCount",
+        "gptImageFrameDurationMs",
         "gptImageQuality",
-        "outputFormat",
-        "aspectRatio",
         "gptImageBackground",
         "gptImageOutputCompression",
-        "loras",
-        "loraStrengths"
+        "outputFormat",
+        "aspectRatio"
       ],
       "argumentAliasTargets": [
         "prompt",
@@ -53,7 +58,7 @@
       "executionMode": "direct",
       "hostedToolName": "edit_image",
       "sdkToolName": "edit_image",
-      "hostedSchemaSha256": "8002a6815a22c4f3ec2a0a5cad9808ef3ca8b80ea1c9a4677f23376528360ba2",
+      "hostedSchemaSha256": "a79f5ed30f7204e57d960ec487641149a394f14e3f30ea74120ec09198c4dcf5",
       "hostedRequired": [
         "prompt"
       ],
@@ -61,18 +66,21 @@
         "prompt",
         "model",
         "sourceImageIndex",
+        "sourceImageIndices",
+        "loras",
+        "loraStrengths",
         "numberOfVariations",
         "width",
         "height",
         "aspectRatio",
+        "gptImageComplexity",
+        "markup_image_url",
         "gptImageQuality",
-        "outputFormat",
-        "personaName",
+        "mask_image_url",
         "gptImageBackground",
         "gptImageOutputCompression",
-        "mask_image_url",
-        "loras",
-        "loraStrengths"
+        "outputFormat",
+        "personaName"
       ],
       "argumentAliasTargets": [
         "prompt",

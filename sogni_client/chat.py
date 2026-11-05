@@ -450,6 +450,9 @@ class ChatToolsApi:
         # GPT Image 2.5 (sogni-client 5.41.0): the bare 2.5 selectors choose Flare.
         "gpt-image-2.5-sunburst": "gpt-image-2.5-sunburst",
         "gpt-image-2.5-flare": "gpt-image-2.5-flare",
+        "gpt-image-2.6-flare": "gpt-image-2.6-flare",
+        "gpt-image-2.6-sunburst": "gpt-image-2.6-sunburst",
+        "gpt-image-2.6": "gpt-image-2.6-flare",
         "gpt-image-2.5": "gpt-image-2.5-flare",
         "gpt-image2.5": "gpt-image-2.5-flare",
         "sunburst": "gpt-image-2.5-sunburst",
