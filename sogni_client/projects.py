@@ -530,7 +530,15 @@ def _js_length(value: Any) -> int:
     return len(value) if isinstance(value, (str, list, tuple)) else 0
 
 
-_GPT_IMAGE_MODEL_IDS = frozenset({"gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare", "gpt-image-2.6-sunburst", "gpt-image-2.6-flare"})
+_GPT_IMAGE_MODEL_IDS = frozenset(
+    {
+        "gpt-image-2",
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+        "gpt-image-2.6-sunburst",
+        "gpt-image-2.6-flare",
+    }
+)
 
 
 def is_gpt_image_model(model_id: str | None) -> bool:
@@ -541,16 +549,31 @@ def _gif_frame_size(params: dict[str, Any]) -> dict[str, int]:
     count = params.get("gptImageFrameCount", 9)
     if isinstance(count, bool) or not isinstance(count, int) or not 2 <= count <= 16:
         raise _api_error("GIF frame count must be 2–16")
-    layouts = [(4, 2), (2, 4)] if count <= 8 else ([(3, 3)] if count == 9 else ([(4, 3), (3, 4)] if count <= 12 else [(4, 4)]))
+    layouts = (
+        [(4, 2), (2, 4)]
+        if count <= 8
+        else ([(3, 3)] if count == 9 else ([(4, 3), (3, 4)] if count <= 12 else [(4, 4)]))
+    )
     cells = layouts[0][0] * layouts[0][1]
     side = min(896, int(math.sqrt(8294400 / cells) / 16) * 16)
     width = params.get("width", params.get("height", side))
     height = params.get("height", params.get("width", side))
-    if any(isinstance(n, bool) or not isinstance(n, int) or n <= 0 or n % 16 for n in (width, height)) or max(width, height) / min(width, height) > 3:
+    if (
+        any(
+            isinstance(n, bool) or not isinstance(n, int) or n <= 0 or n % 16
+            for n in (width, height)
+        )
+        or max(width, height) / min(width, height) > 3
+    ):
         raise _api_error("GIF frame dimensions must be positive multiples of 16 within 3:1")
     sheets = [(width * columns, height * rows) for columns, rows in layouts]
-    if not any(max(w, h) <= 3840 and max(w, h) / min(w, h) <= 3 and 655360 <= w * h <= 8294400 for w, h in sheets):
-        raise _api_error("GIF frames cannot fit a supported sheet within the 655360–8294400 pixel budget and 3840 sheet edge limit")
+    if not any(
+        max(w, h) <= 3840 and max(w, h) / min(w, h) <= 3 and 655360 <= w * h <= 8294400
+        for w, h in sheets
+    ):
+        raise _api_error(
+            "GIF frames cannot fit a supported sheet within the 655360–8294400 pixel budget and 3840 sheet edge limit"
+        )
     return {"width": width, "height": height}
 
 
@@ -558,22 +581,50 @@ def _validate_gpt_image_options(params: dict[str, Any]) -> None:
     """Mirror sogni-client's validateGptImageOptions (5.41.0)."""
     model_id = params.get("modelId")
     is_26 = model_id in {"gpt-image-2.6-sunburst", "gpt-image-2.6-flare"}
-    advanced_keys = ("gptImageComplexity", "gptImageFrameCount", "gptImageFrameDurationMs", "gptImageMarkupUrl")
-    if not is_26 and (params.get("outputFormat") == "gif" or any(params.get(k) is not None for k in advanced_keys)):
+    advanced_keys = (
+        "gptImageComplexity",
+        "gptImageFrameCount",
+        "gptImageFrameDurationMs",
+        "gptImageMarkupUrl",
+    )
+    if not is_26 and (
+        params.get("outputFormat") == "gif" or any(params.get(k) is not None for k in advanced_keys)
+    ):
         raise _api_error("GIF and advanced image options require GPT Image 2.6")
     if is_26:
         complexity = params.get("gptImageComplexity")
         if complexity is not None and complexity not in ("low", "medium", "high"):
             raise _api_error("Complexity must be low, medium or high")
         gif = params.get("outputFormat") == "gif"
-        for key, minimum, maximum in (("gptImageFrameCount", 2, 16), ("gptImageFrameDurationMs", 20, 2000)):
+        for key, minimum, maximum in (
+            ("gptImageFrameCount", 2, 16),
+            ("gptImageFrameDurationMs", 20, 2000),
+        ):
             value = params.get(key)
-            if value is not None and (not gif or isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum):
-                raise _api_error(f"{key} requires GIF output and an integer from {minimum} to {maximum}")
-        if gif and (params.get("contextImages") or params.get("gptImageMask") or params.get("gptImageMaskUrl") or params.get("gptImageMarkupUrl")):
+            if value is not None and (
+                not gif
+                or isinstance(value, bool)
+                or not isinstance(value, int)
+                or not minimum <= value <= maximum
+            ):
+                raise _api_error(
+                    f"{key} requires GIF output and an integer from {minimum} to {maximum}"
+                )
+        if gif and (
+            params.get("contextImages")
+            or params.get("gptImageMask")
+            or params.get("gptImageMaskUrl")
+            or params.get("gptImageMarkupUrl")
+        ):
             raise _api_error("GIF output requires text-to-image generation")
         markup = params.get("gptImageMarkupUrl")
-        if markup is not None and (not isinstance(markup, str) or not markup.strip() or not params.get("contextImages") or params.get("gptImageMask") or params.get("gptImageMaskUrl")):
+        if markup is not None and (
+            not isinstance(markup, str)
+            or not markup.strip()
+            or not params.get("contextImages")
+            or params.get("gptImageMask")
+            or params.get("gptImageMaskUrl")
+        ):
             raise _api_error("Markup requires a first reference and cannot combine with a mask")
         if gif and params.get("gptImageBackground") == "transparent":
             raise _api_error("Transparent output requires PNG or WebP")
@@ -711,25 +762,35 @@ def _raw_result_url(data: dict[str, Any]) -> str | None:
 
 
 _VIDEO_EXPORT_FIELDS = ("lastFrameUrl", "lastFrameKey", "outputFormat")
+_SEEDANCE_DRAFT_FIELDS = ("seedanceDraft", "seedanceDraftExpiresAt", "seedanceDraftJobId")
 
 
 def _video_export_fields(
     data: dict[str, Any], fields: tuple[str, ...] = _VIDEO_EXPORT_FIELDS
-) -> dict[str, str]:
-    """Seedance 2.5 export fields a job record or result frame carries.
+) -> dict[str, Any]:
+    """Seedance 2.5 export and draft fields a job record or result frame carries.
 
     Read from the record itself, falling back to its worker ``result`` receipt.
     Absent fields are left out so a later update never erases a known value.
     """
 
     result = data.get("result") if isinstance(data.get("result"), dict) else {}
-    fields_found: dict[str, str] = {}
+    fields_found: dict[str, Any] = {}
     for field in fields:
         value = data.get(field)
         if not isinstance(value, str):
             value = result.get(field)
         if isinstance(value, str) and value:
             fields_found[field] = value
+    # Match the SDK receipt allowlist: valid top-level values win and missing
+    # values never clear previously learned draft metadata.
+    for source in (result, data):
+        for field in _SEEDANCE_DRAFT_FIELDS:
+            value = source.get(field)
+            if (field == "seedanceDraft" and value is True) or (
+                field != "seedanceDraft" and isinstance(value, str) and value
+            ):
+                fields_found[field] = value
     return fields_found
 
 
@@ -1232,6 +1293,59 @@ def _validate_h3_references(params: dict[str, Any]) -> None:
         )
 
 
+def _validate_seedance_draft_fields(params: dict[str, Any]) -> None:
+    draft = params.get("seedanceDraft")
+    job_id = params.get("seedanceDraftJobId")
+    if "seedanceDraft" in params and not isinstance(draft, bool):
+        raise _api_error("seedanceDraft must be a boolean.")
+    if "seedanceDraftJobId" in params and (not isinstance(job_id, str) or not job_id.strip()):
+        raise _api_error("seedanceDraftJobId must be the Sogni job id of a Seedance 2.5 draft.")
+    if draft is not True and "seedanceDraftJobId" not in params:
+        return
+    if not is_seedance25_model(str(params.get("modelId", params.get("model", "")))):
+        raise _api_error("Seedance draft mode is supported only by Seedance 2.5.")
+    if draft is True and "seedanceDraftJobId" in params:
+        raise _api_error(
+            "seedanceDraft and seedanceDraftJobId are mutually exclusive: create a draft, or finalize one."
+        )
+
+
+def _validate_seedance_draft_finalize(params: dict[str, Any]) -> None:
+    if "seedanceDraftJobId" not in params:
+        return
+    inherited = [
+        ("referenceImage", bool(params.get("referenceImage"))),
+        ("referenceImageEnd", bool(params.get("referenceImageEnd"))),
+        ("referenceImageUrls", bool(params.get("referenceImageUrls"))),
+        ("referenceVideo", bool(params.get("referenceVideo"))),
+        ("referenceVideoUrls", bool(params.get("referenceVideoUrls"))),
+        ("referenceAudio", bool(params.get("referenceAudio"))),
+        ("referenceAudioUrls", bool(params.get("referenceAudioUrls"))),
+        ("referenceAudioIdentity", bool(params.get("referenceAudioIdentity"))),
+        *[
+            (field, field in params)
+            for field in (
+                "duration",
+                "frames",
+                "ratio",
+                "seed",
+                "generateAudio",
+                "seedanceTaskType",
+            )
+        ],
+    ]
+    sent = [name for name, present in inherited if present]
+    if sent:
+        raise _api_error(
+            "A Seedance 2.5 finalize reuses its draft's inputs and settings; remove "
+            + ", ".join(sent)
+            + "."
+        )
+    count = params.get("numberOfMedia")
+    if count is not None and (isinstance(count, bool) or count != 1):
+        raise _api_error("A Seedance 2.5 finalize renders its draft once; numberOfMedia must be 1.")
+
+
 def _validate_seedance_task(params: dict[str, Any]) -> None:
     task = params.get("seedanceTaskType")
     is_25 = is_seedance25_model(params["modelId"])
@@ -1350,6 +1464,8 @@ def _validate_video_export_options(params: dict[str, Any]) -> None:
 def _validate_video_assets(params: dict[str, Any]) -> None:
     model_id = params["modelId"]
     _validate_video_export_options(params)
+    _validate_seedance_draft_fields(params)
+    _validate_seedance_draft_finalize(params)
     for field in ("contextImages", "referenceVideos", "referenceAudios"):
         value = params.get(field)
         if value is not None and (not isinstance(value, list) or any(not item for item in value)):
@@ -1997,7 +2113,12 @@ def create_job_request_message(
         if params.get("width") and params.get("height") and not size_preset:
             size_preset = "custom"
         keyframe["sizePreset"] = size_preset
-        if params.get("outputFormat") == "gif" and (not size_preset or size_preset == "custom" or params.get("width") or params.get("height")):
+        if params.get("outputFormat") == "gif" and (
+            not size_preset
+            or size_preset == "custom"
+            or params.get("width")
+            or params.get("height")
+        ):
             keyframe.update(_gif_frame_size(params))
             keyframe["sizePreset"] = "custom"
         elif size_preset == "custom" and params.get("width") and params.get("height"):
@@ -2018,7 +2139,12 @@ def create_job_request_message(
             keyframe.pop("sizePreset", None)
         _validate_gpt_image_options(params)
         _validate_seedream_options(params)
-        for field in ("gptImageComplexity", "gptImageFrameCount", "gptImageFrameDurationMs", "gptImageMarkupUrl"):
+        for field in (
+            "gptImageComplexity",
+            "gptImageFrameCount",
+            "gptImageFrameDurationMs",
+            "gptImageMarkupUrl",
+        ):
             if params.get(field) is not None:
                 keyframe[field] = params[field]
         if params.get("gptImageQuality") is not None:
@@ -2121,6 +2247,11 @@ def create_job_request_message(
         ):
             if params.get(source) is not None:
                 keyframe[target] = params[source]
+        if params.get("seedanceDraft") is True:
+            keyframe["seedanceDraft"] = True
+        if "seedanceDraftJobId" in params:
+            keyframe["seedanceDraftJobId"] = params["seedanceDraftJobId"]
+            keyframe["positivePrompt"] = "Finalize the Seedance 2.5 draft at 1080p."
         field_map = {
             "generateAudio": "generateAudio",
             "audioIdentityStrength": "identityGuidanceScale",
@@ -2404,6 +2535,27 @@ class Job(DataEntity):
         return self._data.get("lastFrameUrl")
 
     lastFrameUrl = last_frame_url
+
+    @property
+    def seedance_draft(self) -> bool | None:
+        """Whether this completed Seedance 2.5 job is a finalizable draft."""
+        return self._data.get("seedanceDraft")
+
+    seedanceDraft = seedance_draft
+
+    @property
+    def seedance_draft_expires_at(self) -> str | None:
+        """ISO 8601 expiry reported for this draft by the server."""
+        return self._data.get("seedanceDraftExpiresAt")
+
+    seedanceDraftExpiresAt = seedance_draft_expires_at
+
+    @property
+    def seedance_draft_job_id(self) -> str | None:
+        """Sogni job ID of the draft that this finalized video used."""
+        return self._data.get("seedanceDraftJobId")
+
+    seedanceDraftJobId = seedance_draft_job_id
 
     async def get_last_frame_url(self) -> str:
         """Refresh the signed URL for an exported final frame."""
@@ -5171,7 +5323,12 @@ class ProjectsApi(EventEmitter):
         network = data.get("network", "fast")
         model = data["model"]
         await self.get_model_options(model)
-        if data.get("outputFormat") == "gif" and (not data.get("sizePreset") or data.get("sizePreset") == "custom" or data.get("width") or data.get("height")):
+        if data.get("outputFormat") == "gif" and (
+            not data.get("sizePreset")
+            or data.get("sizePreset") == "custom"
+            or data.get("width")
+            or data.get("height")
+        ):
             data = {**data, **_gif_frame_size(data)}
             data.pop("sizePreset", None)
         path: list[Any] = [
@@ -5200,7 +5357,14 @@ class ProjectsApi(EventEmitter):
             )
         query = {
             key: data[key]
-            for key in ("gptImageQuality", "gptImageComplexity", "gptImageFrameCount", "gptImageFrameDurationMs", "outputFormat", "billingMode")
+            for key in (
+                "gptImageQuality",
+                "gptImageComplexity",
+                "gptImageFrameCount",
+                "gptImageFrameDurationMs",
+                "outputFormat",
+                "billingMode",
+            )
             if data.get(key)
         }
         if "priorityMode" in data:
@@ -5239,6 +5403,7 @@ class ProjectsApi(EventEmitter):
     ) -> dict[str, Any]:
         data = normalize_params(params, **kwargs)
         _reject_retired_output_scale(data)
+        _validate_seedance_draft_fields(data)
         frames = data.get("frames") or calculate_video_frames(
             data["model"], data["duration"], data["fps"]
         )
@@ -5314,6 +5479,12 @@ class ProjectsApi(EventEmitter):
                 # quote that one.
                 "network": data.get("network") or self._current_network(),
                 "billingMode": data.get("billingMode"),
+                **({"seedanceDraft": "1"} if data.get("seedanceDraft") is True else {}),
+                **(
+                    {"seedanceDraftJobId": data["seedanceDraftJobId"]}
+                    if "seedanceDraftJobId" in data
+                    else {}
+                ),
                 **(
                     {"priorityMode": str(data["priorityMode"]).lower()}
                     if "priorityMode" in data
@@ -5868,7 +6039,7 @@ class ProjectsApi(EventEmitter):
             "resultUrl": url,
             **{
                 field: export[field]
-                for field in ("lastFrameUrl", "outputFormat")
+                for field in ("lastFrameUrl", "outputFormat", *_SEEDANCE_DRAFT_FIELDS)
                 if field in export
             },
             "isNSFW": nsfw,

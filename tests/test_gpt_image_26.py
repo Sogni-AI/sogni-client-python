@@ -68,7 +68,13 @@ async def test_estimate_uses_same_gif_dimensions_as_create(extra):
     api.get_size_presets = AsyncMock(
         side_effect=AssertionError("GIF custom size replaced by preset")
     )
-    get = AsyncMock(return_value={"quote": {"project": {"costInToken": 1, "costInUSD": 0.01, "costInSpark": 2, "costInSogni": 3}}})
+    get = AsyncMock(
+        return_value={
+            "quote": {
+                "project": {"costInToken": 1, "costInUSD": 0.01, "costInSpark": 2, "costInSogni": 3}
+            }
+        }
+    )
     api.client = SimpleNamespace(socket=SimpleNamespace(get=get))
     await api.estimate_cost(
         model="gpt-image-2.6-flare",
@@ -91,7 +97,23 @@ async def test_estimate_uses_same_gif_dimensions_as_create(extra):
         "gptImageComplexity": "low",
     }
 
+
 @pytest.mark.parametrize("width,height,count", [(1280, 1280, 5), (16, 16, 9), (256, 256, 3)])
-def test_rejects_provider_invalid_gif_sheets_before_sending(width: int, height: int, count: int) -> None:
+def test_rejects_provider_invalid_gif_sheets_before_sending(
+    width: int, height: int, count: int
+) -> None:
     with pytest.raises(Exception, match="supported sheet"):
-        create_job_request_message("invalid-sheet", {"type": "image", "modelId": "gpt-image-2.6-flare", "positivePrompt": "A lantern loop", "numberOfMedia": 1, "outputFormat": "gif", "width": width, "height": height, "gptImageFrameCount": count}, OPTIONS)
+        create_job_request_message(
+            "invalid-sheet",
+            {
+                "type": "image",
+                "modelId": "gpt-image-2.6-flare",
+                "positivePrompt": "A lantern loop",
+                "numberOfMedia": 1,
+                "outputFormat": "gif",
+                "width": width,
+                "height": height,
+                "gptImageFrameCount": count,
+            },
+            OPTIONS,
+        )

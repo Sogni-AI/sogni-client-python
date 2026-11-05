@@ -516,6 +516,26 @@ for an output format other than `mp4`/`mov`, or for a non-boolean
 `return_last_frame`. Chat tool results list `lastFrameUrls` when a frame was
 exported.
 
+### Draft and finalize
+
+Both Seedance 2.5 models support `seedance_draft=True` for a draft. Completed
+jobs expose `job.seedance_draft` and `job.seedance_draft_expires_at`. To finalize
+before expiry, submit the draft's Sogni job ID:
+
+```python
+finalized = await sogni.projects.create(
+    type="video",
+    model_id="seedance-2-5",
+    seedance_draft_job_id=draft_job.id,
+    token_type="spark",
+)
+```
+
+Finalization renders one 1080p video using the draft's inputs and settings.
+Omit references, duration, frames, ratio, seed, audio-generation settings and
+task type from this request. `seedance_draft` and `seedance_draft_job_id` cannot
+be combined. The completed final job exposes `job.seedance_draft_job_id`.
+
 ## Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored
 
 `seedance-2-5-uncensored` (hosted tool selector `seedance2-5-uncensored`) is

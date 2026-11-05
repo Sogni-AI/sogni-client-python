@@ -1042,6 +1042,193 @@ async def test_model_not_yet_available_refusal_keeps_the_socket_message() -> Non
     assert events[0]["error"] == {"code": 4104, "message": message}
 
 
+@pytest.mark.parametrize("model", ["seedance-2-5", "seedance-2-5-uncensored"])
+def test_seedance_draft_and_finalize_wire_contract(model: str) -> None:
+    frame = _seedance_request(modelId=model, seedanceDraft=True)["keyFrames"][0]
+    assert frame["seedanceDraft"] is True
+    assert frame["frames"] == 121
+    assert "seedanceDraftJobId" not in frame
+    params = {
+        "type": "video",
+        "modelId": model,
+        "positivePrompt": "",
+        "numberOfMedia": 1,
+        "seedanceDraftJobId": "draft-job",
+    }
+    final = create_job_request_message("final", params, model_options("video"))["keyFrames"][0]
+    assert final["seedanceDraftJobId"] == "draft-job"
+    assert final["positivePrompt"] == "Finalize the Seedance 2.5 draft at 1080p."
+    assert "seedanceDraft" not in final
+    assert _seedance_request(seedanceDraft=False) == _seedance_request()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"seedanceDraft": "true"},
+        {"seedanceDraft": None},
+        {"seedanceDraftJobId": " "},
+        {"seedanceDraftJobId": 1},
+        {"seedanceDraft": True, "seedanceDraftJobId": "draft-job"},
+        {"modelId": "seedance-2-0", "seedanceDraft": True},
+        {"modelId": "seedance-2-0", "seedanceDraftJobId": "draft-job"},
+    ],
+)
+def test_seedance_draft_rejects_invalid_fields(extra: dict[str, Any]) -> None:
+    with pytest.raises(ApiError, match="[Ss]eedance"):
+        _seedance_request(**extra)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("referenceImage", PNG),
+        ("referenceImageEnd", PNG),
+        ("referenceImageUrls", ["https://cdn.example/image.jpg"]),
+        ("referenceVideo", b"video"),
+        ("referenceVideoUrls", ["https://cdn.example/video.mp4"]),
+        ("referenceAudio", MP3),
+        ("referenceAudioUrls", ["https://cdn.example/audio.mp3"]),
+        ("referenceAudioIdentity", MP3),
+        ("duration", 5),
+        ("frames", 121),
+        ("ratio", "16:9"),
+        ("seed", 0),
+        ("generateAudio", False),
+        ("seedanceTaskType", "reference"),
+    ],
+)
+def test_seedance_finalize_rejects_overriding_draft_inputs(field: str, value: Any) -> None:
+    params = {
+        "type": "video",
+        "modelId": "seedance-2-5",
+        "positivePrompt": "",
+        "numberOfMedia": 1,
+        "seedanceDraftJobId": "draft-job",
+        field: value,
+    }
+    with pytest.raises(ApiError, match=f"remove {field}"):
+        create_job_request_message("final", params, model_options("video"))
+
+
+@pytest.mark.parametrize("count", [0, 2, True, "1"])
+def test_seedance_finalize_is_one_render(count: Any) -> None:
+    params = {
+        "type": "video",
+        "modelId": "seedance-2-5",
+        "positivePrompt": "",
+        "numberOfMedia": count,
+        "seedanceDraftJobId": "draft-job",
+    }
+    with pytest.raises(ApiError, match="numberOfMedia must be 1"):
+        create_job_request_message("final", params, model_options("video"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra,expected",
+    [
+        ({"seedance_draft": True}, {"seedanceDraft": "1"}),
+        ({"seedance_draft": False}, {}),
+        ({"seedance_draft_job_id": "draft-job"}, {"seedanceDraftJobId": "draft-job"}),
+    ],
+)
+async def test_seedance_draft_estimates_forward_python_fields(extra, expected) -> None:
+    api = ProjectsApi(FakeClient())
+    api.client.socket.get = AsyncMock(
+        return_value={
+            "quote": {
+                "project": {"costInToken": 1, "costInUSD": 0.1, "costInSpark": 2, "costInSogni": 3}
+            }
+        }
+    )
+    await api.estimate_video_cost(
+        model="seedance-2-5", token_type="spark", width=864, height=496, duration=8, fps=24, **extra
+    )
+    path, query = api.client.socket.get.await_args.args
+    assert path.endswith("/spark/seedance-2-5/864/496/193/24")
+    assert {
+        key: value for key, value in query.items() if key.startswith("seedanceDraft")
+    } == expected
+
+
+@pytest.mark.asyncio
+async def test_seedance_draft_metadata_survives_socket_and_rest_updates() -> None:
+    api = ProjectsApi(FakeClient())
+    project = _seedance_project(api)
+    events: list[dict[str, Any]] = []
+    api.on("job", events.append)
+    expiry = "2026-11-17T20:00:00.000Z"
+    await api._apply_job_result(
+        {
+            "jobID": project.id,
+            "imgID": "draft-job",
+            "resultUrl": "https://cdn.example/draft.mp4",
+            "seedanceDraft": True,
+            "seedanceDraftExpiresAt": expiry,
+            "vendorTaskId": "never-expose",
+        }
+    )
+    job = project.job("draft-job")
+    assert job is not None
+    assert job.seedance_draft is job.seedanceDraft is True
+    assert job.seedance_draft_expires_at == job.seedanceDraftExpiresAt == expiry
+    event = [item for item in events if item.get("type") == "completed"][-1]
+    assert event["seedanceDraft"] is True
+    assert event["seedanceDraftExpiresAt"] == expiry
+    assert "vendorTaskId" not in event
+    await job._sync_with_rest_data(
+        {
+            "imgID": job.id,
+            "status": "jobCompleted",
+            "seedanceDraftJobId": "top-level-draft",
+            "result": {"seedanceDraftJobId": "receipt-draft"},
+        }
+    )
+    assert job.seedance_draft_job_id == job.seedanceDraftJobId == "top-level-draft"
+    await job._sync_with_rest_data({"imgID": job.id, "status": "jobCompleted"})
+    assert job.seedance_draft is True
+    assert job.seedance_draft_expires_at == expiry
+    assert job.seedance_draft_job_id == "top-level-draft"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replay", [False, True])
+async def test_seedance_draft_metadata_restores_from_nested_receipts(replay: bool) -> None:
+    api = ProjectsApi(FakeClient())
+    project = _seedance_project(api)
+    events: list[dict[str, Any]] = []
+    api.on("job", events.append)
+    metadata = {
+        "seedanceDraft": True,
+        "seedanceDraftExpiresAt": "2026-11-17T20:00:00.000Z",
+        "seedanceDraftJobId": "source-draft",
+    }
+    record = {
+        "status": "completed",
+        "imageCount": 1,
+        "completedWorkerJobs": [
+            {
+                "imgID": "restored-draft",
+                "status": "jobCompleted",
+                "resultUrl": "https://cdn.example/draft.mp4",
+                "result": {**metadata, "vendorTaskId": "never-expose"},
+            }
+        ],
+    }
+    if replay:
+        await api._replay_raw_project(project, record, False)
+        event = [item for item in events if item.get("type") == "completed"][-1]
+        assert {key: event[key] for key in metadata} == metadata
+        assert "vendorTaskId" not in event
+    else:
+        api.get = AsyncMock(return_value=record)
+        await project._sync_to_server()
+    job = project.job("restored-draft")
+    assert job is not None
+    assert {key: job.to_dict()[key] for key in metadata} == metadata
+
+
 def _seedance_project(api: ProjectsApi) -> Project:
     project = Project(
         {
