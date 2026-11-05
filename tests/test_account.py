@@ -377,6 +377,25 @@ def test_account_maps_free_spark_lock_and_active_fair_use_window() -> None:
     assert fair_use["resetAt"].endswith("Z")
 
 
+def test_socket_entitlement_keeps_the_member_discount_while_active() -> None:
+    client = FakeClient(FakeRest())
+    api = AccountApi(client)
+
+    def push(*, active: bool, bps: Any) -> dict[str, Any]:
+        client.socket.emit(
+            "subscriptionEntitlementUpdated",
+            {
+                "active": active,
+                "subscription": {"status": "active", "tier": "unlimited", "vendorDiscountBps": bps},
+            },
+        )
+        return api.current_account.subscription
+
+    assert push(active=True, bps=1000)["frontierDiscountBps"] == 1000
+    assert "frontierDiscountBps" not in push(active=True, bps=0)
+    assert "frontierDiscountBps" not in push(active=False, bps=1000)
+
+
 def test_socket_authentication_and_entitlement_mapping_reject_stale_versions() -> None:
     client = FakeClient(FakeRest())
     api = AccountApi(client)

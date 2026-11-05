@@ -396,6 +396,14 @@ class AccountApi(EventEmitter):
             mapped["scheduledChangeAt"] = _iso_from_milliseconds(subscription["scheduledChangeAt"])
         if subscription.get("paymentPending"):
             mapped["paymentPending"] = True
+        vendor_discount_bps = subscription.get("vendorDiscountBps")
+        if (
+            active
+            and isinstance(vendor_discount_bps, (int, float))
+            and not isinstance(vendor_discount_bps, bool)
+            and vendor_discount_bps > 0
+        ):
+            mapped["frontierDiscountBps"] = vendor_discount_bps
         capabilities = subscription.get("capabilities")
         if isinstance(capabilities, dict):
             mapped["capabilities"] = capabilities
