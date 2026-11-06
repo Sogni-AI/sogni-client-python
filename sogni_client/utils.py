@@ -318,6 +318,13 @@ def is_external_video_model(model_id: str) -> bool:
     return is_seedance_model(model_id) or is_happyhorse_model(model_id) or is_wan3_model(model_id)
 
 
+SAM3_VIDEO_SEGMENT_MODEL_ID = "sam3_video_segment_fp16"
+
+
+def is_video_segmentation_model(model_id: str) -> bool:
+    return model_id == SAM3_VIDEO_SEGMENT_MODEL_ID
+
+
 FLASHVSR_VIDEO_UPSCALE_MODEL_ID = "flashvsr_v1.1_tiny_long_bf16"
 
 
@@ -336,6 +343,7 @@ def is_video_model(model_id: str) -> bool:
             is_wan3_model,
             is_minimax_h3_model,
             is_video_upscale_model,
+            is_video_segmentation_model,
         )
     )
 
@@ -558,7 +566,7 @@ def calculate_video_frames(
     def js_round(value: float) -> int:
         return math.floor(value + 0.5)
 
-    if is_video_upscale_model(model_id):
+    if is_video_upscale_model(model_id) or is_video_segmentation_model(model_id):
         frames = js_round(duration * fps)
     elif is_wan_model(model_id):
         frames = js_round(duration * 16) + 1
@@ -615,6 +623,8 @@ isMinimaxH3KeyframeModel = is_minimax_h3_keyframe_model
 
 
 def get_video_workflow_type(model_id: str) -> str | None:
+    if is_video_segmentation_model(model_id):
+        return "v2v"
     if is_video_upscale_model(model_id):
         return "upscale"
     if is_wan3_model(model_id):

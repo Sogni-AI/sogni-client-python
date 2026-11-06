@@ -171,6 +171,34 @@ closely the clone preserves the source voice and accent. Voice Design uses
 `qwen3_tts_1.7b_voice_design_bf16` and requires `instruct` to describe the
 speaker to invent.
 
+## Select an object across a video with SAM 3
+
+`SAM3_VIDEO_SEGMENT_MODEL_ID` (`sam3_video_segment_fp16`) returns a lossless
+grayscale MP4 mask with the source video's dimensions, frame count and frame
+rate. Choose the object on a zero-based `frameIndex`; the mask tracks forward
+and backward through the clip. Text, normalized points or boxes use the same
+selection rules as image SAM 3. `objectIndex` chooses among detected instances.
+
+```python
+from sogni_client import SAM3_VIDEO_SEGMENT_MODEL_ID
+
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id=SAM3_VIDEO_SEGMENT_MODEL_ID,
+    positive_prompt="",
+    number_of_media=1,
+    reference_video="clip.mp4",
+    sam3_video_prompt={"text": "unicorn horn", "frameIndex": 127},
+)
+print(await project.wait_for_completion())
+```
+
+The server probes the uploaded source; dimensions and timing are optional and
+must match it when supplied. Sources accept up to 30 seconds, 900 frames,
+2560 pixels on either edge and 100 MB, with constant frame rate, SDR and square
+pixels. The output contains one object's hard mask.
+
 ## Upscale a video with FlashVSR
 
 `FLASHVSR_VIDEO_UPSCALE_MODEL_ID` (`flashvsr_v1.1_tiny_long_bf16`) upscales one
