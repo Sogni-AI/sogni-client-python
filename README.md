@@ -306,10 +306,10 @@ same as FlashVSR's, and the output keeps every source frame, the exact frame
 rate, the full aspect ratio, and the original audio.
 
 X2 takes a source up to 1080×1920 pixels (either orientation) and delivers at
-most twice its size; X4 takes a source up to 540×960 and delivers at most four
+most twice its size; X4 takes a source up to 768×1344 and delivers at most four
 times its size. The target must be larger than the source's short edge, and the
 output's long edge can be at most 3840px, so 2160p needs a source short edge of
-exactly 1080px on X2 or 540px on X4. Frame rate, file size and format limits
+exactly 1080px on X2 or 540px to 768px on X4. Frame rate, file size and format limits
 match FlashVSR's, and the server enforces the maximum clip length.
 
 ```python

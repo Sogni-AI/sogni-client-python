@@ -132,6 +132,15 @@ def test_no_client_side_length_cap(model_id: str) -> None:
     assert request(model_id, frames=1800, fps=30)["frames"] == 1800
 
 
+@pytest.mark.parametrize("model_id", MODELS)
+def test_an_output_past_a_3840_long_edge_is_refused(model_id: str) -> None:
+    # A 600x1344 source at 2160 would be 4838 long.
+    for width, height in ((2160, 4838), (4838, 2160)):
+        with pytest.raises(ValueError, match="at most 3840 pixels on its long edge"):
+            request(model_id, width=width, height=height)
+    assert request(model_id, width=3780, height=2160)["width"] == 3780
+
+
 def test_flashvsr_keeps_its_limits_options_and_wire_shape() -> None:
     def flash(**changes: Any) -> dict[str, Any]:
         return request(FLASHVSR_VIDEO_UPSCALE_MODEL_ID, upscaleResolution=1440, **changes)

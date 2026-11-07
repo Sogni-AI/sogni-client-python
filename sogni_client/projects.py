@@ -1349,6 +1349,10 @@ def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int | N
     if relay_vsr:
         if resolution not in _RELAY_VSR_RESOLUTIONS:
             raise ValueError("Choose 1080p, 1440p or 2160p for RelayVSR video upscaling.")
+        # The source is unknown here, so only a size the caller sends can be checked.
+        sizes = (_js_number(params.get("width")), _js_number(params.get("height")))
+        if max((size for size in sizes if not math.isnan(size)), default=0) > 3840:
+            raise ValueError("RelayVSR output can be at most 3840 pixels on its long edge.")
     elif resolution not in _VIDEO_UPSCALE_RESOLUTIONS:
         raise ValueError("Choose 1080p or 1440p for video upscaling.")
     if not params.get("referenceVideo"):
