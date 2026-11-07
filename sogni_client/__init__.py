@@ -72,6 +72,7 @@ from .utils import (
     PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID,
     PIXAL3D_ORBIT_VIEW_SLOTS,
     SAM3_IMAGE_SEGMENT_MODEL_ID,
+    SAM3_VIDEO_SEGMENT_MODEL_ID,
     SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
     calculate_video_frames,
     get_minimax_h3_frames_for_audio_duration,
@@ -87,6 +88,7 @@ from .utils import (
     is_seedream_model,
     is_segmentation_model,
     is_video_model,
+    is_video_segmentation_model,
     is_video_upscale_model,
     isAudioModel,
     isMinimaxH3AudioGuideModel,
@@ -115,7 +117,7 @@ from .worlds import (
     is_world_build_terminal,
 )
 
-__version__ = "5.77.0"
+__version__ = "5.78.0"
 
 __all__ = [
     "ACCOUNT_RESTORABLE_ERROR_CODE",
@@ -136,6 +138,8 @@ __all__ = [
     "PROJECT_LOST_ORIGINAL_CODE",
     "RETRYABLE_CHAT_ERROR_TYPES",
     "SAM3_IMAGE_SEGMENT_MODEL_ID",
+    "SAM3_VIDEO_SEGMENT_MODEL_ID",
+    "is_video_segmentation_model",
     "SEEDREAM_5_PRO_UNCENSORED_MODEL_ID",
     "SUBSCRIPTION_ERROR_CODES",
     "VIDEO_WORKFLOW_ASSETS",

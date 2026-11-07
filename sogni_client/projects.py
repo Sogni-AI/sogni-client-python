@@ -72,6 +72,7 @@ from .utils import (
     is_seedream_model,
     is_segmentation_model,
     is_video_model,
+    is_video_segmentation_model,
     is_video_upscale_model,
     is_wan3_enhanced_model,
     is_wan3_model,
@@ -1604,11 +1605,12 @@ _PIXAL3D_OPTION_LIMITS: dict[str, tuple[int, int]] = {
 _PIXAL3D_DEFAULT_TEMPLATE_VARIANT = "i23d-birefnet"
 _PIXAL3D_TEMPLATE_VARIANTS = (_PIXAL3D_DEFAULT_TEMPLATE_VARIANT,)
 _SHA256_HEX_PATTERN = re.compile(r"^[a-f0-9]{64}$", re.IGNORECASE)
-_SAM_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$")
+_SAM_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,79}$")
 _JS_MAX_SAFE_INTEGER = 9007199254740991
 _JOB_PROVENANCE_HASH_FIELDS = (
     "sha256",
     "sourceImageSha256",
+    "sourceVideoSha256",
     "samPromptSha256",
     "maskRleSha256",
     "selectionHash",
@@ -1660,10 +1662,12 @@ def _job_provenance_from_result(data: dict[str, Any]) -> dict[str, Any] | None:
         value = data.get(field)
         if isinstance(value, str) and _SHA256_HEX_PATTERN.match(value):
             result[field] = value.lower()
-    for field in ("maskWidth", "maskHeight"):
+    for field in ("maskWidth", "maskHeight", "maskFrames"):
         value = data.get(field)
         if _is_safe_integer(value) and value > 0:
             result[field] = int(value)
+    if _is_finite_number(data.get("maskFps")) and data["maskFps"] > 0:
+        result["maskFps"] = data["maskFps"]
     sam_version = data.get("samVersion")
     if isinstance(sam_version, str) and _SAM_VERSION_PATTERN.match(sam_version):
         result["samVersion"] = sam_version
@@ -1944,6 +1948,10 @@ def create_job_request_message(
     """Build the legacy Supernet `jobRequest` envelope used by the JS SDK."""
 
     project_type = params.get("type")
+    if params.get("sam3VideoPrompt") is not None and not is_video_segmentation_model(
+        params.get("modelId", "")
+    ):
+        raise ValueError("sam3VideoPrompt requires the SAM 3 video selection model.")
     if project_type not in {"image", "video", "audio"}:
         raise _api_error('Invalid project type. Must be "image", "video", or "audio".')
     if options.get("type") != project_type:
@@ -2157,6 +2165,82 @@ def create_job_request_message(
             keyframe["gptImageMaskUrl"] = params["gptImageMaskUrl"]
         if params.get("gptImageOutputCompression") is not None:
             keyframe["gptImageOutputCompression"] = params["gptImageOutputCompression"]
+
+    elif project_type == "video" and is_video_segmentation_model(params["modelId"]):
+        _validate_video_assets(params)
+        if not params.get("referenceVideo") or params.get("numberOfMedia") != 1:
+            raise ValueError(
+                "Video selection requires one uploaded referenceVideo and numberOfMedia: 1."
+            )
+        if not params.get("sam3VideoPrompt"):
+            raise ValueError("Video selection requires sam3VideoPrompt.")
+        if any(
+            params.get(name)
+            for name in (
+                "positivePrompt",
+                "negativePrompt",
+                "stylePrompt",
+                "referenceImage",
+                "referenceImageEnd",
+                "referenceAudio",
+                "controlNet",
+                "trimEndFrame",
+                "loras",
+                "referenceAudioIdentity",
+            )
+        ) or any(params.get(name) is not None for name in ("videoStart", "teacacheThreshold")):
+            raise ValueError(
+                "Video selection accepts one complete source video and selection prompts."
+            )
+        value = params["sam3VideoPrompt"]
+        if not isinstance(value, dict):
+            raise ValueError("sam3VideoPrompt must be an object")
+        frame_index, object_index = value.get("frameIndex", 0), value.get("objectIndex", 0)
+        if (
+            not _is_safe_integer(frame_index)
+            or not 0 <= frame_index < 900
+            or not _is_safe_integer(object_index)
+            or not 0 <= object_index <= 31
+        ):
+            raise ValueError("Use a valid source frameIndex and objectIndex from 0 to 31.")
+        output, edges = value.get("output", "mask"), value.get("edges", "hard")
+        if output != "mask" or edges != "hard":
+            raise ValueError("Video selection supports hard mask output.")
+        selection = {
+            k: v
+            for k, v in value.items()
+            if k not in ("frameIndex", "objectIndex", "output", "edges")
+        }
+        if selection.get("applyMask") or selection.get("maxInstances", 1) != 1:
+            raise ValueError("Video selection tracks one object; choose it with objectIndex.")
+        prompt = _normalize_sam3_prompt(selection)
+        prompt.update(
+            maxInstances=1,
+            frameIndex=frame_index,
+            objectIndex=object_index,
+            output=output,
+            edges=edges,
+        )
+        keyframe.update(
+            hasReferenceVideo=True,
+            sam3VideoPrompt=prompt,
+            steps=1,
+            seed=0,
+            interpolation="none",
+            generateAudio=False,
+        )
+        for name in ("width", "height", "frames", "fps"):
+            value = params.get(name)
+            if value is not None:
+                if (
+                    not _is_finite_number(value)
+                    or value <= 0
+                    or (name != "fps" and not _is_safe_integer(value))
+                ):
+                    raise ValueError(f"Video selection {name} must match the source video.")
+                keyframe[name] = value
+        if params.get("frames") is not None and frame_index >= params["frames"]:
+            raise ValueError("frameIndex must refer to a source frame.")
 
     elif project_type == "video":
         _reject_retired_output_scale(params)
