@@ -296,6 +296,42 @@ rounded to even pixels), the source's `frames` and `fps`, `steps=1`, and
 `source_width`/`source_height`; the job itself is charged from the verified
 source.
 
+
+## Upscale a video with RelayVSR
+
+`RELAYVSR_X2_VIDEO_UPSCALE_MODEL_ID` (`relayvsr_x2_lightx2v_int8_convrot`) and
+`RELAYVSR_X4_VIDEO_UPSCALE_MODEL_ID` (`relayvsr_x4_int8_convrot`) upscale one
+finished video to 1080p, 1440p, or 2160p on its short edge. The request is the
+same as FlashVSR's, and the output keeps every source frame, the exact frame
+rate, the full aspect ratio, and the original audio.
+
+X2 takes a source up to 1080×1920 pixels (either orientation) and delivers at
+most twice its size; X4 takes a source up to 540×960 and delivers at most four
+times its size. The target must be larger than the source's short edge, and the
+output's long edge can be at most 3840px, so 2160p needs a source short edge of
+exactly 1080px on X2 or 540px on X4. Frame rate, file size and format limits
+match FlashVSR's, and the server enforces the maximum clip length.
+
+```python
+from sogni_client import RELAYVSR_X2_VIDEO_UPSCALE_MODEL_ID
+
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id=RELAYVSR_X2_VIDEO_UPSCALE_MODEL_ID,
+    positive_prompt="",
+    number_of_media=1,
+    reference_video="clip-1080p.mp4",
+    upscale_resolution=2160,  # 1080, 1440 or 2160: the output's short edge
+)
+print(await project.wait_for_completion())  # MP4 with the original audio
+```
+
+The client refuses `detail_preference`, `processing_speed`, and `seed` for
+RelayVSR. Quote it the same way as FlashVSR; the price follows the source's size
+and length, not the target. On the hosted `upscale_video` tool, `model: "relayvsr"`
+selects it; FlashVSR stays the tool's default.
+
 ## MiniMax H3 two-stage output (720p, 1080p and 2K)
 
 720p, 1080p and 2K MiniMax H3 two-stage output are the FastH3 Two-Stage model
@@ -1380,7 +1416,7 @@ keyframes on every mode but t2v),
 Seedance 2.5, Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored, Wan 3
 and Wan 3.0 Enhanced,
 RTX VSR, MiniMax Music 3, Qwen3-TTS speech and voice cloning, SAM 3 image
-segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
+segmentation, Pixal3D image-to-3D, FlashVSR v1.1 and RelayVSR promptless video upscaling,
 LoRA catalog discovery, queue start estimates,
 live-benchmarked render/total time on cost quotes, in-flight project recovery
 across reconnects, results by project id and recently completed projects from

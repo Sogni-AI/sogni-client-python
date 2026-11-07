@@ -74,6 +74,7 @@ from .utils import (
     is_model_artifact_model,
     is_pixal3d_model,
     is_pixal3d_multiview_model,
+    is_relay_vsr_model,
     is_seedance25_model,
     is_seedance_model,
     is_seedream_model,
@@ -1273,13 +1274,14 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
 
 
 _VIDEO_UPSCALE_RESOLUTIONS = (1080, 1440)
+_RELAY_VSR_RESOLUTIONS = (1080, 1440, 2160)
 _VIDEO_UPSCALE_TIMING_ERROR = (
     "Omit the source timing, or supply the source video’s exact frame count and frame rate."
 )
 
 
 def _validate_video_upscale_timing(params: dict[str, Any]) -> int | None:
-    """FlashVSR source timing is optional, as in the JS SDK's ``validateVideoUpscaleTiming``.
+    """Upscale source timing is optional, as in the JS SDK's ``validateVideoUpscaleTiming``.
 
     The server probes the uploaded video and adopts its exact frame count and
     frame rate when they are omitted (``None`` counts as omitted); values a
@@ -1311,7 +1313,7 @@ def _validate_video_upscale_timing(params: dict[str, Any]) -> int | None:
 
 
 def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int | None]:
-    """FlashVSR request checks, in the JS SDK's order and with its messages.
+    """FlashVSR and RelayVSR request checks, in the JS SDK's order and with its messages.
 
     Returns the delivery resolution on the shorter edge and the source frame
     count, or ``None`` when the caller left the source timing to the server.
@@ -1319,34 +1321,44 @@ def _validate_video_upscale_params(params: dict[str, Any]) -> tuple[int, int | N
     ``ValueError``.
     """
 
-    for field, allowed in (
-        ("detailPreference", ("stable", "sharper")),
-        ("processingSpeed", ("stable", "faster")),
-    ):
-        if params.get(field) is not None and params[field] not in allowed:
-            raise ValueError(f"FlashVSR {field} must be {allowed[0]} or {allowed[1]}.")
-    # -1 is the platform-wide random seed, which the worker resolves.
-    seed = params.get("seed")
-    if seed is not None and (
-        not _is_finite_number(seed) or int(seed) != seed or not -1 <= seed <= 4294967295
-    ):
-        raise ValueError(
-            "FlashVSR seed must be -1 (random) or an integer from 0 through 4294967295."
-        )
+    relay_vsr = is_relay_vsr_model(params.get("modelId", ""))
+    upscaler = "RelayVSR" if relay_vsr else "FlashVSR"
+    if relay_vsr:
+        for field in ("detailPreference", "processingSpeed", "seed"):
+            if params.get(field) is not None:
+                raise ValueError(f"RelayVSR has no {field}.")
+    else:
+        for field, allowed in (
+            ("detailPreference", ("stable", "sharper")),
+            ("processingSpeed", ("stable", "faster")),
+        ):
+            if params.get(field) is not None and params[field] not in allowed:
+                raise ValueError(f"FlashVSR {field} must be {allowed[0]} or {allowed[1]}.")
+        # -1 is the platform-wide random seed, which the worker resolves.
+        seed = params.get("seed")
+        if seed is not None and (
+            not _is_finite_number(seed) or int(seed) != seed or not -1 <= seed <= 4294967295
+        ):
+            raise ValueError(
+                "FlashVSR seed must be -1 (random) or an integer from 0 through 4294967295."
+            )
     resolution: Any = params.get("upscaleResolution")
     if resolution is None:
         width, height = _js_number(params.get("width")), _js_number(params.get("height"))
         resolution = math.nan if math.isnan(width) or math.isnan(height) else min(width, height)
-    if resolution not in _VIDEO_UPSCALE_RESOLUTIONS:
+    if relay_vsr:
+        if resolution not in _RELAY_VSR_RESOLUTIONS:
+            raise ValueError("Choose 1080p, 1440p or 2160p for RelayVSR video upscaling.")
+    elif resolution not in _VIDEO_UPSCALE_RESOLUTIONS:
         raise ValueError("Choose 1080p or 1440p for video upscaling.")
     if not params.get("referenceVideo"):
-        raise ValueError("FlashVSR requires an uploaded referenceVideo.")
+        raise ValueError(f"{upscaler} requires an uploaded referenceVideo.")
     frames = _validate_video_upscale_timing(params)
     if any(
         prompt is not None and str(prompt).strip(_JS_WHITESPACE)
         for prompt in (params.get("positivePrompt"), params.get("negativePrompt"))
     ):
-        raise ValueError("FlashVSR is promptless.")
+        raise ValueError(f"{upscaler} is promptless.")
     if (
         params.get("teacacheThreshold") is not None
         or _js_truthy(params.get("trimEndFrame"))
@@ -2438,6 +2450,7 @@ def create_job_request_message(
                 "ace_step",
                 "rtx_vsr_",
                 "flashvsr_",
+                "relayvsr_",
                 "minimax_music3",
             )
         )
@@ -2856,11 +2869,14 @@ def create_job_request_message(
                 upscaleResolution=upscale_resolution,
                 steps=1,
                 seed=0 if params.get("seed") is None else int(params["seed"]),
-                detailPreference=params.get("detailPreference") or "stable",
-                processingSpeed=params.get("processingSpeed") or "stable",
                 generateAudio=True,
                 interpolation="none",
             )
+            if not is_relay_vsr_model(params["modelId"]):
+                keyframe.update(
+                    detailPreference=params.get("detailPreference") or "stable",
+                    processingSpeed=params.get("processingSpeed") or "stable",
+                )
             if upscale_frames is not None:
                 # The validated source count, as an int (158.0 is sent as 158).
                 keyframe["frames"] = upscale_frames
@@ -6089,7 +6105,7 @@ class ProjectsApi(EventEmitter):
         kind = tier.get("type") or "image"
         options: dict[str, Any] = {"type": kind}
         if kind == "video":
-            # FlashVSR catalog fields, carried through as the tier states them.
+            # Video upscale catalog fields, carried through as the tier states them.
             for field in (
                 "task",
                 "outputResolutions",
@@ -6351,7 +6367,7 @@ class ProjectsApi(EventEmitter):
             or data.get("referenceVideo")
             or data.get("referenceVideoUrls")
         )
-        # FlashVSR source geometry is only meaningful as a pair.
+        # Video upscale source geometry is only meaningful as a pair.
         source_size = (
             (_query_number(data["sourceWidth"]), _query_number(data["sourceHeight"]))
             if data.get("sourceWidth") is not None and data.get("sourceHeight") is not None

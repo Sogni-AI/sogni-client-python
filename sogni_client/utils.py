@@ -328,8 +328,16 @@ def is_video_segmentation_model(model_id: str) -> bool:
 FLASHVSR_VIDEO_UPSCALE_MODEL_ID = "flashvsr_v1.1_tiny_long_bf16"
 
 
+RELAYVSR_X2_VIDEO_UPSCALE_MODEL_ID = "relayvsr_x2_lightx2v_int8_convrot"
+RELAYVSR_X4_VIDEO_UPSCALE_MODEL_ID = "relayvsr_x4_int8_convrot"
+
+
+def is_relay_vsr_model(model_id: str) -> bool:
+    return model_id in (RELAYVSR_X2_VIDEO_UPSCALE_MODEL_ID, RELAYVSR_X4_VIDEO_UPSCALE_MODEL_ID)
+
+
 def is_video_upscale_model(model_id: str) -> bool:
-    return model_id == FLASHVSR_VIDEO_UPSCALE_MODEL_ID
+    return model_id == FLASHVSR_VIDEO_UPSCALE_MODEL_ID or is_relay_vsr_model(model_id)
 
 
 def is_video_model(model_id: str) -> bool:
@@ -536,6 +544,7 @@ def requires_starting_image(model_id: str) -> bool:
 
 isVideoModel = is_video_model
 isVideoUpscaleModel = is_video_upscale_model
+isRelayVsrModel = is_relay_vsr_model
 isAudioModel = is_audio_model
 isModelArtifactModel = is_model_artifact_model
 isSegmentationModel = is_segmentation_model
@@ -563,7 +572,7 @@ def calculate_video_frames(
     144, because H3 snaps ``duration * 24`` to the nearest ``124 + n*17`` value
     (124, 141, 158, ... 362) and ignores ``fps``. WAN 2.2 uses
     ``duration * 16 + 1``; LTX 2.x uses ``duration * fps + 1`` snapped to
-    ``1 + n*8``; FlashVSR keeps ``duration * fps``; other models use
+    ``1 + n*8``; video upscalers keep ``duration * fps``; other models use
     ``duration * fps + 1``. ``min_frames`` / ``max_frames`` optionally bound the
     result. Mirrors the TypeScript ``calculateVideoFrames``.
     """
