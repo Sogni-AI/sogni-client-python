@@ -117,7 +117,7 @@ from .worlds import (
     is_world_build_terminal,
 )
 
-__version__ = "5.78.0"
+__version__ = "5.79.0"
 
 __all__ = [
     "ACCOUNT_RESTORABLE_ERROR_CODE",
