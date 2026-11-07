@@ -258,8 +258,10 @@ rate (including fractional rates such as 24000/1001), the full aspect ratio,
 and the original audio, and it never trims, crops, restyles, or interpolates.
 
 Sources must be at most 768px on the short edge and about 1344×768 pixels
-overall (768×1344 in portrait), 1-60 fps at a constant frame rate, SDR, square
-pixels with rotation applied, and 100 MB or less. The client sets no
+overall (768×1344 in portrait), 1-60 fps, SDR, and 100 MB or less.
+Variable-frame-rate, rotated and non-square-pixel clips need no re-export: the
+server conforms them, and every limit applies to the clip as it plays. The
+client sets no
 frame-count or duration limit: the server enforces the maximum clip length and
 refuses a source that is too long with a clear error. The output is at most
 twice the source size, so 1080p needs a source short edge of at least 540px and
