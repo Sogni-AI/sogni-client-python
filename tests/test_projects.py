@@ -5258,3 +5258,58 @@ async def test_estimates_return_daily_fair_use_share_and_quote_the_render_networ
         }
     )
     assert "dailyFairUsePct" not in plain
+
+
+@pytest.mark.parametrize("kind", ["image", "video", "audio"])
+async def test_monthly_capacity_estimate_is_optional(kind: str) -> None:
+    client = FakeClient()
+    client.socket.get = AsyncMock(
+        return_value={
+            "quote": {
+                "project": {
+                    "costInToken": "1",
+                    "costInUSD": "0.1",
+                    "costInSpark": "2",
+                    "costInSogni": "4",
+                }
+            },
+            "monthlyFairUse": {"pct": 0.15},
+        }
+    )
+    api = ProjectsApi(client)
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+    params = {
+        "tokenType": "spark",
+        "model": "test-model",
+        "imageCount": 1,
+        "stepCount": 8,
+        "previewCount": 0,
+        "width": 1024,
+        "height": 1024,
+        "duration": 6,
+        "fps": 24,
+        "steps": 8,
+        "numberOfMedia": 1,
+    }
+    estimate = {
+        "image": api.estimate_cost,
+        "video": api.estimate_video_cost,
+        "audio": api.estimate_audio_cost,
+    }[kind]
+    result = await estimate({**params, "include_monthly_fair_use": True})
+    assert result["monthlyFairUsePct"] == 0.15
+    assert client.socket.get.call_args.args[1]["includeMonthlyFairUse"] == "true"
+    client.socket.get.return_value = {
+        "quote": {
+            "project": {
+                "costInToken": "1",
+                "costInUSD": "0.1",
+                "costInSpark": "2",
+                "costInSogni": "4",
+            }
+        }
+    }
+    for opt_in in [None, False, "true", 1]:
+        result = await estimate({**params, "includeMonthlyFairUse": opt_in})
+        assert "monthlyFairUsePct" not in result
+        assert "includeMonthlyFairUse" not in client.socket.get.call_args.args[1]

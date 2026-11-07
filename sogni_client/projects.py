@@ -5314,6 +5314,9 @@ class ProjectsApi(EventEmitter):
         fair_use = response.get("dailyFairUse")
         if isinstance(fair_use, dict) and fair_use.get("pct") is not None:
             cost["dailyFairUsePct"] = fair_use["pct"]
+        monthly = response.get("monthlyFairUse")
+        if isinstance(monthly, dict) and monthly.get("pct") is not None:
+            cost["monthlyFairUsePct"] = monthly["pct"]
         return cost
 
     async def estimate_cost(
@@ -5369,6 +5372,8 @@ class ProjectsApi(EventEmitter):
         }
         if "priorityMode" in data:
             query["priorityMode"] = str(data["priorityMode"]).lower()
+        if data.get("includeMonthlyFairUse") is True:
+            query["includeMonthlyFairUse"] = "true"
         response = await self.client.socket.get(
             f"/api/v{version}/job/estimate/" + "/".join(map(str, path)), query
         )
@@ -5479,6 +5484,11 @@ class ProjectsApi(EventEmitter):
                 # quote that one.
                 "network": data.get("network") or self._current_network(),
                 "billingMode": data.get("billingMode"),
+                **(
+                    {"includeMonthlyFairUse": "true"}
+                    if data.get("includeMonthlyFairUse") is True
+                    else {}
+                ),
                 **({"seedanceDraft": "1"} if data.get("seedanceDraft") is True else {}),
                 **(
                     {"seedanceDraftJobId": data["seedanceDraftJobId"]}
@@ -5514,6 +5524,11 @@ class ProjectsApi(EventEmitter):
                 # quote that one.
                 "network": data.get("network") or self._current_network(),
                 "billingMode": data.get("billingMode"),
+                **(
+                    {"includeMonthlyFairUse": "true"}
+                    if data.get("includeMonthlyFairUse") is True
+                    else {}
+                ),
                 **(
                     {"priorityMode": str(data["priorityMode"]).lower()}
                     if "priorityMode" in data
