@@ -37,8 +37,18 @@ def test_native_gif_wire_and_defaults(variant: str) -> None:
     assert small["keyFrames"][0]["width"] == 320
     with pytest.raises(Exception, match="pixel budget"):
         create_job_request_message("large", {**params, "width": 1024, "height": 1024}, OPTIONS)
-    with pytest.raises(Exception, match="text-to-image"):
-        create_job_request_message("edit", {**params, "contextImages": [b"ref"]}, OPTIONS)
+    edit_params = {**params, "contextImages": [b"first reference", b"second reference"]}
+    edit = create_job_request_message("edit", edit_params, OPTIONS)
+    assert edit["outputFormat"] == "gif"
+    assert edit["keyFrames"][0]["hasContextImage1"] is True
+    assert edit["keyFrames"][0]["hasContextImage2"] is True
+    for extra in (
+        {"gptImageMask": b"mask"},
+        {"gptImageMaskUrl": "https://example.test/mask.png"},
+        {"gptImageMarkupUrl": "https://example.test/markup.png"},
+    ):
+        with pytest.raises(Exception, match="masks or markup"):
+            create_job_request_message("masked-gif", {**edit_params, **extra}, OPTIONS)
 
 
 @pytest.mark.parametrize("model", ["gpt-image-2", "gpt-image-2.5-flare", "z_image_turbo_bf16"])

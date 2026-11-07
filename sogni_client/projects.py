@@ -611,12 +611,11 @@ def _validate_gpt_image_options(params: dict[str, Any]) -> None:
                     f"{key} requires GIF output and an integer from {minimum} to {maximum}"
                 )
         if gif and (
-            params.get("contextImages")
-            or params.get("gptImageMask")
+            params.get("gptImageMask")
             or params.get("gptImageMaskUrl")
             or params.get("gptImageMarkupUrl")
         ):
-            raise _api_error("GIF output requires text-to-image generation")
+            raise _api_error("GIF output cannot combine with masks or markup")
         markup = params.get("gptImageMarkupUrl")
         if markup is not None and (
             not isinstance(markup, str)

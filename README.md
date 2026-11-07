@@ -38,7 +38,8 @@ accept `output_format="gif"`, `gpt_image_frame_count=9`, and
 `gpt_image_frame_duration_ms=200` for a 1.8-second loop. Use a concrete frame
 size such as 320 × 320 or 896 × 896 and `gpt_image_quality="medium"`.
 The same settings belong in `projects.estimate_cost()` and `projects.create()`.
-GIFs accept no references, mask, annotation, transparency, or compression;
+GIFs accept up to 16 still reference images through `contextImages`.
+GIFs accept no mask, annotation, transparency, or compression;
 2–16 frames must fit a 655,360–8,294,400-pixel sheet, including unused cells,
 with at most 3840 pixels per sheet edge. Frame-size limits depend on count;
 omitting dimensions lets the client choose a valid size.
