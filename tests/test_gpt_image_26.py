@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from sogni_client.chat import SogniTools
 from sogni_client.projects import ProjectsApi, create_job_request_message
 
 OPTIONS = {
@@ -12,6 +13,20 @@ OPTIONS = {
     "sampler": {"allowed": [], "default": None},
     "scheduler": {"allowed": [], "default": None},
 }
+
+
+def test_hosted_reference_gif_schema_exposes_optional_frame_controls() -> None:
+    edit = SogniTools.editImage["function"]["parameters"]
+    generate = SogniTools.generateImage["function"]["parameters"]
+    assert "gif" in edit["properties"]["outputFormat"]["enum"]
+    assert "ordered reference images" in edit["properties"]["outputFormat"]["description"]
+    for field in ("gptImageFrameCount", "gptImageFrameDurationMs"):
+        assert edit["properties"][field] == generate["properties"][field]
+        assert field not in edit["required"]
+    assert "Do not use edit_image for GIFs" not in edit["properties"]["model"]["description"]
+    # Preserve existing Python selectors when synchronizing optional GIF fields.
+    for parameters in (edit, generate):
+        assert "seedream-5-0-pro-uncensored" in parameters["properties"]["model"]["enum"]
 
 
 @pytest.mark.parametrize("variant", ["sunburst", "flare"])

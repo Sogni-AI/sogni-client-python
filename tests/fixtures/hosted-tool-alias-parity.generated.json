@@ -13,7 +13,7 @@
       "executionMode": "direct",
       "hostedToolName": "generate_image",
       "sdkToolName": "generate_image",
-      "hostedSchemaSha256": "fa9292190b71cc3474df86cf9e98d7a8031db1bccd49b7162e42ddcaccc1879a",
+      "hostedSchemaSha256": "6a71e792ffd8a357223e9548e63493b4cf14cdc476a291119a67f38279e3bdf8",
       "hostedRequired": [
         "prompt"
       ],
@@ -58,7 +58,7 @@
       "executionMode": "direct",
       "hostedToolName": "edit_image",
       "sdkToolName": "edit_image",
-      "hostedSchemaSha256": "a79f5ed30f7204e57d960ec487641149a394f14e3f30ea74120ec09198c4dcf5",
+      "hostedSchemaSha256": "b66b0b2670468f0fd135a2fab4eafee1aec28d2823fc690085f5c00afff84b50",
       "hostedRequired": [
         "prompt"
       ],
@@ -80,7 +80,9 @@
         "gptImageBackground",
         "gptImageOutputCompression",
         "outputFormat",
-        "personaName"
+        "personaName",
+        "gptImageFrameCount",
+        "gptImageFrameDurationMs"
       ],
       "argumentAliasTargets": [
         "prompt",
