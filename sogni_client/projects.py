@@ -2214,6 +2214,14 @@ def create_job_request_message(
         if selection.get("applyMask") or selection.get("maxInstances", 1) != 1:
             raise ValueError("Video selection tracks one object; choose it with objectIndex.")
         prompt = _normalize_sam3_prompt(selection)
+        if not prompt.get("text") and prompt.get("points") and object_index != 0:
+            raise ValueError("Point selections require objectIndex 0.")
+        if (
+            not prompt.get("text")
+            and not prompt.get("points")
+            and object_index >= len(prompt.get("boxes", []))
+        ):
+            raise ValueError("objectIndex must refer to a supplied box.")
         prompt.update(
             maxInstances=1,
             frameIndex=frame_index,

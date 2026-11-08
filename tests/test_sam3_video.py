@@ -45,6 +45,8 @@ def test_native_video_selection_wire_and_fractional_timing():
         {"sam3VideoPrompt": {"text": "horn", "maxInstances": 2}},
         {"positivePrompt": "change the video"},
         {"trimEndFrame": True},
+        {"sam3VideoPrompt": {"points": [{"x": 0.5, "y": 0.5, "label": "positive"}], "objectIndex": 1}},
+        {"sam3VideoPrompt": {"boxes": [{"x0": 0, "y0": 0, "x1": 1, "y1": 1}], "objectIndex": 1}},
     ],
 )
 def test_rejects_incompatible_video_requests(overrides):
