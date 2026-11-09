@@ -14,7 +14,7 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal, TypedDict
 from urllib.parse import quote
 
 from .assets import ReusableUploads
@@ -1586,6 +1586,11 @@ _SAM3_ROOT_KEYS = frozenset(
 )
 _SAM3_POINT_KEYS = frozenset({"x", "y", "label"})
 _SAM3_BOX_KEYS = frozenset({"x0", "y0", "x1", "y1", "label"})
+# Opt-in `sam3VideoPrompt` fields; a prompt without any of them is sent exactly
+# as before. Mirrors `SAM3_VIDEO_OPT_IN_KEYS` in the JS SDK and `OPT_IN_KEYS` in
+# sogni-socket `helpers/sam3Video.js`.
+_SAM3_VIDEO_OPT_IN_KEYS = ("mask", "objects", "combine", "frames", "memory")
+
 # Pixal3D generation options, shared by the single-view and multi-view
 # workflows. Four are reduce-only because their maximum is the shipped default.
 # `shapeResolution` is the exception: 1024 is the default and 1536 is the priced
@@ -1617,6 +1622,127 @@ _JOB_PROVENANCE_HASH_FIELDS = (
     "firstFrameSha256",
     "lastFrameSha256",
 )
+
+
+class Sam3PromptPoint(TypedDict):
+    """One normalized click. ``x`` and ``y`` are 0 to 1 across the source."""
+
+    x: float
+    y: float
+    label: Literal["positive", "negative"]
+
+
+class _Sam3PromptBoxCorners(TypedDict):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+class Sam3PromptBox(_Sam3PromptBoxCorners, total=False):
+    """Normalized top-left (``x0``, ``y0``) and bottom-right (``x1``, ``y1``) corners.
+
+    ``label`` ``"positive"`` (the default) is an example of the thing to
+    select. ``"negative"`` excludes one instance of a text-prompted concept and
+    requires ``text``.
+    """
+
+    label: Literal["positive", "negative"]
+
+
+class Sam3PromptMask(TypedDict):
+    """A selection made from a region instead of clicks, boxes or text.
+
+    The tracker is seeded with exactly this region on the prompt frame (SAM
+    does not re-select it), and that frame's output is this region.
+
+    ``polygons`` holds 1 to 64 rings of ``(x, y)`` points, each 3 to 2048
+    points and 8192 points in total. Coordinates are normalized to the source
+    frame (0 to 1, origin top left). Rings fill even-odd: a ring inside another
+    ring is a hole.
+    """
+
+    polygons: list[list[tuple[float, float]]]
+
+
+class Sam3VideoSelection(TypedDict, total=False):
+    """One object to select in a video.
+
+    Exactly one of ``points`` (with at most one box), ``boxes``, ``text`` (with
+    optional signed boxes) or ``mask``. ``mask`` selects exactly that region and
+    is not combinable with ``points``, ``boxes``, ``text``, ``threshold`` or
+    ``multimask``; ``objectIndex`` must then be 0 or absent. ``objectIndex`` is
+    the zero-based candidate in confidence order and defaults to the best match.
+    """
+
+    points: list[Sam3PromptPoint]
+    boxes: list[Sam3PromptBox]
+    text: str
+    threshold: float
+    multimask: bool
+    mask: Sam3PromptMask
+    objectIndex: int
+
+
+class _Sam3FrameIndex(TypedDict):
+    frameIndex: int
+
+
+class Sam3VideoFramePrompt(Sam3VideoSelection, _Sam3FrameIndex):
+    """One prompted frame of ``Sam3VideoPrompt.frames``.
+
+    A selection plus ``frameIndex``, the zero-based source frame it refers to.
+    Each entry names a different frame.
+    """
+
+
+class Sam3VideoPrompt(Sam3VideoSelection, total=False):
+    """A bounded prompt for SAM 3 video selection.
+
+    Output is one hard binary mask video. By default it selects one object
+    (``points``, ``boxes`` or ``text``) on one frame and tracks it through the
+    clip. ``frameIndex`` is the zero-based source frame the selection refers to
+    (default 0; not used with ``frames``, where each entry carries its own).
+
+    ``mask``, ``objects``, ``frames`` and ``memory`` are optional and absent by
+    default; a prompt without them behaves exactly as before. A prompt with any
+    of them is sent unchanged and validated by the server.
+
+    - ``mask``: select an exact region on the prompt frame instead of
+      ``points``, ``boxes`` or ``text``. Not combinable with them, nor with
+      ``threshold`` or ``multimask``; ``objectIndex`` must be 0 or absent.
+    - ``objects``: track 2 to 16 objects together and merge them into one mask:
+      a crowd, a figure plus the prop it holds, a monitor plus the webcam on it.
+      Every object is selected on ``frameIndex`` and tracked jointly; every
+      output frame is the union of their masks. Requires ``combine: "union"``.
+      Put each object's selection inside its entry: the top-level ``points``,
+      ``boxes``, ``text``, ``mask``, ``threshold``, ``multimask`` and
+      ``objectIndex`` are rejected alongside ``objects``, and so is ``frames``.
+    - ``combine``: how ``objects`` combine into the output. Required with
+      ``objects``; ``"union"`` is the only value.
+    - ``frames``: prompt the same object on 2 to 8 different source frames.
+      Each output frame takes the track from the nearest prompted frame (ties
+      go to the earlier one), so the whole clip is still tracked about once.
+      Use it for a loop whose last frame repeats its first (prompt frame 0 and
+      the last frame with the same selection), or to correct drift mid-clip.
+      Rejected together with the top-level ``frameIndex``, the top-level
+      selection fields and ``objects``.
+    - ``memory``: how tracking carries from one 32-frame chunk to the next.
+      ``"chunk"`` (the default, the original behaviour) seeds each chunk from
+      the previous chunk's last mask; an object lost at the end of a chunk is
+      not found again. ``"anchor"`` tracks every chunk from the prompt frame and
+      its selection instead, so tracking errors do not carry from chunk to
+      chunk and a lost object can be picked up again, but the mask can shift
+      where a chunk starts.
+    """
+
+    frameIndex: int
+    output: Literal["mask"]
+    edges: Literal["hard"]
+    objects: list[Sam3VideoSelection]
+    combine: Literal["union"]
+    frames: list[Sam3VideoFramePrompt]
+    memory: Literal["chunk", "anchor"]
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -1942,6 +2068,34 @@ def _apply_sam3_and_pixal3d_params(keyframe: dict[str, Any], params: dict[str, A
         keyframe[key] = requested
 
 
+def _set_sam3_video_keyframe(
+    keyframe: dict[str, Any], params: dict[str, Any], prompt: dict[str, Any]
+) -> None:
+    """Set the video selection key frame; it adopts the verified source.
+
+    Width, height, frames and fps a caller sends must look like source metadata.
+    """
+
+    keyframe.update(
+        hasReferenceVideo=True,
+        sam3VideoPrompt=prompt,
+        steps=1,
+        seed=0,
+        interpolation="none",
+        generateAudio=False,
+    )
+    for name in ("width", "height", "frames", "fps"):
+        value = params.get(name)
+        if value is not None:
+            if (
+                not _is_finite_number(value)
+                or value <= 0
+                or (name != "fps" and not _is_safe_integer(value))
+            ):
+                raise ValueError(f"Video selection {name} must match the source video.")
+            keyframe[name] = value
+
+
 def create_job_request_message(
     project_id: str, params: dict[str, Any], options: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2195,60 +2349,51 @@ def create_job_request_message(
         value = params["sam3VideoPrompt"]
         if not isinstance(value, dict):
             raise ValueError("sam3VideoPrompt must be an object")
-        frame_index, object_index = value.get("frameIndex", 0), value.get("objectIndex", 0)
-        if (
-            not _is_safe_integer(frame_index)
-            or not 0 <= frame_index < 900
-            or not _is_safe_integer(object_index)
-            or not 0 <= object_index <= 31
-        ):
-            raise ValueError("Use a valid source frameIndex and objectIndex from 0 to 31.")
-        output, edges = value.get("output", "mask"), value.get("edges", "hard")
-        if output != "mask" or edges != "hard":
-            raise ValueError("Video selection supports hard mask output.")
-        selection = {
-            k: v
-            for k, v in value.items()
-            if k not in ("frameIndex", "objectIndex", "output", "edges")
-        }
-        if selection.get("applyMask") or selection.get("maxInstances", 1) != 1:
-            raise ValueError("Video selection tracks one object; choose it with objectIndex.")
-        prompt = _normalize_sam3_prompt(selection)
-        if not prompt.get("text") and prompt.get("points") and object_index != 0:
-            raise ValueError("Point selections require objectIndex 0.")
-        if (
-            not prompt.get("text")
-            and not prompt.get("points")
-            and object_index >= len(prompt.get("boxes", []))
-        ):
-            raise ValueError("objectIndex must refer to a supplied box.")
-        prompt.update(
-            maxInstances=1,
-            frameIndex=frame_index,
-            objectIndex=object_index,
-            output=output,
-            edges=edges,
-        )
-        keyframe.update(
-            hasReferenceVideo=True,
-            sam3VideoPrompt=prompt,
-            steps=1,
-            seed=0,
-            interpolation="none",
-            generateAudio=False,
-        )
-        for name in ("width", "height", "frames", "fps"):
-            value = params.get(name)
-            if value is not None:
-                if (
-                    not _is_finite_number(value)
-                    or value <= 0
-                    or (name != "fps" and not _is_safe_integer(value))
-                ):
-                    raise ValueError(f"Video selection {name} must match the source video.")
-                keyframe[name] = value
-        if params.get("frames") is not None and frame_index >= params["frames"]:
-            raise ValueError("frameIndex must refer to a source frame.")
+        # The opt-in selection options (mask, objects, frames, memory) are carried
+        # to the server unchanged; it validates them against the verified source.
+        # The copy keeps the held request (resent after a reconnect) independent
+        # of the caller's dict. A prompt without them takes the original path
+        # below, byte for byte.
+        if any(key in value for key in _SAM3_VIDEO_OPT_IN_KEYS):
+            _set_sam3_video_keyframe(keyframe, params, copy.deepcopy(value))
+        else:
+            frame_index, object_index = value.get("frameIndex", 0), value.get("objectIndex", 0)
+            if (
+                not _is_safe_integer(frame_index)
+                or not 0 <= frame_index < 900
+                or not _is_safe_integer(object_index)
+                or not 0 <= object_index <= 31
+            ):
+                raise ValueError("Use a valid source frameIndex and objectIndex from 0 to 31.")
+            output, edges = value.get("output", "mask"), value.get("edges", "hard")
+            if output != "mask" or edges != "hard":
+                raise ValueError("Video selection supports hard mask output.")
+            selection = {
+                k: v
+                for k, v in value.items()
+                if k not in ("frameIndex", "objectIndex", "output", "edges")
+            }
+            if selection.get("applyMask") or selection.get("maxInstances", 1) != 1:
+                raise ValueError("Video selection tracks one object; choose it with objectIndex.")
+            prompt = _normalize_sam3_prompt(selection)
+            if not prompt.get("text") and prompt.get("points") and object_index != 0:
+                raise ValueError("Point selections require objectIndex 0.")
+            if (
+                not prompt.get("text")
+                and not prompt.get("points")
+                and object_index >= len(prompt.get("boxes", []))
+            ):
+                raise ValueError("objectIndex must refer to a supplied box.")
+            prompt.update(
+                maxInstances=1,
+                frameIndex=frame_index,
+                objectIndex=object_index,
+                output=output,
+                edges=edges,
+            )
+            _set_sam3_video_keyframe(keyframe, params, prompt)
+            if params.get("frames") is not None and frame_index >= params["frames"]:
+                raise ValueError("frameIndex must refer to a source frame.")
 
     elif project_type == "video":
         _reject_retired_output_scale(params)
@@ -5533,6 +5678,17 @@ class ProjectsApi(EventEmitter):
         keyframe_count = data.get("keyframeCount")
         if keyframe_count is None and isinstance(data.get("keyframes"), (list, tuple)):
             keyframe_count = len(data["keyframes"])
+        # SAM 3 video selection: the job's own sam3VideoPrompt. Only the options
+        # that change its price are sent (the number of objects and the memory
+        # mode), and only when the prompt has them; the server holds them to the
+        # limits admission applies to the same prompt.
+        sam3_video_prompt = data.get("sam3VideoPrompt")
+        sam3_query: dict[str, Any] = {}
+        if isinstance(sam3_video_prompt, dict):
+            if isinstance(sam3_video_prompt.get("objects"), (list, tuple)):
+                sam3_query["sam3ObjectCount"] = len(sam3_video_prompt["objects"])
+            if sam3_video_prompt.get("memory") is not None:
+                sam3_query["sam3Memory"] = sam3_video_prompt["memory"]
         response = await self.client.socket.get(
             "/api/v1/job-video/estimate/" + "/".join(quote(str(item)) for item in path),
             {
@@ -5571,6 +5727,7 @@ class ProjectsApi(EventEmitter):
                     and keyframe_count > 0
                     else None
                 ),
+                **sam3_query,
                 # Unpinned, the job renders on the connection's network, so
                 # quote that one.
                 "network": data.get("network") or self._current_network(),

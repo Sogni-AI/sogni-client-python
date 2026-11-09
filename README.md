@@ -198,7 +198,54 @@ print(await project.wait_for_completion())
 The server probes the uploaded source; dimensions and timing are optional and
 must match it when supplied. Sources accept up to 30 seconds, 900 frames,
 2560 pixels on either edge and 100 MB, with constant frame rate, SDR and square
-pixels. The output contains one object's hard mask.
+pixels. The output is one hard mask video.
+
+Four optional fields change how the selection is made. A prompt without them
+is sent and priced exactly as before; a prompt with any of them is sent as
+given and checked by the server.
+
+- `mask`: select an exact region instead of clicks, boxes or text:
+  `{"polygons": [[(x, y), ...], ...]}`, 1 to 64 rings of 3 to 2048 normalized
+  points (8192 in total). A ring inside another ring is a hole. It cannot be
+  combined with `points`, `boxes`, `text`, `threshold` or `multimask`.
+- `objects` with `combine: "union"`: track 2 to 16 objects together and merge
+  them into one mask, such as a figure plus the prop it holds. Each entry is its
+  own selection (`points`, `boxes`, `text` or `mask`) on `frameIndex`.
+- `frames`: prompt the same object on 2 to 8 different source frames, each
+  entry with its own `frameIndex`. Every output frame follows the nearest
+  prompted frame. Use it for a loop whose last frame repeats its first, or to
+  correct drift mid-clip.
+- `memory`: `"chunk"` (the default) carries tracking from each 32-frame chunk
+  to the next; an object lost at the end of a chunk is not found again.
+  `"anchor"` tracks every chunk from the prompt frame instead, so a lost object
+  can be picked up again, but the mask can shift where a chunk starts.
+
+`Sam3VideoPrompt`, `Sam3VideoSelection`, `Sam3VideoFramePrompt` and
+`Sam3PromptMask` describe these shapes for type checkers.
+
+```python
+from sogni_client import SAM3_VIDEO_SEGMENT_MODEL_ID, Sam3VideoPrompt
+
+prompt: Sam3VideoPrompt = {
+    "objects": [{"text": "monitor"}, {"text": "webcam"}],
+    "combine": "union",
+    "frameIndex": 0,
+    "memory": "anchor",
+}
+quote = await sogni.projects.estimate_video_cost(
+    token_type="spark",
+    model=SAM3_VIDEO_SEGMENT_MODEL_ID,
+    width=1920,
+    height=1080,
+    frames=255,
+    fps=24,
+    sam3_video_prompt=prompt,
+)
+```
+
+Pass the job's own `sam3_video_prompt` to `estimate_video_cost()`. Each object
+beyond the first and anchor memory add to the price, so the quote sends the
+number of `objects` and the `memory` mode, and only when the prompt has them.
 
 ## Upscale a video with FlashVSR
 
