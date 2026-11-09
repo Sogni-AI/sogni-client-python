@@ -204,9 +204,11 @@ Four optional fields change how the selection is made. A prompt without them
 is sent and priced exactly as before; a prompt with any of them is sent as
 given and checked by the server.
 
-- `mask`: select an exact region instead of clicks, boxes or text:
+- `mask`: select a drawn region instead of clicks, boxes or text:
   `{"polygons": [[(x, y), ...], ...]}`, 1 to 64 rings of 3 to 2048 normalized
-  points (8192 in total). A ring inside another ring is a hole. It cannot be
+  points (4096 in total, and 4096 across the whole prompt). A ring inside another
+  ring is a hole. The prompt frame comes back in the tracker's own shape of the
+  region, so a looping clip does not jump where it starts. It cannot be
   combined with `points`, `boxes`, `text`, `threshold` or `multimask`.
 - `objects` with `combine: "union"`: track 2 to 16 objects together and merge
   them into one mask, such as a figure plus the prop it holds. Each entry is its

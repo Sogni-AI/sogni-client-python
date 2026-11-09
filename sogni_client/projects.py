@@ -1653,11 +1653,13 @@ class Sam3PromptBox(_Sam3PromptBoxCorners, total=False):
 class Sam3PromptMask(TypedDict):
     """A selection made from a region instead of clicks, boxes or text.
 
-    The tracker is seeded with exactly this region on the prompt frame (SAM
-    does not re-select it), and that frame's output is this region.
+    The tracker is seeded with this region on the prompt frame, and that
+    frame's output is the tracker's own shape of it, so it matches the tracked
+    frames around it (a looping clip does not jump where it starts).
 
     ``polygons`` holds 1 to 64 rings of ``(x, y)`` points, each 3 to 2048
-    points and 8192 points in total. Coordinates are normalized to the source
+    points and 4096 points in total; a whole prompt (all objects and frames)
+    holds at most 4096 region points. Coordinates are normalized to the source
     frame (0 to 1, origin top left). Rings fill even-odd: a ring inside another
     ring is a hole.
     """
@@ -1708,7 +1710,7 @@ class Sam3VideoPrompt(Sam3VideoSelection, total=False):
     default; a prompt without them behaves exactly as before. A prompt with any
     of them is sent unchanged and validated by the server.
 
-    - ``mask``: select an exact region on the prompt frame instead of
+    - ``mask``: select a drawn region on the prompt frame instead of
       ``points``, ``boxes`` or ``text``. Not combinable with them, nor with
       ``threshold`` or ``multimask``; ``objectIndex`` must be 0 or absent.
     - ``objects``: track 2 to 16 objects together and merge them into one mask:
