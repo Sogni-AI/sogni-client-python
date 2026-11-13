@@ -1351,8 +1351,8 @@ admin announcements (`appAlert` plus the announcements read/dismiss pair).
 
 The Python API is async-first; `AsyncSogniClient` is an alias of
 `SogniClient`, not a synchronous wrapper. Browser-only cookie coordination,
-multi-tab behavior and the browser playback helpers for encrypted media have no
-Python equivalent. Local image references are
+multi-tab behavior, passkey sign-in and the browser playback helpers for
+encrypted media have no Python equivalent. Local image references are
 uploaded with their detected MIME type, but the TypeScript client's optional
 browser-side image resizing is not reproduced. All 30 canonical tool schemas
 are exposed; the local project-backed executor handles the six direct media
@@ -1394,6 +1394,33 @@ except ApiError as error:
     # Ask the person whether to restore the account deleted on `deleted_at`. If they agree:
     await sogni.account.login(username, password, restore_deleted_account=True)
 ```
+
+### Two-factor sign-in
+
+When an account has two-factor authentication turned on, `login()` raises
+`TwoFactorRequiredError` without starting a session. Ask the person for a code
+from their authenticator app, or one of their backup codes, and finish the
+sign-in with it:
+
+```python
+from sogni_client import TwoFactorRequiredError
+
+try:
+    await sogni.account.login(username, password, remember_me)
+except TwoFactorRequiredError as challenge:
+    code = await ask_for_authenticator_or_backup_code()  # your app's input
+    await sogni.account.verify_two_factor_login(challenge, code)
+```
+
+Keep the challenge in memory and discard it when the person cancels. Do not log
+or store challenge tokens, authenticator setup keys or backup codes.
+
+The account API also provides `get_two_factor_status()`, `setup_two_factor()`,
+`confirm_two_factor_setup()`, `disable_two_factor()` and
+`regenerate_two_factor_backup_codes()`. Setup and management need a password
+session; API keys cannot manage two-factor settings. Passkey sign-in runs in a
+browser through the JavaScript SDK; Python apps complete the sign-in with an
+authenticator or backup code.
 
 ## Development
 

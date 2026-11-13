@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
-from .errors import ApiError
+from .errors import ApiError, TwoFactorRequiredError
 from .events import DataEntity, EventEmitter
 from .transport import ApiClient
 
@@ -94,6 +94,16 @@ def _load_eth_account() -> tuple[Any, Any]:
     except ImportError as error:  # pragma: no cover - dependency failure is environment-specific
         raise RuntimeError("Account login and signing require the 'eth-account' package") from error
     return Account, encode_typed_data
+
+
+def _factor_proof(value: str | Mapping[str, Any]) -> dict[str, Any]:
+    """An authenticator or backup code as the API expects it."""
+
+    if isinstance(value, str):
+        return {"code": value.strip().upper()}
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError("proof must be an authenticator or backup code")
 
 
 def _signature_hex(signature: Any) -> str:
@@ -641,6 +651,11 @@ class AccountApi(EventEmitter):
         :data:`~sogni_client.errors.ACCOUNT_RESTORABLE_ERROR_CODE` (196) and whose
         ``details["deletedAt"]`` is when it was deleted, in Unix seconds. The
         option changes nothing for an account that has not been deleted.
+
+        For an account with two-factor authentication, ``login()`` raises
+        :class:`~sogni_client.errors.TwoFactorRequiredError` without starting a
+        session. Ask the person for an authenticator or backup code and pass both
+        to :meth:`verify_two_factor_login`.
         """
 
         remember_me = bool(kwargs.get("rememberMe", remember_me))
@@ -664,8 +679,120 @@ class AccountApi(EventEmitter):
         data = _unwrap_data(response)
         if not isinstance(data, dict):
             raise ValueError("Login response did not include data")
+        if data.get("requires2FA"):
+            temp_token = data.get("tempToken")
+            if not temp_token:
+                raise ValueError("Unable to start verification. Please sign in again.")
+            raise TwoFactorRequiredError(temp_token, wallet.address, data.get("username"))
         await self._authenticate_from_response(data)
         return data
+
+    async def verify_two_factor_login(
+        self, challenge: TwoFactorRequiredError, proof: str | Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Finish the sign-in that raised :class:`TwoFactorRequiredError`.
+
+        ``proof`` is the person's authenticator code or one of their backup codes.
+        Keep the challenge in memory; do not log or store it.
+        """
+
+        response = await self.client.rest.post(
+            "/v1/account/2fa/verify-login",
+            {"tempToken": challenge.temp_token, **_factor_proof(proof)},
+        )
+        data = _unwrap_data(response)
+        if not isinstance(data, dict):
+            raise ValueError("Two-factor verification response did not include data")
+        await self._authenticate_from_response(data)
+        return {**data, "username": challenge.username}
+
+    verifyTwoFactorLogin = verify_two_factor_login
+
+    async def get_two_factor_status(self) -> dict[str, Any]:
+        """Two-factor settings of the signed-in account."""
+
+        data = _unwrap_data(await self.client.rest.get("/v1/account/2fa/status"))
+        if not isinstance(data, dict):
+            raise ValueError("Two-factor status response did not include data")
+        return data
+
+    getTwoFactorStatus = get_two_factor_status
+
+    async def _two_factor_signature(self, username: str, password: str) -> str:
+        wallet = self.get_wallet(username, password)
+        current = self.current_account.wallet_address
+        if not current or wallet.address.lower() != current.lower():
+            raise ValueError("Incorrect password. Please try again.")
+        nonce = await self.get_nonce(wallet.address)
+        return self._sign_authentication(wallet, nonce)
+
+    async def setup_two_factor(
+        self,
+        username: str,
+        password: str,
+        proof: str | Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Start authenticator setup. Needs a password session.
+
+        Returns ``setupId``, the authenticator ``secret`` and ``qrData``, and
+        ``backupCodes``. Show them to the person, then call
+        :meth:`confirm_two_factor_setup` with a code from their authenticator.
+        Pass ``proof`` when two-factor authentication is already on.
+        """
+
+        body: dict[str, Any] = {"signature": await self._two_factor_signature(username, password)}
+        if proof:
+            body["proof"] = _factor_proof(proof)
+        data = _unwrap_data(await self.client.rest.post("/v1/account/2fa/setup", body))
+        if not isinstance(data, dict):
+            raise ValueError("Two-factor setup response did not include data")
+        return data
+
+    setupTwoFactor = setup_two_factor
+
+    async def confirm_two_factor_setup(self, setup_id: str, code: str) -> None:
+        """Turn on two-factor authentication with a code from the new authenticator."""
+
+        await self.client.rest.post(
+            "/v1/account/2fa/verify-setup", {"setupId": setup_id, "code": code.strip()}
+        )
+
+    confirmTwoFactorSetup = confirm_two_factor_setup
+
+    async def disable_two_factor(
+        self, username: str, password: str, proof: str | Mapping[str, Any]
+    ) -> None:
+        """Turn off two-factor authentication. Needs a password session and a code."""
+
+        await self.client.rest.post(
+            "/v1/account/2fa/disable",
+            {
+                "signature": await self._two_factor_signature(username, password),
+                **_factor_proof(proof),
+            },
+        )
+
+    disableTwoFactor = disable_two_factor
+
+    async def regenerate_two_factor_backup_codes(
+        self, username: str, password: str, proof: str | Mapping[str, Any]
+    ) -> list[str]:
+        """Replace the account's backup codes. Needs a password session and a code."""
+
+        response = await self.client.rest.post(
+            "/v1/account/2fa/backup-codes",
+            {
+                "signature": await self._two_factor_signature(username, password),
+                **_factor_proof(proof),
+            },
+        )
+        data = _unwrap_data(response)
+        codes = data.get("backupCodes") if isinstance(data, dict) else None
+        if not isinstance(codes, list):
+            raise ValueError("Backup code response did not include data.backupCodes")
+        return codes
+
+    regenerateTwoFactorBackupCodes = regenerate_two_factor_backup_codes
 
     async def logout(self) -> None:
         try:

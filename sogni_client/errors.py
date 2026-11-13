@@ -195,6 +195,23 @@ class ApiError(SogniError):
         super().__init__(str(payload.get("message") or f"HTTP {status}"))
 
 
+class TwoFactorRequiredError(SogniError):
+    """Sign-in needs an authenticator or backup code before a session can begin.
+
+    Raised by ``account.login()`` for an account with two-factor authentication.
+    Pass it to ``account.verify_two_factor_login()`` with the person's code. Keep
+    it in memory only and discard it when the person cancels.
+    """
+
+    def __init__(self, temp_token: str, wallet_address: str, username: str | None) -> None:
+        self.temp_token = temp_token
+        self.tempToken = temp_token
+        self.wallet_address = wallet_address
+        self.walletAddress = wallet_address
+        self.username = username
+        super().__init__("Enter your authenticator code or a backup code to finish signing in.")
+
+
 class MediaEncryptionError(SogniError):
     """Encrypted media could not be created or opened.
 
