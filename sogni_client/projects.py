@@ -52,6 +52,7 @@ from .utils import (
     PIXAL3D_MULTIVIEW_IMAGE_TO_3D_MODEL_ID,
     PIXAL3D_ORBIT_VIEW_SLOTS,
     SAM3_IMAGE_SEGMENT_MODEL_ID,
+    SEEDREAM_5_5_UNCENSORED_MODEL_ID,
     as_result_media_kind,
     calculate_video_frames,
     detect_content_type,
@@ -691,21 +692,48 @@ def _validate_gpt_image_options(params: dict[str, Any]) -> None:
 
 
 _SEEDREAM_MAX_CONTEXT_IMAGES = 10
-# Output limits: 921,600 (1280x720) to 4,194,304 (2048x2048) pixels, aspect
-# ratio from 1:16 to 16:1. Together they bound each edge to 240-8192 px
-# (3840x240 and 8192x512 are the extremes).
+# Output limits: 921,600 (1280x720) pixels up to 4,194,304 (2048x2048) on 5.0
+# Pro and 4,624,220 (2048x2048x1.1025) on 5.5, at an aspect ratio from 1:16 to
+# 16:1. Together they bound each edge to 240-8192 px on 5.0 Pro (3840x240 and
+# 8192x512 are the extremes) and 240-8595 px on 5.5 (8595x538).
 _SEEDREAM_MIN_PIXELS = 921_600
 _SEEDREAM_MAX_PIXELS = 4_194_304
+_SEEDREAM_5_5_MAX_PIXELS = 4_624_220
+_SEEDREAM_5_5_MAX_EDGE = 8595
 _SEEDREAM_MAX_ASPECT_RATIO = 16
+_SEEDREAM_LAYER_SIZES = ("1K", "1.5K", "2K")
+_SEEDREAM_BACKGROUNDS = ("opaque", "transparent", "auto")
+_SEEDREAM_LAYER_MAX_IMAGES = (2, 100)
+_SEEDREAM_LAYER_OPTIONS = (
+    "seedreamLayerDecomposition",
+    "seedreamLayerSize",
+    "seedreamLayerMaxImages",
+    "seedreamLayerTextRecognition",
+)
+_SEEDREAM_5_5_ONLY_OPTIONS = (
+    "seedreamBackground",
+    "seedreamLayerMaxImages",
+    "seedreamLayerTextRecognition",
+)
 
 
 def _validate_seedream_options(params: dict[str, Any]) -> None:
     """Mirror sogni-client's validateSeedreamOptions: at most 10 non-empty
-    references in source order, and a custom size inside the pixel and
-    aspect-ratio limits."""
+    references in source order, a custom size inside the model's pixel and
+    aspect-ratio limits, the one-reference rule of layer decomposition, and the
+    Seedream 5.5 Uncensored background and layer options. ``None`` is unset."""
     model_id = params.get("modelId")
     if not is_seedream_model(model_id):
+        if any(params.get(option) is not None for option in _SEEDREAM_LAYER_OPTIONS):
+            raise _api_error("Seedream layer options require a Seedream model")
+        if params.get("seedreamBackground") is not None:
+            raise _api_error(f"seedreamBackground requires {SEEDREAM_5_5_UNCENSORED_MODEL_ID}")
         return
+    is_seedream_55 = model_id == SEEDREAM_5_5_UNCENSORED_MODEL_ID
+    if not is_seedream_55:
+        for option in _SEEDREAM_5_5_ONLY_OPTIONS:
+            if params.get(option) is not None:
+                raise _api_error(f"{option} requires {SEEDREAM_5_5_UNCENSORED_MODEL_ID}")
     contexts = params.get("contextImages")
     if contexts is not None and (
         not isinstance(contexts, list)
@@ -716,19 +744,61 @@ def _validate_seedream_options(params: dict[str, Any]) -> None:
             f"{model_id} accepts up to {_SEEDREAM_MAX_CONTEXT_IMAGES} non-empty "
             "reference images in source order"
         )
+    decomposition = params.get("seedreamLayerDecomposition")
+    if decomposition is not None and not isinstance(decomposition, bool):
+        raise _api_error("seedreamLayerDecomposition must be a boolean")
+    layer_size = params.get("seedreamLayerSize")
+    if layer_size is not None and layer_size not in _SEEDREAM_LAYER_SIZES:
+        raise _api_error("seedreamLayerSize must be 1K, 1.5K or 2K")
+    if layer_size is not None and not decomposition:
+        raise _api_error("seedreamLayerSize requires seedreamLayerDecomposition")
+    max_images = params.get("seedreamLayerMaxImages")
+    if max_images is not None:
+        minimum, maximum = _SEEDREAM_LAYER_MAX_IMAGES
+        if (
+            isinstance(max_images, bool)
+            or not isinstance(max_images, int)
+            or not minimum <= max_images <= maximum
+        ):
+            raise _api_error("seedreamLayerMaxImages must be an integer from 2 to 100")
+        if not decomposition:
+            raise _api_error("seedreamLayerMaxImages requires seedreamLayerDecomposition")
+    text_recognition = params.get("seedreamLayerTextRecognition")
+    if text_recognition is not None:
+        if not isinstance(text_recognition, bool):
+            raise _api_error("seedreamLayerTextRecognition must be a boolean")
+        if not decomposition:
+            raise _api_error("seedreamLayerTextRecognition requires seedreamLayerDecomposition")
+    if decomposition is True:
+        if len(contexts or []) != 1:
+            raise _api_error("Seedream layer decomposition splits exactly one reference image")
+        count = params.get("numberOfMedia")
+        if (1 if count is None else count) != 1:
+            raise _api_error(
+                "Seedream layer decomposition renders one result: set numberOfMedia to 1"
+            )
+    background = params.get("seedreamBackground")
+    if background is not None:
+        if background not in _SEEDREAM_BACKGROUNDS:
+            raise _api_error("seedreamBackground must be opaque, transparent or auto")
+        if decomposition:
+            raise _api_error("seedreamBackground cannot combine with seedreamLayerDecomposition")
+        if background != "opaque" and params.get("outputFormat") == "jpg":
+            raise _api_error("Transparent or auto Seedream background requires PNG or WebP output")
     width, height = params.get("width"), params.get("height")
     if params.get("sizePreset") not in (None, "custom") or not width or not height:
         return
     width, height = float(width), float(height)
     pixels = width * height
     aspect_ratio = max(width, height) / min(width, height)
+    max_pixels = _SEEDREAM_5_5_MAX_PIXELS if is_seedream_55 else _SEEDREAM_MAX_PIXELS
     if (
         pixels < _SEEDREAM_MIN_PIXELS
-        or pixels > _SEEDREAM_MAX_PIXELS
+        or pixels > max_pixels
         or aspect_ratio > _SEEDREAM_MAX_ASPECT_RATIO
     ):
         raise _api_error(
-            f"{model_id} renders 921,600 to 4,194,304 pixels at an aspect ratio "
+            f"{model_id} renders 921,600 to {max_pixels:,} pixels at an aspect ratio "
             f"from 1:16 to 16:1; got {params.get('width')}x{params.get('height')}"
         )
 
@@ -750,6 +820,8 @@ def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
         return 512, 2048
     if is_gpt_image_model(model_id):
         return 256, 3840
+    if model_id == SEEDREAM_5_5_UNCENSORED_MODEL_ID:
+        return 240, _SEEDREAM_5_5_MAX_EDGE
     if is_seedream_model(model_id):
         return 240, 8192
     if model_id == FLUX3_IMAGE_KLEIN_MODEL_ID:
@@ -1792,6 +1864,114 @@ def _normalized_bounds(value: Any) -> list[float] | None:
     return [x0, y0, x1, y1] if x0 < x1 and y0 < y1 else None
 
 
+#: Layers stack above the base image (z-index 0): Seedream returns at most 99.
+_MAX_IMAGE_LAYER_Z_INDEX = 99
+_TEXT_STYLE_FLAGS = ("bold", "italic", "underline", "strikethrough", "shadow", "translucent")
+
+
+def _layer_box(value: Any) -> list[Any] | None:
+    if (
+        isinstance(value, list)
+        and len(value) == 4
+        and all(_is_finite_number(entry) for entry in value)
+    ):
+        return list(value)
+    return None
+
+
+def _layer_bounding_box(value: Any) -> dict[str, list[Any]] | None:
+    if not isinstance(value, dict):
+        return None
+    absolute = _layer_box(value.get("absolute"))
+    normalized = _layer_box(value.get("normalized"))
+    return {"absolute": absolute, "normalized": normalized} if absolute and normalized else None
+
+
+def _layer_text_style(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if not isinstance(value.get("similarFontFamily"), str) or not isinstance(
+        value.get("foregroundColor"), str
+    ):
+        return None
+    if any(not isinstance(value.get(flag), bool) for flag in _TEXT_STYLE_FLAGS):
+        return None
+    return {
+        "similarFontFamily": value["similarFontFamily"],
+        "foregroundColor": value["foregroundColor"],
+        **{flag: value[flag] for flag in _TEXT_STYLE_FLAGS},
+    }
+
+
+def _layer_text_line(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    bounds = _layer_bounding_box(value.get("boundingBox"))
+    if bounds is None or not isinstance(value.get("runs"), list):
+        return None
+    runs: list[dict[str, Any]] = []
+    for entry in value["runs"]:
+        style = _layer_text_style(entry.get("style")) if isinstance(entry, dict) else None
+        if style is None or not isinstance(entry.get("text"), str):
+            return None
+        runs.append({"text": entry["text"], "style": style})
+    return {"boundingBox": bounds, "runs": runs}
+
+
+def _layer_text_recognition(value: Any) -> dict[str, Any] | None:
+    """A layer's rich-text recognition, only when it is complete: a malformed
+    result is left out rather than reported in part."""
+
+    if not isinstance(value, dict):
+        return None
+    if not isinstance(value.get("text"), str) or not isinstance(value.get("lines"), list):
+        return None
+    lines: list[dict[str, Any]] = []
+    for entry in value["lines"]:
+        line = _layer_text_line(entry)
+        if line is None:
+            return None
+        lines.append(line)
+    return {"text": value["text"], "lines": lines}
+
+
+def _image_layers_from_result(value: Any) -> list[dict[str, Any]] | None:
+    """The layers of a Seedream layer decomposition, as a ``jobResult`` (or a
+    recovered job's ``result``) carries them, ordered by ``zIndex``. Mirrors
+    sogni-client's ``imageLayersFromResult``; ``None`` for every other result."""
+
+    if not isinstance(value, list) or not value:
+        return None
+    layers: list[dict[str, Any]] = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        bounds = _layer_bounding_box(raw.get("boundingBox"))
+        fields = [raw.get("width"), raw.get("height"), raw.get("zIndex")]
+        if not isinstance(raw.get("url"), str) or not raw["url"] or bounds is None:
+            continue
+        if not all(_is_safe_integer(field) and field > 0 for field in fields):
+            continue
+        width, height, z_index = (int(field) for field in fields)
+        if z_index > _MAX_IMAGE_LAYER_Z_INDEX:
+            continue
+        layer: dict[str, Any] = {
+            "url": raw["url"],
+            "width": width,
+            "height": height,
+            "zIndex": z_index,
+            "boundingBox": bounds,
+        }
+        for field in ("name", "description"):
+            if isinstance(raw.get(field), str):
+                layer[field] = raw[field]
+        recognition = _layer_text_recognition(raw.get("textRecognition"))
+        if recognition is not None:
+            layer["textRecognition"] = recognition
+        layers.append(layer)
+    return sorted(layers, key=lambda layer: layer["zIndex"]) or None
+
+
 def _job_provenance_from_result(data: dict[str, Any]) -> dict[str, Any] | None:
     """Validate the worker-attested receipt a completed job may carry."""
 
@@ -2331,6 +2511,18 @@ def create_job_request_message(
             keyframe["gptImageMaskUrl"] = params["gptImageMaskUrl"]
         if params.get("gptImageOutputCompression") is not None:
             keyframe["gptImageOutputCompression"] = params["gptImageOutputCompression"]
+        # Seedream options are written only when set, so requests without them
+        # keep their exact shape. _validate_seedream_options refused every
+        # invalid mix above.
+        if params.get("seedreamBackground") is not None:
+            keyframe["seedreamBackground"] = params["seedreamBackground"]
+        if params.get("seedreamLayerDecomposition") is not None:
+            keyframe["seedreamLayerDecomposition"] = params["seedreamLayerDecomposition"]
+            if params["seedreamLayerDecomposition"] and params.get("seedreamLayerSize"):
+                keyframe["seedreamLayerSize"] = params["seedreamLayerSize"]
+        for field in ("seedreamLayerMaxImages", "seedreamLayerTextRecognition"):
+            if params.get(field) is not None:
+                keyframe[field] = params[field]
 
     elif project_type == "video" and is_video_segmentation_model(params["modelId"]):
         _validate_video_assets(params)
@@ -2832,6 +3024,34 @@ class Job(DataEntity):
         return self._data.get("provenance")
 
     @property
+    def layers(self) -> list[dict[str, Any]] | None:
+        """Seedream layer decomposition: the RGBA PNG layers above the base image,
+        ordered by ``zIndex`` (1-99), each with its ``boundingBox`` on the base and,
+        on Seedream 5.5 text layers, optional ``textRecognition``. ``resultUrl``
+        is the base image. ``None`` for every other job."""
+
+        return self._data.get("layers")
+
+    async def get_layer_url(self, z_index: int) -> str:
+        """Mint a fresh, ownership-checked PNG URL for an extracted layer, by its
+        ``zIndex`` (1-99) in ``job.layers``."""
+
+        if self.status != "completed" or not any(
+            layer.get("zIndex") == z_index for layer in self.layers or []
+        ):
+            raise RuntimeError("Layer is not available")
+        return await self._api.download_url(
+            {
+                "jobId": self.project_id,
+                "imageId": self.id,
+                "type": "complete",
+                "layerIndex": z_index,
+            }
+        )
+
+    getLayerUrl = get_layer_url
+
+    @property
     def image_url(self) -> str | None:
         return self.result_url or self.preview_url
 
@@ -3128,6 +3348,11 @@ class Job(DataEntity):
             delta["nsfwSources"] = list(data.get("nsfwSources") or [])
         if data.get("result"):
             delta["provenance"] = data["result"]
+        layers = _image_layers_from_result(
+            data["result"].get("layers") if isinstance(data.get("result"), dict) else None
+        )
+        if layers:
+            delta["layers"] = layers
         delta.update(_video_export_fields(data))
         status = _JOB_STATUS_MAP.get(data.get("status"))
         if status:
@@ -5194,6 +5419,8 @@ class ProjectsApi(EventEmitter):
                 frame.update(_video_export_fields(job))
                 if isinstance(job.get("result"), dict):
                     frame.update(_job_provenance_from_result(job["result"]) or {})
+                    if job["result"].get("layers") is not None:
+                        frame["layers"] = job["result"]["layers"]
                 await self._apply_job_result(frame)
                 continue
 
@@ -5846,10 +6073,20 @@ class ProjectsApi(EventEmitter):
                 "gptImageFrameCount",
                 "gptImageFrameDurationMs",
                 "outputFormat",
-                "billingMode",
             )
             if data.get(key)
         }
+        # Seedream layer decomposition is quoted at the most it can return; its
+        # charge settles to the images actually returned. The background and
+        # text recognition do not change the price and are not sent.
+        if data.get("seedreamLayerDecomposition"):
+            query["seedreamLayerDecomposition"] = "true"
+        if data.get("seedreamLayerSize"):
+            query["seedreamLayerSize"] = data["seedreamLayerSize"]
+        if data.get("seedreamLayerMaxImages") is not None:
+            query["seedreamLayerMaxImages"] = str(data["seedreamLayerMaxImages"])
+        if data.get("billingMode"):
+            query["billingMode"] = data["billingMode"]
         if "priorityMode" in data:
             query["priorityMode"] = str(data["priorityMode"]).lower()
         if data.get("includeMonthlyFairUse") is True:
@@ -6522,6 +6759,7 @@ class ProjectsApi(EventEmitter):
         with contextlib.suppress(KeyError, TypeError, ValueError):
             seed = int(data["lastSeed"])
         provenance = _job_provenance_from_result(data)
+        layers = _image_layers_from_result(data.get("layers"))
         export = _video_export_fields(data)
         if job is not None:
             delta: dict[str, Any] = {
@@ -6536,6 +6774,8 @@ class ProjectsApi(EventEmitter):
             }
             if provenance:
                 delta["provenance"] = provenance
+            if layers:
+                delta["layers"] = layers
             if isinstance(steps, (int, float)):
                 delta["step"] = steps
             job._update(delta)
@@ -6556,6 +6796,8 @@ class ProjectsApi(EventEmitter):
         }
         if provenance:
             event["provenance"] = provenance
+        if layers:
+            event["layers"] = layers
         if isinstance(steps, (int, float)):
             event["steps"] = steps
         if seed is not None:

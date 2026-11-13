@@ -390,8 +390,10 @@ BIREFNET_BACKGROUND_REMOVAL_MODEL_ID = "birefnet_image_background_removal_fp16"
 #: app its jobs fail with error code 4103 (``MODEL_CONSENT_REQUIRED_ERROR_CODE``).
 SEEDREAM_5_PRO_UNCENSORED_MODEL_ID = "seedream-5-0-pro-uncensored"
 #: Seedream 5.5 Uncensored: ByteDance's Seedream 5.5 with Seedream 5.0 Pro
-#: Uncensored's contract (text-to-image, 1-10 reference edits, the same sizes and
-#: the same one-time agreement). Chat tools use it only when the call names it.
+#: Uncensored's contract (text-to-image, 1-10 reference edits and the same
+#: one-time agreement), plus sizes up to 4,624,220 pixels, transparent
+#: backgrounds (``seedream_background``) and up to 99 decomposition layers with
+#: optional text recognition. Chat tools use it only when the call names it.
 SEEDREAM_5_5_UNCENSORED_MODEL_ID = "seedream-5-5-uncensored"
 _SEEDREAM_MODEL_IDS = frozenset(
     {SEEDREAM_5_PRO_UNCENSORED_MODEL_ID, SEEDREAM_5_5_UNCENSORED_MODEL_ID}

@@ -582,10 +582,95 @@ below: until the account accepts it in a Sogni app, its jobs fail with
 `{"key": "seedance-2-5-uncensored", "version": ..., "modelId": "seedream-5-0-pro-uncensored"}`.
 Chat tools use it only when the call names it.
 
+### Seedream 5.5 Uncensored
+
 `seedream-5-5-uncensored` (`SEEDREAM_5_5_UNCENSORED_MODEL_ID`) is ByteDance's
-Seedream 5.5 with the same contract: the same sizes, 1-10 `context_images`, no
+Seedream 5.5 with the same requests as 5.0 Pro: 1-10 `context_images`, no
 negative prompt, seed or steps, the same agreement, and chat tools use it only
-when the call names it. `is_seedream_model()` is true for both ids.
+when the call names it (`seedream-uncensored` still names 5.0 Pro).
+`is_seedream_model()` is true for both ids. Custom sizes run from 921,600 to
+4,624,220 pixels at an aspect ratio from 1:16 to 16:1. Its native sizes are:
+
+- 1K: 1024x1024, 1152x864, 864x1152, 1424x800, 800x1424, 1248x832, 832x1248, 1568x672
+- 1.5K: 1536x1536, 1792x1344, 1344x1792, 2048x1152, 1152x2048, 1872x1248, 1248x1872, 2352x1008
+- 2K: 2048x2048, 2368x1776, 1776x2368, 2816x1584, 1584x2816, 2496x1664, 1664x2496, 3136x1344
+
+`seedream_background` sets transparency on 5.5 only: `"opaque"` (the default)
+returns an RGB image, `"transparent"` an RGBA image, and `"auto"` lets the model
+decide from the prompt. Transparency works for text-to-image and for edits from
+up to 10 references, which need no alpha channel of their own. It needs PNG (the
+default) or WebP output, so `"transparent"` and `"auto"` refuse
+`output_format="jpg"`, and it cannot combine with layer extraction.
+
+```python
+sticker = await sogni.projects.create(
+    type="image",
+    model_id="seedream-5-5-uncensored",
+    positive_prompt="A glossy cherry sticker with a white die-cut border",
+    width=1536,
+    height=1536,
+    seedream_background="transparent",
+    token_type="spark",
+)
+```
+
+### Seedream layer extraction
+
+Both Seedream models can split one image into a base image and transparent PNG
+layers. Pass `seedream_layer_decomposition=True`, exactly one `context_images`
+entry and `number_of_media=1`, and optionally
+`seedream_layer_size="1K" | "1.5K" | "2K"` (default `"1.5K"`); the source sets the
+aspect ratio. The prompt can be empty, which splits every major element, or name
+the parts to extract.
+
+- Seedream 5.0 Pro Uncensored returns up to 16 layers, and its estimate reserves
+  the maximum 17 returned images.
+- Seedream 5.5 Uncensored returns up to 99 layers. `seedream_layer_max_images`
+  caps the images returned, base included, at an integer from 2 to 100 (default
+  17), and its estimate reserves that many. `seedream_layer_text_recognition=True`
+  also reads the text of regular text layers.
+
+The final charge uses the base image and layers actually returned. Pass the same
+layer options to `estimate_cost()` to quote a request. Both 5.5 options require
+`seedream_layer_decomposition`, and 5.0 Pro refuses them.
+
+```python
+split = await sogni.projects.create(
+    type="image",
+    model_id="seedream-5-5-uncensored",
+    positive_prompt="",
+    context_images=[source_image],
+    number_of_media=1,
+    seedream_layer_decomposition=True,
+    seedream_layer_size="1.5K",
+    seedream_layer_max_images=8,
+    seedream_layer_text_recognition=True,
+    token_type="spark",
+)
+await split.wait_for_completion()
+job = split.jobs[0]
+# job.result_url is the base; job.layers holds the layers ordered by zIndex.
+for layer in job.layers or []:
+    fresh_url = await job.get_layer_url(layer["zIndex"])
+    if "textRecognition" in layer:
+        print(layer["textRecognition"]["text"])
+```
+
+Each layer is a dict with `url`, `width`, `height`, `zIndex` (1-99; the base is
+0), `boundingBox: {"absolute", "normalized"}` (`[left, top, right, bottom]` in
+base-image pixels and on a 0-1000 grid), and optional `name` and `description`.
+A layer image is rendered near the size tier, so it can be larger than its box:
+scale it to `right - left` by `bottom - top` before placing it at `left, top` on
+the base, stacking layers in `zIndex` order.
+
+`layer["textRecognition"]` is present only on Seedream 5.5 layers the model
+classes as regular text, and only when text recognition was requested. Its shape
+is `{"text", "lines": [{"boundingBox", "runs": [{"text", "style": {"similarFontFamily",
+"foregroundColor", "bold", "italic", "underline", "strikethrough", "shadow",
+"translucent"}}]}]}`, where `text` is the layer's full text with lines separated by
+`\n` and `foregroundColor` is `#RRGGBB`. Layers also appear on completed `job`
+events and recovered projects. Layer URLs expire; `await job.get_layer_url(z_index)`
+refreshes one after checking ownership.
 
 ## Seedance 2.5 export options
 
