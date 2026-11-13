@@ -343,16 +343,16 @@ ids, not a request option: `minimax-h3-fastvideo-int8_t2v_turbo_2stage`,
 `minimax-h3-fastvideo-int8_ia2v_turbo_2stage`,
 `minimax-h3-fastvideo-int8_flfa2v_turbo_2stage` and
 `minimax-h3-fastvideo-int8_a2v_turbo_2stage`, plus the Ref2VA Two-Stage ids
-`minimax-h3-ref2va-fp8_r2v_2stage` (Standard, 20 steps) and
-`minimax-h3-ref2va-fp8_r2v_balanced_2stage` (Balanced, 8 steps) and FastH3
+`minimax-h3-ref2va-fp8_r2v_2stage` (Standard) and
+`minimax-h3-ref2va-fp8_r2v_balanced_2stage` (Balanced) and FastH3
 Reference Two-Stage `minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage`. Each FastH3
-id takes exactly the request of its FastH3 Turbo id (canvas, frames, 4 steps,
-Euler/simple, inputs, LoRAs), each Ref2VA id the request of its one-stage
+id takes exactly the request of its FastH3 Turbo id (canvas, frames, inputs,
+LoRAs), each Ref2VA id the request of its one-stage
 R2V id (canvas, frames, steps, sampling, references, LoRAs), and FastH3 Reference
 Two-Stage the request of `minimax-h3-fastvideo-omni-int8_r2v_turbo`.
 The tier renders the canvas, then the worker enlarges it 2× and refines it, so the
 clip is delivered at exactly twice the canvas width and height with the same
-frame count, 24 fps timing and audio. Keep `width`/`height` on the normal H3 grid
+frame count, timing and audio. Keep `width`/`height` on the normal H3 grid
 and pick the canvas for the delivery you want:
 
 | Choice | Canvas to send | Delivered |
@@ -455,7 +455,7 @@ r2v ids. A request takes up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images
 pinned at chosen frames between the first and last frame, alongside the
 workflow's own uploads. Each entry is
 `{"image": ..., "frame_index": ...}` (`frameIndex` works too). `frame_index` is the
-0-based frame at 24 fps, an `int` from 1 to `frames - 2` of the job's frame count,
+0-based frame, an `int` from 1 to `frames - 2` of the job's frame count,
 each frame used once. To convert seconds, use `int(seconds * 24 + 0.5)`, which
 rounds halves up like the JavaScript SDK's `Math.round`; Python's `round()` rounds
 halves to even.
@@ -559,7 +559,7 @@ to extend (`is_minimax_h3_extend_model()` in `sogni_client.utils`): Standard
 `minimax-h3-fl2va-fp8_t2v`, Balanced `minimax-h3-fl2va-fp8_t2v_balanced`, FastH3
 `minimax-h3-fastvideo-int8_t2v_turbo` and FastH3 Two-Stage
 `minimax-h3-fastvideo-int8_t2v_turbo_2stage`. The worker continues the source
-from its last 22 frames (0.92 s at 24 fps) and their audio, and the new footage
+from its last 22 frames (0.92 s) and their audio, and the new footage
 starts on the frame after the source's last frame, `frames - 22` frames long.
 LightX2V Turbo
 (`minimax-h3-fl2va-fp8_t2v_turbo`) and every other model refuse a source. The
@@ -601,8 +601,8 @@ it, and free Spark credits can't run it.
 
 - Size: 1344×768 by default. Each side is 480-1344 px on a 32 px grid, up to
   1,032,192 pixels in total.
-- Length: 124-362 frames in steps of 17 at 24 fps (5.17-15.08 s). Set `frames`
-  or `duration`.
+- Length: 124-362 frames in steps of 17 (5.17-15.08 s). Set `frames` or
+  `duration`.
 - The clip has generated audio by default.
 
 ```python
@@ -638,8 +638,8 @@ server uses `depth`.
 - `reference_image` is optional and guides how the subject looks. It does not
   set the first frame.
 - `video_start` trims every input video from the same point. The worker
-  resamples the inputs to 24 fps and scales and center-crops them to the output
-  size.
+  resamples the inputs to the output frame rate and scales and center-crops
+  them to the output size.
 
 `control_net["strength"]` runs from 0 to 10 (default 1). `"guidance_start"` and
 `"guidance_end"` in `control_net` set the part of sampling where the guide
@@ -1489,7 +1489,7 @@ streaming chat, workflows, templates, replay, and the canonical 30 hosted-tool
 schemas.
 
 Current model and transport coverage includes LTX 2.5, MiniMax H3 in all four
-tiers (Standard, 8-step Balanced, 4-step LightX2V Turbo, and the separate
+tiers (Standard, Balanced, LightX2V Turbo, and the separate
 FastH3 `fastvideo-int8` Turbo engine with its audio-guide ia2v/flfa2v/a2v modes and
 Two-Stage 720p/1080p/2K ids, FastH3 Reference
 `minimax-h3-fastvideo-omni-int8_r2v_turbo` with its Two-Stage id (catalog and
