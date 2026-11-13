@@ -255,3 +255,96 @@ async def test_chat_tools_choose_seedream_only_by_name_without_sampling_args() -
     await api.execute(tool_call("generate_image", json.dumps(gpt)))
     assert projects.created[-1]["negativePrompt"] == "blurry"
     assert projects.created[-1]["seed"] == 7
+
+
+# Seedream 5.5 Uncensored: an additive model with Seedream 5.0 Pro Uncensored's
+# contract, in parity with sogni-client's scripts/check-seedream-5-5-uncensored.cjs.
+SEEDREAM_55 = "seedream-5-5-uncensored"
+
+
+def test_seedream_55_is_a_seedream_model_and_5_0_pro_keeps_its_selectors() -> None:
+    assert sogni_client.SEEDREAM_5_5_UNCENSORED_MODEL_ID == SEEDREAM_55
+    assert is_seedream_model(SEEDREAM_55)
+    assert is_seedream_model(SEEDREAM)
+    for other in ("seedream-5-5", "seedream-5-5-uncensored-v2"):
+        assert not is_seedream_model(other), other
+    assert _custom_image_size_bounds(SEEDREAM_55) == (240, 8192)
+    for tool_name in ("generate_image", "edit_image"):
+        for selector in (
+            SEEDREAM_55,
+            "Seedream 5.5 Uncensored",
+            "Seedream 5.5 Spicy",
+            "seedream-5-5-spicy",
+        ):
+            assert ChatToolsApi._resolve_model(tool_name, {"model": selector}) == SEEDREAM_55, (
+                selector
+            )
+        for selector in (
+            SEEDREAM,
+            "Seedream 5.0 Pro Uncensored",
+            "seedream_uncensored",
+            "Seedream 5 Pro Spicy",
+        ):
+            assert ChatToolsApi._resolve_model(tool_name, {"model": selector}) == SEEDREAM, selector
+
+
+def test_seedream_55_takes_the_vendor_size_ten_references_and_no_negative_prompt() -> None:
+    def request(**params: Any) -> dict[str, Any]:
+        return create_job_request_message(
+            "seedream-55-wire",
+            {
+                "type": "image",
+                "modelId": SEEDREAM_55,
+                "positivePrompt": "A white cat in a bar",
+                "numberOfMedia": 1,
+                **params,
+            },
+            IMAGE_OPTIONS,
+        )["keyFrames"][0]
+
+    keyframe = request(
+        sizePreset="custom",
+        width=2512,
+        height=1664,
+        contextImages=[PNG] * 10,
+        negativePrompt="blurry",
+    )
+    assert (keyframe["width"], keyframe["height"]) == (2512, 1664)
+    assert keyframe["hasContextImage10"] is True
+    assert "negativePrompt" not in keyframe
+    with pytest.raises(ApiError, match="up to 10 non-empty reference images in source order"):
+        request(contextImages=[PNG] * 11)
+    with pytest.raises(ApiError, match="921,600 to 4,194,304 pixels"):
+        request(width=1024, height=768)
+
+
+@pytest.mark.asyncio
+async def test_chat_tools_never_choose_seedream_55_unless_named() -> None:
+    class ImageProjects(FakeProjects):
+        def __init__(self, models: list[dict[str, Any]]) -> None:
+            super().__init__()
+            self.models = models
+
+        async def wait_for_models(self, _timeout: float) -> list[dict[str, Any]]:
+            return self.models
+
+    projects = ImageProjects(
+        [
+            {"id": SEEDREAM_55, "media": "image", "workerCount": 50},
+            {"id": SEEDREAM, "media": "image", "workerCount": 50},
+            {"id": "gpt-image-2", "media": "image", "workerCount": 9},
+        ]
+    )
+    api = ChatToolsApi(projects)  # type: ignore[arg-type]
+    for name in ("generate_image", "edit_image"):
+        result = await api.execute(tool_call(name, '{"prompt":"A portrait"}'))
+        assert result["success"] is True
+        assert projects.created[-1]["modelId"] == "gpt-image-2"
+    await api.execute(
+        tool_call(
+            "generate_image",
+            json.dumps({"prompt": "A portrait", "model": "Seedream 5.5 Uncensored", "seed": 7}),
+        )
+    )
+    assert projects.created[-1]["modelId"] == SEEDREAM_55
+    assert "seed" not in projects.created[-1]

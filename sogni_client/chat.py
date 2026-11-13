@@ -21,6 +21,7 @@ from .events import EventEmitter
 from .projects import ProjectsApi
 from .transport import SWITCH_CONNECTION, ApiClient
 from .utils import (
+    SEEDREAM_5_5_UNCENSORED_MODEL_ID,
     SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
     is_minimax_h3_model,
     is_seedream_model,
@@ -476,6 +477,10 @@ class ChatToolsApi:
         "seedream-uncensored": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
         "seedream-5-pro-spicy": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
         "seedream-5.0-pro-spicy": SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
+        # Seedream 5.5 Uncensored. "seedream-uncensored" keeps naming 5.0 Pro.
+        "seedream-5.5-uncensored": SEEDREAM_5_5_UNCENSORED_MODEL_ID,
+        "seedream-5.5-spicy": SEEDREAM_5_5_UNCENSORED_MODEL_ID,
+        "seedream-5-5-spicy": SEEDREAM_5_5_UNCENSORED_MODEL_ID,
     }
     _EDIT_SELECTORS = {
         **{

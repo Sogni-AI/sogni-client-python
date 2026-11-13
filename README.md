@@ -582,6 +582,11 @@ below: until the account accepts it in a Sogni app, its jobs fail with
 `{"key": "seedance-2-5-uncensored", "version": ..., "modelId": "seedream-5-0-pro-uncensored"}`.
 Chat tools use it only when the call names it.
 
+`seedream-5-5-uncensored` (`SEEDREAM_5_5_UNCENSORED_MODEL_ID`) is ByteDance's
+Seedream 5.5 with the same contract: the same sizes, 1-10 `context_images`, no
+negative prompt, seed or steps, the same agreement, and chat tools use it only
+when the call names it. `is_seedream_model()` is true for both ids.
+
 ## Seedance 2.5 export options
 
 `seedance-2-5` can deliver a MOV container (`output_format="mov"`; video

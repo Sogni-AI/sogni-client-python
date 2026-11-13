@@ -389,11 +389,17 @@ BIREFNET_BACKGROUND_REMOVAL_MODEL_ID = "birefnet_image_background_removal_fp16"
 #: (key ``seedance-2-5-uncensored``); until the account accepts it in a Sogni
 #: app its jobs fail with error code 4103 (``MODEL_CONSENT_REQUIRED_ERROR_CODE``).
 SEEDREAM_5_PRO_UNCENSORED_MODEL_ID = "seedream-5-0-pro-uncensored"
-_SEEDREAM_MODEL_IDS = frozenset({SEEDREAM_5_PRO_UNCENSORED_MODEL_ID})
+#: Seedream 5.5 Uncensored: ByteDance's Seedream 5.5 with Seedream 5.0 Pro
+#: Uncensored's contract (text-to-image, 1-10 reference edits, the same sizes and
+#: the same one-time agreement). Chat tools use it only when the call names it.
+SEEDREAM_5_5_UNCENSORED_MODEL_ID = "seedream-5-5-uncensored"
+_SEEDREAM_MODEL_IDS = frozenset(
+    {SEEDREAM_5_PRO_UNCENSORED_MODEL_ID, SEEDREAM_5_5_UNCENSORED_MODEL_ID}
+)
 
 
 def is_seedream_model(model_id: str | None) -> bool:
-    """Whether ``model_id`` is a Seedream image model (today only Seedream 5.0 Pro Uncensored)."""
+    """Whether ``model_id`` is a Seedream image model (Seedream 5.0 Pro Uncensored or Seedream 5.5 Uncensored)."""
 
     return model_id in _SEEDREAM_MODEL_IDS
 
