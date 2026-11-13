@@ -361,7 +361,7 @@ async def test_key_unavailable_sends_plain_and_retries_later(
     answer = {"respond": unavailable}
     session = await Session.start(options=AUTO, configure=serve(lambda _n: answer["respond"]()))
     media = session.sogni.media_encryption
-    now = {"t": 1000.0}
+    now = {"t": media._clock()}
     media._clock = lambda: now["t"]
     try:
         await wait_for(lambda: len(session.key_requests()) == 1, "the key request")
@@ -412,7 +412,7 @@ async def test_key_turned_off_is_respected(caplog: pytest.LogCaptureFixture) -> 
     caplog.set_level(logging.WARNING, "sogni_client")
     session = await Session.start(options=AUTO, configure=serve(lambda _n: turned_off()))
     media = session.sogni.media_encryption
-    now = {"t": 1000.0}
+    now = {"t": media._clock()}
     media._clock = lambda: now["t"]
     try:
         await wait_for(lambda: len(session.key_requests()) == 1, "the key request")
