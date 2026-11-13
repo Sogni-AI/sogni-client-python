@@ -982,6 +982,45 @@ servers simply leave these fields empty. The SDK automatically requests the
 `projectQueue` socket subscription; integrations may explicitly disable it with
 `socket_event_subscriptions={"projectQueue": False}`.
 
+### Starting a waiting plan project now with Premium Spark
+
+A waiting Unlimited plan project on Fast can carry `project.pay_as_you_go`
+(`{"available": True, "costInSpark": "12", "coveredByPremiumSpark": True}`, or
+`None`): the server offers to run it now on Premium Spark at its normal price,
+because a card outside the plan's pool could start every result. `queueChanged`
+carries the same value as `payAsYouGo`. Nothing is charged until the owner asks:
+
+```python
+result = await sogni.projects.switch_to_premium_spark(project.id)
+# or: result = await project.switch_to_premium_spark()
+```
+
+The result is a dict with a `status`:
+
+- `"switched"`: the project runs on Premium Spark and its price was charged once.
+- `"refused"`: this request charged nothing; `reason` says why. `"started"` and
+  `"not_eligible"` clear the offer at once. After other refusals, such as
+  `"insufficient_premium_spark"` (offer a Spark purchase, then ask again), the
+  server's next queue update decides whether the offer stays. `"not_sent"` comes
+  from this client: that request never left it, so it says nothing about an
+  earlier one.
+- `"unknown"` (`"timeout"`, `"not_found"`, `"session_changed"`,
+  `"unrecognized_reply"`): the server may have switched and charged the project,
+  so treat the payment as possibly made.
+
+Asking again is safe and never charges twice. It answers `"switched"` if the
+earlier request switched, a refusal from the server if nothing was charged, or
+`"unknown"` again, including `"not_found"` once the creation has finished. While
+the outcome stays unknown, check the member's Spark history or the creation's
+result rather than assuming either way. A repeated call while one is pending
+shares its result. If the connection drops while a request is pending, the SDK
+sends it once more after reconnecting, because the server replies only on the
+socket that asked. `timeout` (default 45 seconds) counts from when the request is
+sent. The server reads project ids of at most 128 characters; API-key sessions
+are never offered the switch and are refused with `"not_eligible"`. The offer
+clears when a result starts, when the project finishes, on a dropped connection,
+and when the server stops sending it; recovery snapshots never carry it.
+
 ## Hosted world builds
 
 A hosted world build renders the paths, moments and collectibles a person chose

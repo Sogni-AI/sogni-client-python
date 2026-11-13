@@ -190,6 +190,7 @@ async def test_queue_entries_do_not_create_jobs_or_change_existing_event_shapes(
             "projectId": s.project.id,
             "waitingReason": WAIT,
             "jobWaitingReasons": [entry(0), entry(2, MODEL_WAIT)],
+            "payAsYouGo": None,
         }
     ]
     queue(s, [entry(0), entry(2, MODEL_WAIT)])

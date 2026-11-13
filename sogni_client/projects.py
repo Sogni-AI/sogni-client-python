@@ -22,6 +22,11 @@ from .attribution import workload_attribution_to_wire_fields
 from .auth import ACCOUNT_CHANGED_MESSAGE, RequestSessionError, request_session_ended
 from .errors import ApiError, ProjectError
 from .events import DataEntity, EventEmitter
+from .pay_as_you_go import (
+    PAY_AS_YOU_GO_REFUSALS_CLEARING_OFFER,
+    normalize_pay_as_you_go_offer,
+    normalize_pay_as_you_go_switch_result,
+)
 from .personal_loras import PersonalLoras
 from .queue_state import normalize_job_waiting_reasons, normalize_waiting_reason
 from .recovery import (
@@ -325,6 +330,11 @@ _RECHECK_PADDING_SECONDS = 0.25
 _MISSING_PROJECT_ATTEMPTS = 4
 _MISSING_PROJECT_RETRY_SECONDS = 2.5
 _CANCELLATION_CONFIRMATION_TIMEOUT_SECONDS = 120
+# A pay-as-you-go switch reply normally arrives within the server's 30 s
+# payment authorization; the timer starts once the request is sent.
+_PAY_AS_YOU_GO_SWITCH_TIMEOUT_SECONDS = 45.0
+# Marks "leave the pay-as-you-go offer as it is" in Project._set_queue_state.
+_KEEP_OFFER: Any = object()
 _RUNTIME_LIMIT_FLOOR_SECONDS = {
     "fast": {"image": 30 * 60, "audio": 30 * 60, "video": 90 * 60},
     "relaxed": {"image": 2 * 60 * 60, "audio": 2 * 60 * 60, "video": 8 * 60 * 60},
@@ -3349,7 +3359,39 @@ class Project(DataEntity):
 
     jobWaitingReasons = job_waiting_reasons
 
-    def _set_queue_state(self, data: dict[str, Any], revision: int | None = None) -> None:
+    @property
+    def pay_as_you_go(self) -> dict[str, Any] | None:
+        """The server's offer to run this waiting plan project on Premium Spark now.
+
+        ``{"available": True, "costInSpark": "12", "coveredByPremiumSpark": True}``
+        while an Unlimited plan project waits and a card outside the plan's pool
+        could start it now; ``None`` otherwise, and always on servers without the
+        offer. Needs the default ``projectQueue`` socket event subscription.
+        Nothing is charged until :meth:`switch_to_premium_spark` is called.
+        """
+        offer = self._data.get("payAsYouGo")
+        return dict(offer) if offer else None
+
+    payAsYouGo = pay_as_you_go
+
+    async def switch_to_premium_spark(self, *, timeout: float | None = None) -> dict[str, Any]:
+        """Run this waiting plan project on Premium Spark now.
+
+        ``switched`` means it was charged once, ``refused`` that this request
+        charged nothing, and ``unknown`` that it may have been charged; see
+        :meth:`ProjectsApi.switch_to_premium_spark`.
+        """
+        return await self._api.switch_to_premium_spark(self.id, timeout=timeout)
+
+    switchToPremiumSpark = switch_to_premium_spark
+
+    def _set_queue_state(
+        self,
+        data: dict[str, Any],
+        revision: int | None = None,
+        *,
+        pay_as_you_go: Any = _KEEP_OFFER,
+    ) -> None:
         if self.finished or (revision is not None and revision != self._queue_revision):
             return
         self._queue_revision += 1
@@ -3374,7 +3416,11 @@ class Project(DataEntity):
         if isinstance(data.get("jobWaitingReasons"), list) and data["jobWaitingReasons"]:
             waiting = current[0]["waitingReason"] if current else None
         entries = current
-        self._update({"waitingReason": waiting, "jobWaitingReasons": entries})
+        delta: dict[str, Any] = {"waitingReason": waiting, "jobWaitingReasons": entries}
+        if pay_as_you_go is not _KEEP_OFFER:
+            # One update, so a single queueChanged carries the offer with the reasons.
+            delta["payAsYouGo"] = normalize_pay_as_you_go_offer(pay_as_you_go)
+        self._update(delta)
 
     def _clear_job_waiting_reason(self, job_id: str, job_index: int | None) -> None:
         # Even an unchanged live assignment invalidates an older HTTP snapshot.
@@ -3388,11 +3434,14 @@ class Project(DataEntity):
                 or (job_index is not None and entry["jobIndex"] == job_index)
             )
         ]
-        if entries != previous or (not entries and self.waiting_reason is not None):
+        # A started result ends any Premium Spark offer: the switch needs every result waiting.
+        has_offer = self._data.get("payAsYouGo") is not None
+        if entries != previous or (not entries and self.waiting_reason is not None) or has_offer:
             self._update(
                 {
                     "waitingReason": entries[0]["waitingReason"] if entries else None,
                     "jobWaitingReasons": entries,
+                    "payAsYouGo": None,
                 }
             )
 
@@ -3501,10 +3550,10 @@ class Project(DataEntity):
         self._keep_alive()
         if delta.get("status") in {"completed", "failed", "canceled"}:
             self._queue_revision += 1
-            delta = {**delta, "waitingReason": None, "jobWaitingReasons": []}
+            delta = {**delta, "waitingReason": None, "jobWaitingReasons": [], "payAsYouGo": None}
         queue_changed = any(
             key in delta and self._data.get(key) != delta[key]
-            for key in ("waitingReason", "jobWaitingReasons")
+            for key in ("waitingReason", "jobWaitingReasons", "payAsYouGo")
         )
         if "jobWaitingReasons" in delta:
             entries = delta["jobWaitingReasons"]
@@ -3535,6 +3584,7 @@ class Project(DataEntity):
                     "projectId": self.id,
                     "waitingReason": self.waiting_reason,
                     "jobWaitingReasons": self.job_waiting_reasons,
+                    "payAsYouGo": self.pay_as_you_go,
                 },
             )
 
@@ -3767,6 +3817,22 @@ def _result_job_status(job: dict[str, Any]) -> Any:
     return status if _js_truthy(status) else "unknown"
 
 
+class _PendingPremiumSparkSwitch:
+    """One in-flight switch_to_premium_spark request, shared by repeated calls."""
+
+    __slots__ = ("project_id", "result", "settle")
+
+    def __init__(
+        self,
+        project_id: str,
+        result: asyncio.Future[dict[str, Any]],
+        settle: Callable[[dict[str, Any]], None],
+    ) -> None:
+        self.project_id = project_id
+        self.result = result
+        self.settle = settle
+
+
 class ProjectsApi(EventEmitter):
     def __init__(self, client: ApiClient) -> None:
         super().__init__()
@@ -3779,6 +3845,8 @@ class ProjectsApi(EventEmitter):
         self._model_tiers_at = 0.0
         self._current_network_type: str | None = None
         self._cancellation_requests: dict[str, asyncio.Task[None]] = {}
+        # Pending Premium Spark switches by upper-cased project id; see switch_to_premium_spark.
+        self._pay_as_you_go_switches: dict[str, _PendingPremiumSparkSwitch] = {}
         self._lora_catalog_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._assets: ReusableUploads | None = None
         self._personal_loras: PersonalLoras | None = None
@@ -3892,6 +3960,12 @@ class ProjectsApi(EventEmitter):
         for task in tuple(self._cancellation_requests.values()):
             task.cancel()
         self._cancellation_requests.clear()
+        # A pending switch may already have been charged: its state is unknown, never refused.
+        for pending in tuple(self._pay_as_you_go_switches.values()):
+            pending.settle(
+                {"projectId": pending.project_id, "status": "unknown", "reason": "session_changed"}
+            )
+        self._pay_as_you_go_switches.clear()
         self._sync_lock = asyncio.Lock()
         self._assets = None
         self._set_available_models([])
@@ -5247,6 +5321,171 @@ class ProjectsApi(EventEmitter):
             if project.status == "pending":
                 project._update({"status": "queued"})
 
+    async def switch_to_premium_spark(
+        self, project_id: str, *, timeout: float | None = None
+    ) -> dict[str, Any]:
+        """Run one waiting Unlimited plan project on Premium Spark now.
+
+        Use it when :attr:`Project.pay_as_you_go` offers it; the project runs at
+        its normal Premium Spark price. The server re-checks every condition when
+        asked. The result dict has a ``status``:
+
+        - ``"switched"``: the project runs on Premium Spark; its price was
+          charged once.
+        - ``"refused"``: this request charged nothing; ``reason`` says why.
+          ``"started"`` and ``"not_eligible"`` clear the offer at once. After any
+          other refusal (for example ``"insufficient_premium_spark"``, where an
+          app can offer a Spark purchase and ask again) the server's next queue
+          update decides whether the offer stays. ``"not_sent"`` comes from this
+          client: the request never left it, so it says nothing about an earlier
+          request.
+        - ``"unknown"`` (``"timeout"``, ``"not_found"``, ``"session_changed"``,
+          ``"unrecognized_reply"``): the server may have switched and charged the
+          project. Treat the payment as possibly made. Asking again is safe and
+          never charges twice: it answers ``"switched"`` if the earlier request
+          switched, a refusal from the server if nothing was charged, or
+          ``"unknown"`` again (including ``"not_found"`` once the creation has
+          finished). While it stays unknown, check the member's Spark history or
+          the creation's result rather than assuming either way.
+
+        A repeated call while one is pending shares its result. If the
+        connection drops while the request is pending, the client sends it once
+        more after reconnecting, because the server replies only on the socket
+        that asked. ``timeout`` (default 45 seconds) counts from when the
+        request is sent and restarts after that one re-send.
+        """
+        key = project_id.upper()
+        existing = self._pay_as_you_go_switches.get(key)
+        if existing is not None:
+            return await asyncio.shield(existing.result)
+        seconds = (
+            float(timeout)
+            if isinstance(timeout, (int, float))
+            and not isinstance(timeout, bool)
+            and math.isfinite(timeout)
+            and timeout > 0
+            else _PAY_AS_YOU_GO_SWITCH_TIMEOUT_SECONDS
+        )
+        pending = self._start_premium_spark_switch(project_id, seconds)
+        self._pay_as_you_go_switches[key] = pending
+        try:
+            return await asyncio.shield(pending.result)
+        finally:
+            if self._pay_as_you_go_switches.get(key) is pending:
+                self._pay_as_you_go_switches.pop(key, None)
+
+    switchToPremiumSpark = switch_to_premium_spark
+
+    def _start_premium_spark_switch(
+        self, project_id: str, timeout_seconds: float
+    ) -> _PendingPremiumSparkSwitch:
+        loop = asyncio.get_running_loop()
+        upper_id = project_id.upper()
+        outcome: asyncio.Future[dict[str, Any]] = loop.create_future()
+        state: dict[str, Any] = {"timer": None, "remove_connected": None}
+        session_version = self._session_version
+
+        def finish(result: dict[str, Any]) -> None:
+            if outcome.done():
+                return
+            remove_reply()
+            if state["remove_connected"] is not None:
+                state["remove_connected"]()
+            if state["timer"] is not None:
+                state["timer"].cancel()
+            outcome.set_result(result)
+
+        def on_reply(data: Any) -> None:
+            job_id = data.get("jobID") if isinstance(data, dict) else None
+            if str(job_id or "").upper() != upper_id:
+                return
+            finish(normalize_pay_as_you_go_switch_result(project_id, data))
+
+        remove_reply = self.client.socket.on("projectPaymentSwitch", on_reply)
+
+        def arm_timer() -> None:
+            if outcome.done():
+                return
+            if state["timer"] is not None:
+                state["timer"].cancel()
+            state["timer"] = loop.call_later(
+                timeout_seconds,
+                finish,
+                {
+                    "projectId": project_id,
+                    "status": "unknown",
+                    "reason": "timeout",
+                    "message": "No reply arrived, so the payment state is unknown. Asking again is safe.",
+                },
+            )
+
+        async def send() -> bool:
+            """False only when the request certainly never left this client."""
+            try:
+                await self.client.socket.send(
+                    "switchProjectToPremiumSpark", {"projectId": project_id}
+                )
+                return True
+            except Exception:
+                # A failed send writes nothing (the socket raises before the frame
+                # goes out); a session that ended meanwhile is settled as unknown.
+                return False
+
+        async def run() -> None:
+            delivered = await send()
+            if outcome.done():
+                return
+            if not delivered:
+                if session_version != self._session_version:
+                    finish(
+                        {"projectId": project_id, "status": "unknown", "reason": "session_changed"}
+                    )
+                else:
+                    finish({"projectId": project_id, "status": "refused", "reason": "not_sent"})
+                return
+            sent_generation = self._transport_generation
+
+            def on_connected(_data: Any = None) -> None:
+                if outcome.done() or self._transport_generation == sent_generation:
+                    return
+                if state["remove_connected"] is not None:
+                    state["remove_connected"]()
+                    state["remove_connected"] = None
+                if state["timer"] is not None:
+                    state["timer"].cancel()
+                    state["timer"] = None
+
+                async def resend() -> None:
+                    # The server replies only on the socket that asked: ask once
+                    # more from the new one. Repeats never charge twice.
+                    await send()
+                    arm_timer()
+
+                self._track_task(resend())
+
+            state["remove_connected"] = self.client.on("connected", on_connected)
+            arm_timer()
+
+        self._track_task(run())
+
+        async def settle_offer() -> dict[str, Any]:
+            result = await outcome
+            # Clear the offer only when the outcome ends it for good; the server's
+            # next projectQueue update decides every other case.
+            clears = result["status"] == "switched" or (
+                result["status"] == "refused"
+                and result["reason"] in PAY_AS_YOU_GO_REFUSALS_CLEARING_OFFER
+            )
+            if clears:
+                project = next(
+                    (item for item in self._projects if item.id.upper() == upper_id), None
+                )
+                if project is not None and project.pay_as_you_go is not None:
+                    project._update({"payAsYouGo": None})
+            return result
+
+        return _PendingPremiumSparkSwitch(project_id, asyncio.ensure_future(settle_offer()), finish)
+
     async def cancel(self, project_id: str) -> None:
         existing = self._cancellation_requests.get(project_id)
         if existing is not None:
@@ -5872,7 +6111,7 @@ class ProjectsApi(EventEmitter):
             return
         project = self._project(data["jobID"])
         if project is not None and not project.finished:
-            project._set_queue_state(data)
+            project._set_queue_state(data, pay_as_you_go=data.get("payAsYouGo"))
 
     def _handle_job_state(self, data: Any) -> None:
         if not isinstance(data, dict):
@@ -6418,7 +6657,7 @@ class ProjectsApi(EventEmitter):
         self._clear_authenticated_timer()
         for project in self._projects:
             if not project.finished:
-                project._set_queue_state({})
+                project._set_queue_state({}, pay_as_you_go=None)
                 project._keep_alive()
 
     def _handle_disconnect(self, _data: Any) -> None:
