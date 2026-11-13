@@ -3378,7 +3378,7 @@ class Project(DataEntity):
         """Run this waiting plan project on Premium Spark now.
 
         ``switched`` means it was charged once, ``refused`` that this request
-        charged nothing, and ``unknown`` that it may have been charged; see
+        costs nothing, and ``unknown`` that it may have been charged; see
         :meth:`ProjectsApi.switch_to_premium_spark`.
         """
         return await self._api.switch_to_premium_spark(self.id, timeout=timeout)
@@ -5332,7 +5332,10 @@ class ProjectsApi(EventEmitter):
 
         - ``"switched"``: the project runs on Premium Spark; its price was
           charged once.
-        - ``"refused"``: this request charged nothing; ``reason`` says why.
+        - ``"refused"``: this request costs nothing; ``reason`` says why. A debit
+          the server had already started (after ``"payment_failed"``,
+          ``"no_idle_worker"`` or ``"started"``) is cancelled, and the balance can
+          take a moment to show it.
           ``"started"`` and ``"not_eligible"`` clear the offer at once. After any
           other refusal (for example ``"insufficient_premium_spark"``, where an
           app can offer a Spark purchase and ask again) the server's next queue
@@ -5343,7 +5346,7 @@ class ProjectsApi(EventEmitter):
           ``"unrecognized_reply"``): the server may have switched and charged the
           project. Treat the payment as possibly made. Asking again is safe and
           never charges twice: it answers ``"switched"`` if the earlier request
-          switched, a refusal from the server if nothing was charged, or
+          switched, a refusal from the server if it costs nothing, or
           ``"unknown"`` again (including ``"not_found"`` once the creation has
           finished). While it stays unknown, check the member's Spark history or
           the creation's result rather than assuming either way.

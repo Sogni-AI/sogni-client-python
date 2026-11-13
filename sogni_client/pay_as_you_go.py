@@ -10,7 +10,10 @@ A switch result is a dict with ``projectId`` and ``status``:
 
 - ``"switched"``: the project runs on Premium Spark and its price was charged
   once (``paymentModel`` is ``"paid_spark"``).
-- ``"refused"``: this request charged nothing; ``reason`` says why. The server's
+- ``"refused"``: this request costs nothing; ``reason`` says why. A debit the
+  server had already started (after ``"payment_failed"``, ``"no_idle_worker"`` or
+  ``"started"``) is cancelled, and the balance can take a moment to show it, so
+  tell the member they won't be charged rather than that they weren't. The server's
   reasons are in :data:`PAY_AS_YOU_GO_REFUSAL_REASONS`. ``"not_sent"`` is set by
   this client, never by the server: the request never left the client, so it
   says nothing about an earlier request.

@@ -998,7 +998,10 @@ result = await sogni.projects.switch_to_premium_spark(project.id)
 The result is a dict with a `status`:
 
 - `"switched"`: the project runs on Premium Spark and its price was charged once.
-- `"refused"`: this request charged nothing; `reason` says why. `"started"` and
+- `"refused"`: this request costs nothing; `reason` says why. A debit the server
+  had already started (after `"payment_failed"`, `"no_idle_worker"` or
+  `"started"`) is cancelled, and the balance can take a moment to show it, so tell
+  the member they won't be charged rather than that they weren't. `"started"` and
   `"not_eligible"` clear the offer at once. After other refusals, such as
   `"insufficient_premium_spark"` (offer a Spark purchase, then ask again), the
   server's next queue update decides whether the offer stays. `"not_sent"` comes
@@ -1009,7 +1012,7 @@ The result is a dict with a `status`:
   so treat the payment as possibly made.
 
 Asking again is safe and never charges twice. It answers `"switched"` if the
-earlier request switched, a refusal from the server if nothing was charged, or
+earlier request switched, a refusal from the server if it costs nothing, or
 `"unknown"` again, including `"not_found"` once the creation has finished. While
 the outcome stays unknown, check the member's Spark history or the creation's
 result rather than assuming either way. A repeated call while one is pending
