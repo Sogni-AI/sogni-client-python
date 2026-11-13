@@ -1,0 +1,531 @@
+{
+  "source": "TypeScript request builder (createJobRequestMessage) of @sogni-ai/sogni-client commit 97d790d on feat/minimax-h3-controlnet-20261113, the first MiniMax H3 Control build. Regenerate from the JS SDK when the JS request builder changes.",
+  "options": {
+    "type": "video",
+    "sampler": {
+      "allowed": [
+        "euler"
+      ],
+      "default": "euler"
+    },
+    "scheduler": {
+      "allowed": [
+        "simple"
+      ],
+      "default": "simple"
+    }
+  },
+  "cases": [
+    {
+      "name": "canny",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "canny",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "canny",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "depth",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "depth",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "depth",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "pose",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "pose",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "pose",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "hed",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "hed",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "hed",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "mlsd",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "mlsd",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "mlsd",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "scribble",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "scribble",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "scribble",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "layout",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "layout",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "layout",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "gray",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "gray",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        }
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "gray",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "inpaint",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "controlNet": {
+          "name": "inpaint",
+          "strength": 0.8,
+          "preprocess": false,
+          "guidanceStart": 0.1,
+          "guidanceEnd": 0.9
+        },
+        "referenceMask": true
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": [
+          {
+            "name": "inpaint",
+            "controlStrength": 0.8,
+            "preprocess": false,
+            "controlGuidanceStart": 0.1,
+            "controlGuidanceEnd": 0.9
+          }
+        ],
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": true,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "omitted-control-net",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": null,
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": false,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "prepared-only",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "controlVideo": true
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": null,
+        "hasReferenceVideo": false,
+        "hasReferenceVideo2": false,
+        "hasReferenceVideo3": true,
+        "hasReferenceMask": false,
+        "hasReferenceImage": false
+      }
+    },
+    {
+      "name": "combined-moving-mask",
+      "params": {
+        "type": "video",
+        "modelId": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "positivePrompt": "A person walking.",
+        "numberOfMedia": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "steps": 40,
+        "guidance": 1,
+        "referenceVideo": true,
+        "referenceMaskVideo": true,
+        "controlVideo": true,
+        "referenceImage": true
+      },
+      "expected": {
+        "modelID": "minimax-h3-ref2va-fp8_v2v_controlnet",
+        "steps": 40,
+        "guidanceScale": 1,
+        "width": 1280,
+        "height": 704,
+        "frames": 124,
+        "fps": 24,
+        "currentControlNetsJob": null,
+        "hasReferenceVideo": true,
+        "hasReferenceVideo2": true,
+        "hasReferenceVideo3": true,
+        "hasReferenceMask": false,
+        "hasReferenceImage": true
+      }
+    }
+  ]
+}

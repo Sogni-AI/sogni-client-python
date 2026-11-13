@@ -22,6 +22,11 @@ from .attribution import workload_attribution_to_wire_fields
 from .auth import ACCOUNT_CHANGED_MESSAGE, RequestSessionError, request_session_ended
 from .errors import MEDIA_ENCRYPTION_ERROR_CODES, ApiError, MediaEncryptionError, ProjectError
 from .events import DataEntity, EventEmitter
+from .minimax_h3_control import (
+    control_uploads,
+    is_minimax_h3_control_model,
+    validate_minimax_h3_control,
+)
 from .pay_as_you_go import (
     PAY_AS_YOU_GO_REFUSALS_CLEARING_OFFER,
     normalize_pay_as_you_go_offer,
@@ -1093,6 +1098,12 @@ def _video_asset_requirements(model_id: str) -> dict[str, str] | None:
     workflow = get_video_workflow_type(model_id)
     if not workflow:
         return None
+    if is_minimax_h3_control_model(model_id):
+        return {
+            **VIDEO_WORKFLOW_ASSETS["v2v"],
+            "referenceVideo": "optional",
+            "referenceAudioIdentity": "forbidden",
+        }
     if workflow == "r2v" and is_minimax_h3_model(model_id):
         return _MINIMAX_H3_R2V_ASSETS
     if workflow == "i2v" and is_minimax_h3_model(model_id):
@@ -1277,9 +1288,12 @@ def _validate_h3_params(params: dict[str, Any]) -> None:
     is_prism = is_minimax_h3_prism_model(params["modelId"])
     is_turbo = is_minimax_h3_turbo_model(params["modelId"])
     is_balanced = is_minimax_h3_balanced_model(params["modelId"])
-    expected_steps = (
-        8 if is_fasth3_reference or is_prism else 4 if is_turbo else 8 if is_balanced else 20
-    )
+    if is_minimax_h3_control_model(params["modelId"]):
+        expected_steps = 40
+    else:
+        expected_steps = (
+            8 if is_fasth3_reference or is_prism else 4 if is_turbo else 8 if is_balanced else 20
+        )
     if params.get("steps") is not None and params["steps"] != expected_steps:
         suffix = (
             " FastH3 Reference"
@@ -2758,6 +2772,7 @@ def create_job_request_message(
         if not is_video_model(params["modelId"]):
             raise _api_error("Video generation is only supported for video models.")
         _validate_video_assets(params)
+        validate_minimax_h3_control(params)
         is_upscale = is_video_upscale_model(params["modelId"])
         if is_upscale:
             upscale_resolution, upscale_frames = _validate_video_upscale_params(params)
@@ -2803,11 +2818,16 @@ def create_job_request_message(
                 keyframe["hasReferenceVideo"] = True
         if params.get("referenceAudioIdentity"):
             keyframe["hasReferenceAudioIdentity"] = True
-        if (
-            params.get("referenceMask")
-            and (params.get("controlNet") or {}).get("name") == "inpaint"
+        if params.get("referenceMask") and (
+            (params.get("controlNet") or {}).get("name") == "inpaint"
+            or is_minimax_h3_control_model(params["modelId"])
         ):
             keyframe["hasReferenceMask"] = True
+        if is_minimax_h3_control_model(params["modelId"]):
+            if params.get("referenceMaskVideo"):
+                keyframe["hasReferenceVideo2"] = True
+            if params.get("controlVideo"):
+                keyframe["hasReferenceVideo3"] = True
         for source, target in (
             ("referenceImageUrls", "referenceImageURLs"),
             ("referenceAudioUrls", "referenceAudioURLs"),
@@ -2939,16 +2959,29 @@ def create_job_request_message(
             )
         if params.get("trimEndFrame"):
             keyframe["trimEndFrame"] = True
+        # LTX 2.5/2.3 v2v sends the name and a 0-1 strength. MiniMax H3 Control takes
+        # a 0-10 strength plus preprocess and the guidance window, which only it
+        # reads, so they are sent only for that model. Without a controlNet, the
+        # server runs H3 Control with depth.
         if params.get("controlNet"):
             control = params["controlNet"]
+            is_h3_control = is_minimax_h3_control_model(params["modelId"])
             raw = {"name": control["name"]}
             if control.get("strength") is not None:
                 raw["controlStrength"] = _validate_number(
                     control["strength"],
                     minimum=0,
-                    maximum=1,
+                    maximum=10 if is_h3_control else 1,
                     property_name="strength",
                 )
+            if is_h3_control:
+                for source, target in (
+                    ("preprocess", "preprocess"),
+                    ("guidanceStart", "controlGuidanceStart"),
+                    ("guidanceEnd", "controlGuidanceEnd"),
+                ):
+                    if control.get(source) is not None:
+                        raw[target] = control[source]
             keyframe["currentControlNetsJob"] = [raw]
         if params.get("width") and params.get("height"):
             if is_minimax_h3_model(params["modelId"]):
@@ -4862,6 +4895,7 @@ class ProjectsApi(EventEmitter):
                 if (
                     role == "referenceMask"
                     and (data.get("controlNet") or {}).get("name") != "inpaint"
+                    and not is_minimax_h3_control_model(data["modelId"])
                 ):
                     continue
                 if value and value is not True:
@@ -4877,6 +4911,12 @@ class ProjectsApi(EventEmitter):
                             request["keyFrames"][0].setdefault(
                                 "referenceAudioContentType", content_type
                             )
+            # MiniMax H3 Control's moving mask and prepared guide. The server reads
+            # these slots without a declared content type, as the JS SDK sends them.
+            if is_minimax_h3_control_model(data["modelId"]):
+                for role, value in control_uploads(data):
+                    if value is not True:
+                        await upload(project.id, role, value, media=True)
         elif data["type"] == "audio":
             reference_audio = data.get("referenceAudio")
             if reference_audio and reference_audio is not True:

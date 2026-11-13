@@ -11,6 +11,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .minimax_h3_control import MINIMAX_H3_CONTROL_MODEL_ID, is_minimax_h3_control_model
+
 _LTX_WORKFLOWS = ("t2v", "i2v", "a2v", "ia2v", "v2v")
 _LTX_VIDEO_MODEL_IDS = {
     *{
@@ -53,6 +55,7 @@ _HAPPYHORSE_VIDEO_MODEL_IDS = {
 }
 _WAN3_VIDEO_MODEL_IDS = {"wan3.0-video", "wan3.0-spicy-video"}
 _MINIMAX_H3_VIDEO_MODEL_IDS = {
+    MINIMAX_H3_CONTROL_MODEL_ID,
     "minimax-h3-fl2va-fp8_t2v",
     "minimax-h3-fl2va-fp8_i2v",
     "minimax-h3-fl2va-fp8_flf2v",
@@ -655,6 +658,8 @@ isMinimaxH3KeyframeModel = is_minimax_h3_keyframe_model
 
 
 def get_video_workflow_type(model_id: str) -> str | None:
+    if is_minimax_h3_control_model(model_id):
+        return "v2v"
     if is_video_segmentation_model(model_id):
         return "v2v"
     if is_video_upscale_model(model_id):

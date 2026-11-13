@@ -446,7 +446,7 @@ project = await sogni.projects.create(
 
 Available in version 5.58.0 and later.
 
-Every H3 workflow except text-to-video accepts `keyframes`, 24 ids in all
+Every H3 workflow except text-to-video and Control accepts `keyframes`, 24 ids in all
 (`is_minimax_h3_keyframe_model()`): image-to-video and first/last-frame on every
 tier (Standard, Balanced, LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage), the
 six FastH3 Sound to Video ids (ia2v, flfa2v, a2v, one- and two-stage) and the eight
@@ -587,6 +587,65 @@ project = await sogni.projects.create(
     height=768,
 )
 ```
+
+## MiniMax H3 Control
+
+`minimax-h3-ref2va-fp8_v2v_controlnet` makes a new video that follows the
+structure of a source video (its depth, pose, edges, line segments, scribbles,
+layout or grayscale), and can regenerate a masked part of the source. It is an
+opt-in model: nothing routes to it unless you name it. It needs a worker GPU
+with at least 32 GB of VRAM and runs on both the `fast` and `relaxed` networks.
+
+- Size: 1344×768 by default. Each side is 480-1344 px on a 32 px grid, up to
+  1,032,192 pixels in total.
+- Length: 124-362 frames in steps of 17 at 24 fps (5.17-15.08 s). Set `frames`
+  or `duration`.
+- Sampling is fixed at 40 steps, Euler/simple and guidance 1, with no negative
+  prompt. Omit those fields or send the fixed values.
+- The clip has generated audio by default.
+
+```python
+project = await sogni.projects.create(
+    type="video",
+    network="fast",
+    model_id="minimax-h3-ref2va-fp8_v2v_controlnet",
+    number_of_media=1,
+    positive_prompt="The dancer turns beneath warm stage lights, now in a red coat.",
+    reference_video="dance.mp4",
+    control_net={"name": "depth", "strength": 1},
+    width=1344,
+    height=768,
+    frames=124,
+)
+```
+
+`control_net["name"]` picks the guide: `canny`, `depth`, `pose`, `hed`, `mlsd`,
+`scribble`, `layout`, `gray` or `inpaint`. Without `control_net` the server
+uses `depth`.
+
+- `reference_video` is the source video. For canny, depth, pose, hed and mlsd
+  the worker extracts the map from it.
+- `control_video` is a map video you prepared, used as it is. Scribble, layout
+  and gray always need prepared maps: pass `control_video`, or pass the maps as
+  `reference_video` with `"preprocess": False` in `control_net`. Without a
+  mask, `control_video` can be the only video.
+- `reference_mask` (an image) or `reference_mask_video` (a moving mask), not
+  both: white areas are regenerated and black areas are kept as context. A mask
+  needs the source `reference_video` and works with every control type;
+  `inpaint` requires one. The kept areas are regenerated to match the source,
+  not copied pixel for pixel.
+- `reference_image` is optional and guides how the subject looks. It does not
+  set the first frame.
+- `video_start` trims every input video from the same point. The worker
+  resamples the inputs to 24 fps and scales and center-crops them to the output
+  size.
+
+`control_net["strength"]` runs from 0 to 10 (default 1). `"guidance_start"` and
+`"guidance_end"` in `control_net` set the part of sampling where the guide
+applies, as fractions from 0 to 1 (defaults 0 and 1). The model does not take
+`reference_image_end`, extra references, uploaded audio, a voice reference or
+`keyframes`. Other models ignore `control_video`, `reference_mask_video`,
+`preprocess`, `guidance_start` and `guidance_end`.
 
 ## GPT Image 2.5
 
