@@ -53,6 +53,19 @@ MODEL_NOT_YET_AVAILABLE_ERROR_CODE = 4104
 # handle this code.
 ACCOUNT_RESTORABLE_ERROR_CODE = 196
 
+# Error codes for projects with encrypted media:
+#
+# - ``UNSUPPORTED`` (4098): media encryption is not available for this project.
+#   Create it without media encryption.
+# - ``NO_WORKER_AVAILABLE`` (4096): no capacity for an encrypted project on this
+#   model right now. Retry shortly, or create it without media encryption.
+# - ``RESUME_FAILED`` (4099): the project could not be resumed. Submit it again.
+MEDIA_ENCRYPTION_ERROR_CODES = {
+    "UNSUPPORTED": 4098,
+    "NO_WORKER_AVAILABLE": 4096,
+    "RESUME_FAILED": 4099,
+}
+
 # Error types for an LLM request that did not complete because the connection to
 # Sogni was interrupted, not because of the request itself:
 #
@@ -180,6 +193,28 @@ class ApiError(SogniError):
         self.retryAfter = self.retry_after
         self.details: dict[str, Any] | None = extras.get("details")
         super().__init__(str(payload.get("message") or f"HTTP {status}"))
+
+
+class MediaEncryptionError(SogniError):
+    """Encrypted media could not be created or opened.
+
+    ``code`` says why:
+
+    - ``not_encrypted``: the media is not encrypted.
+    - ``unsupported_version``: the media needs a newer SDK version.
+    - ``malformed``: the media could not be read.
+    - ``authentication_failed``: the media could not be verified; it may be
+      incomplete or changed.
+    - ``locked``: this client cannot open the signed-in account's media right now.
+    - ``wrong_account_key``: the media belongs to a different account.
+    - ``no_recipient``: the media can only be opened with its own key.
+    - ``unsupported``: this account, model, network or input cannot use media
+      encryption.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 class ProjectError(SogniError):

@@ -48,6 +48,25 @@ AUTHENTICATED_FALLBACK_SECONDS = 10.0
 READY_POLL_SECONDS = 0.1
 PLAIN_TEXT_ERROR_MAX_LENGTH = 500
 ERROR_BODY_EXCERPT_LENGTH = 200
+MEDIA_CAPABILITY = "ciphertext-v1"
+MEDIA_CAPABILITY_HEADER = "X-Sogni-Media"
+MEDIA_CAPABILITY_QUERY = "sogniMedia"
+# APIs sogni-client calls outside its shared REST client, so they never carry
+# the media capability there either.
+_UNDECLARED_MEDIA_PATHS = (
+    "/v1/world-builds",
+    "/v1/creative-agent/workflows",
+    "/v1/chat/runs",
+    "/v1/replay/records",
+)
+
+
+def _declares_media_on(path: str) -> bool:
+    route = "/" + path.lstrip("/")
+    return not any(
+        route == prefix or route.startswith((f"{prefix}/", f"{prefix}?"))
+        for prefix in _UNDECLARED_MEDIA_PATHS
+    )
 
 
 def _project_queue_subscription(current: bool, update: dict[str, Any]) -> bool:
@@ -134,6 +153,12 @@ class RestClient:
         self.timeout = timeout
         self._client = http_client or httpx.AsyncClient(timeout=timeout, follow_redirects=True)
         self._owns_client = http_client is None
+        self._media_capability_declared: Callable[[], bool] | None = None
+
+    def _set_media_capability(self, declared: Callable[[], bool]) -> None:
+        """Declare the media capability on requests while ``declared()`` says so."""
+
+        self._media_capability_declared = declared
 
     def url(self, path: str) -> str:
         return urljoin(self.base_url, path.lstrip("/"))
@@ -175,6 +200,9 @@ class RestClient:
         auth_headers = await self.auth.headers()
         assert_session()
         request_headers = {**auth_headers, **(headers or {})}
+        declared = self._media_capability_declared
+        if declared is not None and declared() and _declares_media_on(path):
+            request_headers[MEDIA_CAPABILITY_HEADER] = MEDIA_CAPABILITY
         clean_params = {key: value for key, value in (params or {}).items() if value is not None}
         response = await self._client.request(
             method,
@@ -325,6 +353,10 @@ class WebSocketClient(EventEmitter):
         http_url = urlunsplit((http_scheme, parts.netloc, parts.path, "", ""))
         self.rest = RestClient(http_url, auth, http_client=socket_http_client)
         self._connect_factory = connect_factory
+        self._media_connection_capability: Callable[[], bool] | None = None
+        # Whether the current connection declared the media capability.
+        self._connection_media_declared = False
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._socket: Any = None
         self._socket_session_version: int | None = None
         self._connection_generation = 0
@@ -368,6 +400,36 @@ class WebSocketClient(EventEmitter):
             self._socket is not None and self._socket_session_version == self.auth.session_version
         )
 
+    def _set_media_connection_capability(self, declared: Callable[[], bool]) -> None:
+        """Ask, before each connection, whether it declares the media capability."""
+
+        self._media_connection_capability = declared
+
+    def _declare_media_capability(self) -> None:
+        """Declare the media capability on the open connection, once."""
+
+        declared = self._media_connection_capability
+        if declared is None or not declared():
+            return
+        # Not connected: the next connection declares it at its handshake.
+        if self._connection_media_declared or (
+            self._socket is None and not self._connect_lock.locked()
+        ):
+            return
+        self._connection_media_declared = True
+
+        async def send() -> None:
+            try:
+                await self.send("mediaCapability", {MEDIA_CAPABILITY_QUERY: MEDIA_CAPABILITY})
+            except Exception:
+                logging.getLogger("sogni_client").debug(
+                    "Media capability declaration did not reach the server"
+                )
+
+        task = asyncio.create_task(send())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     @property
     def isConnected(self) -> bool:
         return self.is_connected
@@ -391,6 +453,10 @@ class WebSocketClient(EventEmitter):
                 "clientType": "artist",
                 "forceWorkerId": "fast" if self.supernet_type == "fast" else "",
             }
+            declared = self._media_connection_capability
+            self._connection_media_declared = bool(declared is not None and declared())
+            if self._connection_media_declared:
+                query[MEDIA_CAPABILITY_QUERY] = MEDIA_CAPABILITY
             if self.app_source:
                 query["appSource"] = self.app_source
             query.update(connection_attribution_query(self.connection_attribution))
@@ -669,9 +735,13 @@ class ApiClient(EventEmitter):
         http_client: httpx.AsyncClient | None = None,
         socket_http_client: httpx.AsyncClient | None = None,
         websocket_factory: Callable[..., Any] = websocket_connect,
+        media_encryption: str | None = None,
+        declare_media_capability: bool = True,
     ) -> None:
         super().__init__()
         self.app_id = app_id
+        self.media_encryption = media_encryption
+        self.declare_media_capability = declare_media_capability
         self.app_source = app_source.strip() if app_source and app_source.strip() else None
         raw_attribution = attribution if isinstance(attribution, dict) else {}
         connection = raw_attribution.get("connection")
@@ -849,6 +919,19 @@ class ApiClient(EventEmitter):
         await self.socket.set_socket_event_subscriptions(update)
 
     setSocketEventSubscriptions = set_socket_event_subscriptions
+
+    def _set_media_capability(self, declared: Callable[[], bool]) -> None:
+        """Declare the media capability on REST requests and socket connections."""
+
+        self.rest._set_media_capability(declared)
+        self.socket._set_media_connection_capability(declared)
+
+    def _declare_media_capability(self) -> None:
+        """Declare the media capability on the open socket without reconnecting."""
+
+        if self._disposed or not self.socket_enabled:
+            return
+        self.socket._declare_media_capability()
 
     async def aclose(self) -> None:
         self._disposed = True

@@ -27,12 +27,14 @@ from .client import AsyncSogniClient, SogniClient
 from .errors import (
     ACCOUNT_RESTORABLE_ERROR_CODE,
     API_KEY_ERROR_CODES,
+    MEDIA_ENCRYPTION_ERROR_CODES,
     MODEL_CONSENT_REQUIRED_ERROR_CODE,
     MODEL_NOT_YET_AVAILABLE_ERROR_CODE,
     RETRYABLE_CHAT_ERROR_TYPES,
     SUBSCRIPTION_ERROR_CODES,
     ApiError,
     ChatJobError,
+    MediaEncryptionError,
     ProjectError,
     SogniError,
     is_model_consent_required_error,
@@ -43,6 +45,7 @@ from .errors import (
     isSubscriptionLimitError,
 )
 from .events import DataEntity, EventEmitter
+from .media_encryption import DecryptedMediaReader, MediaEncryptionApi
 from .personal_loras import PersonalLoras
 from .projects import (
     VIDEO_WORKFLOW_ASSETS,
@@ -136,6 +139,7 @@ __all__ = [
     "MINIMAX_H3_FASTH3_FLFA2V_MODEL_ID",
     "MINIMAX_H3_FASTH3_IA2V_MODEL_ID",
     "MINIMAX_H3_MAX_KEYFRAMES",
+    "MEDIA_ENCRYPTION_ERROR_CODES",
     "MODEL_CONSENT_REQUIRED_ERROR_CODE",
     "MODEL_NOT_YET_AVAILABLE_ERROR_CODE",
     "PIXAL3D_IMAGE_TO_3D_MODEL_ID",
@@ -165,8 +169,11 @@ __all__ = [
     "CreativeWorkflowsApi",
     "CurrentAccount",
     "DataEntity",
+    "DecryptedMediaReader",
     "EventEmitter",
     "Job",
+    "MediaEncryptionApi",
+    "MediaEncryptionError",
     "PersonalLoras",
     "Project",
     "ProjectError",

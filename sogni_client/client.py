@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -11,6 +12,7 @@ from .account import AccountApi
 from .announcements import AnnouncementsApi
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
 from .chat import ChatApi
+from .media_encryption import MediaEncryptionApi
 from .projects import ProjectsApi
 from .replay import ReplayApi
 from .stats import StatsApi
@@ -33,7 +35,9 @@ class SogniClient:
         self.api_client = api_client
         self.apiClient = api_client
         self.account = AccountApi(api_client, testnet=testnet)
-        self.projects = ProjectsApi(api_client)
+        self.media_encryption = MediaEncryptionApi(api_client)
+        self.mediaEncryption = self.media_encryption
+        self.projects = ProjectsApi(api_client, media_encryption=self.media_encryption)
         self.projects._set_account_address_resolver(self._account_address)
         self.stats = StatsApi(api_client)
         self.chat = ChatApi(api_client, self.projects)
@@ -69,6 +73,14 @@ class SogniClient:
         Both Python names (``api_key``) and JavaScript SDK names
         (``apiKey``) are accepted. Socket clients require an ``app_id`` that is
         persisted across restarts. REST-only clients may omit it.
+
+        ``media_encryption="auto"`` (``mediaEncryption``) encrypts the media of
+        every project that can be encrypted, once media encryption is available for the account;
+        see :class:`~sogni_client.media_encryption.MediaEncryptionApi`. Leave it
+        unset for the behaviour of earlier versions. With
+        ``declare_media_capability=False`` (``declareMediaCapability``) such a
+        client encrypts new projects while every result URL it is given keeps
+        serving the media itself.
         """
 
         values = dict(config or {})
@@ -95,6 +107,15 @@ class SogniClient:
         )
         disable_socket = bool(pick(disable_socket, "disable_socket", "disableSocket"))
         testnet = bool(pick(testnet, "testnet"))
+        requested_media_encryption = pick(None, "media_encryption", "mediaEncryption")
+        media_encryption = "auto" if requested_media_encryption == "auto" else None
+        if requested_media_encryption is not None and media_encryption is None:
+            logging.getLogger("sogni_client").warning(
+                "media_encryption accepts only 'auto'; media encryption stays off"
+            )
+        declare_media_capability = (
+            pick(True, "declare_media_capability", "declareMediaCapability") is not False
+        )
         if network not in {"fast", "relaxed"}:
             raise ValueError("network must be 'fast' or 'relaxed'")
         if api_key:
@@ -122,6 +143,9 @@ class SogniClient:
             "http_client": http_client,
             "socket_http_client": socket_http_client,
         }
+        if media_encryption is not None:
+            transport_kwargs["media_encryption"] = media_encryption
+            transport_kwargs["declare_media_capability"] = declare_media_capability
         if attribution is not None:
             transport_kwargs["attribution"] = attribution
         if websocket_factory is not None:

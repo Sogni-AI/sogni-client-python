@@ -755,6 +755,54 @@ is available for callers that manage project input slots directly. Project histo
 may include `byolUsed`, `personalLoras` (public-source snapshots) and
 `reusedAssetCount`; missing fields on older projects mean unknown, not zero.
 
+## Media encryption
+
+The client offers optional encryption of project media for the signed-in
+account. Turn it on when creating the client:
+
+```python
+sogni = await SogniClient.create(
+    app_id="my-app", api_key=api_key, media_encryption="auto"
+)
+project = await sogni.projects.create(params)
+await project.wait_for_completion()
+image = await project.jobs[0].get_result_data()  # the media
+```
+
+- Once media encryption is available for the account
+  (`sogni.media_encryption.available`), every eligible new project is encrypted.
+  Until then, and without the option, the client works exactly as before. The
+  `availabilityChanged` event fires when `available` changes.
+- Read results with `job.get_result_data()`, or
+  `await sogni.media_encryption.fetch_decrypted(url)` for result and preview
+  URLs, rather than downloading the URL directly. Both return the media whether
+  or not it was encrypted.
+- A project is sent unencrypted when encryption is not available for it: for the
+  account at that moment, for its model
+  (`await sogni.projects.supports_media_encryption(model_id)`), or for its
+  network (Fast only, for now), or when an input is `True` (already uploaded).
+  `project.encrypted` and `job.encrypted` say which projects were encrypted.
+- Set `media_encryption` on a project to override the client: `False` sends it
+  unencrypted, and `True` encrypts it or raises `MediaEncryptionError` before
+  anything is uploaded. Saved uploads work for encrypted projects too.
+- Services that pass result links on to others can add
+  `declare_media_capability=False`: projects are still encrypted, and result,
+  preview and download URLs serve the media itself.
+- Failures raise `MediaEncryptionError` with a `code` such as `locked`,
+  `unsupported`, `wrong_account_key` or `authentication_failed`.
+
+For long video or audio, `open_decrypted()` reads byte ranges without downloading
+the whole file. Offsets refer to the media itself and `end` is exclusive. The
+URL must support HTTP byte ranges.
+
+```python
+async with await sogni.media_encryption.open_decrypted(result_url) as media:
+    print(media.content_type, media.size)
+    first_kilobyte = await media.read(0, min(1024, media.size))
+    async for chunk in media.stream():  # one verified piece at a time
+        ...
+```
+
 ## Personal LoRAs
 
 Personal imports belong to the authenticated account. Discover compatible models
@@ -1302,8 +1350,9 @@ the durable history, confirmed cancellation, connection/workload attribution, an
 admin announcements (`appAlert` plus the announcements read/dismiss pair).
 
 The Python API is async-first; `AsyncSogniClient` is an alias of
-`SogniClient`, not a synchronous wrapper. Browser-only cookie coordination and
-multi-tab behavior have no Python equivalent. Local image references are
+`SogniClient`, not a synchronous wrapper. Browser-only cookie coordination,
+multi-tab behavior and the browser playback helpers for encrypted media have no
+Python equivalent. Local image references are
 uploaded with their detected MIME type, but the TypeScript client's optional
 browser-side image resizing is not reproduced. All 30 canonical tool schemas
 are exposed; the local project-backed executor handles the six direct media

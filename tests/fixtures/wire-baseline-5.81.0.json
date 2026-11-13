@@ -1,0 +1,701 @@
+{
+  "scenarios": {
+    "api_key_session": {
+      "outcome": {
+        "first_result_sha256": "a51d4a5611cbaf1f7da499978e0d5bb8d7dc83686558beb4b9aec5878a3d3b0b",
+        "recovered_params": {
+          "modelId": "encryptable-model",
+          "network": "fast",
+          "numberOfMedia": 1,
+          "positivePrompt": "recovered",
+          "seed": 9,
+          "steps": 20,
+          "tokenType": "spark",
+          "type": "image"
+        },
+        "recovered_result": "U09HTklFMkUBAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2dw=="
+      },
+      "wire": {
+        "frames": [
+          {
+            "connection": 0,
+            "data": {
+              "animationIsOn": false,
+              "canvasIsOn": false,
+              "cnVideoFrames": [],
+              "cnVideoFramesBoth": [],
+              "cnVideoFramesDepth": [],
+              "cnVideoFramesFace": [],
+              "cnVideoFramesPose": [],
+              "cnVideoFramesSegmented": [],
+              "cnVideoFramesSegmentedBackground": [],
+              "cnVideoFramesSegmentedSubject": [],
+              "cnVideoFramesSketch": [],
+              "disableSafety": false,
+              "doCanvasBlending": false,
+              "frameRate": 24,
+              "generatedVideoSeconds": 10,
+              "jobID": "<id1>",
+              "keyFrames": [
+                {
+                  "cnDragOffset": [
+                    0,
+                    0
+                  ],
+                  "cnDragOffsetIsEnabled": true,
+                  "cnImageBackgroundColor": "clear",
+                  "cnRotation": 0,
+                  "cnRotationIsEnabled": true,
+                  "cnZoomScale": 1,
+                  "cnZoomScaleIsEnabled": true,
+                  "controlNetZoomPanIsOn": false,
+                  "currentControlNets": null,
+                  "frameIndex": 0,
+                  "guidanceScale": 7,
+                  "guidanceScaleIsEnabled": true,
+                  "hasContextImage1": false,
+                  "hasContextImage10": false,
+                  "hasContextImage11": false,
+                  "hasContextImage12": false,
+                  "hasContextImage13": false,
+                  "hasContextImage14": false,
+                  "hasContextImage15": false,
+                  "hasContextImage16": false,
+                  "hasContextImage2": false,
+                  "hasContextImage3": false,
+                  "hasContextImage4": false,
+                  "hasContextImage5": false,
+                  "hasContextImage6": false,
+                  "hasContextImage7": false,
+                  "hasContextImage8": false,
+                  "hasContextImage9": false,
+                  "hasStartingImage": true,
+                  "isEnabled": true,
+                  "modelID": "encryptable-model",
+                  "negativePrompt": "",
+                  "positivePrompt": "a lighthouse",
+                  "processing": "CPU, GPU",
+                  "scheduler": null,
+                  "siDragOffset": [
+                    0,
+                    0
+                  ],
+                  "siDragOffsetIsEnabled": true,
+                  "siImageBackgroundColor": "black",
+                  "siRotation": 0,
+                  "siRotationIsEnabled": true,
+                  "siZoomScale": 1,
+                  "siZoomScaleIsEnabled": true,
+                  "startingImage": null,
+                  "startingImageZoomPanIsOn": false,
+                  "steps": 20,
+                  "stepsIsEnabled": true,
+                  "strength": 0.5,
+                  "strengthIsEnabled": true,
+                  "stylePrompt": "",
+                  "timeStepSpacing": null,
+                  "useLastImageAsCNImageInAnimation": false,
+                  "useLastImageAsGuideImageInAnimation": true
+                }
+              ],
+              "numberOfImages": 1,
+              "outputFormat": "png",
+              "previews": 0,
+              "selectedUpscalingModel": "OFF",
+              "siVideoFrames": []
+            },
+            "type": "jobRequest"
+          },
+          {
+            "connection": 0,
+            "data": {
+              "animationIsOn": false,
+              "canvasIsOn": false,
+              "cnVideoFrames": [],
+              "cnVideoFramesBoth": [],
+              "cnVideoFramesDepth": [],
+              "cnVideoFramesFace": [],
+              "cnVideoFramesPose": [],
+              "cnVideoFramesSegmented": [],
+              "cnVideoFramesSegmentedBackground": [],
+              "cnVideoFramesSegmentedSubject": [],
+              "cnVideoFramesSketch": [],
+              "disableSafety": false,
+              "doCanvasBlending": false,
+              "frameRate": 24,
+              "generatedVideoSeconds": 10,
+              "jobID": "<id2>",
+              "keyFrames": [
+                {
+                  "cnDragOffset": [
+                    0,
+                    0
+                  ],
+                  "cnDragOffsetIsEnabled": true,
+                  "cnImageBackgroundColor": "clear",
+                  "cnRotation": 0,
+                  "cnRotationIsEnabled": true,
+                  "cnZoomScale": 1,
+                  "cnZoomScaleIsEnabled": true,
+                  "controlNetZoomPanIsOn": false,
+                  "currentControlNets": null,
+                  "frameIndex": 0,
+                  "guidanceScale": 7,
+                  "guidanceScaleIsEnabled": true,
+                  "hasContextImage1": true,
+                  "hasContextImage10": false,
+                  "hasContextImage11": false,
+                  "hasContextImage12": false,
+                  "hasContextImage13": false,
+                  "hasContextImage14": false,
+                  "hasContextImage15": false,
+                  "hasContextImage16": false,
+                  "hasContextImage2": false,
+                  "hasContextImage3": false,
+                  "hasContextImage4": false,
+                  "hasContextImage5": false,
+                  "hasContextImage6": false,
+                  "hasContextImage7": false,
+                  "hasContextImage8": false,
+                  "hasContextImage9": false,
+                  "hasStartingImage": true,
+                  "isEnabled": true,
+                  "modelID": "encryptable-model",
+                  "negativePrompt": "",
+                  "positivePrompt": "a lighthouse",
+                  "processing": "CPU, GPU",
+                  "scheduler": null,
+                  "siDragOffset": [
+                    0,
+                    0
+                  ],
+                  "siDragOffsetIsEnabled": true,
+                  "siImageBackgroundColor": "black",
+                  "siRotation": 0,
+                  "siRotationIsEnabled": true,
+                  "siZoomScale": 1,
+                  "siZoomScaleIsEnabled": true,
+                  "startingImage": null,
+                  "startingImageZoomPanIsOn": false,
+                  "steps": 20,
+                  "stepsIsEnabled": true,
+                  "strength": 0.5,
+                  "strengthIsEnabled": true,
+                  "stylePrompt": "",
+                  "timeStepSpacing": null,
+                  "useLastImageAsCNImageInAnimation": false,
+                  "useLastImageAsGuideImageInAnimation": true
+                }
+              ],
+              "numberOfImages": 1,
+              "outputFormat": "png",
+              "previews": 0,
+              "selectedUpscalingModel": "OFF",
+              "siVideoFrames": []
+            },
+            "type": "jobRequest"
+          },
+          {
+            "connection": 0,
+            "data": {
+              "animationIsOn": false,
+              "canvasIsOn": false,
+              "cnVideoFrames": [],
+              "cnVideoFramesBoth": [],
+              "cnVideoFramesDepth": [],
+              "cnVideoFramesFace": [],
+              "cnVideoFramesPose": [],
+              "cnVideoFramesSegmented": [],
+              "cnVideoFramesSegmentedBackground": [],
+              "cnVideoFramesSegmentedSubject": [],
+              "cnVideoFramesSketch": [],
+              "disableSafety": false,
+              "doCanvasBlending": false,
+              "frameRate": 24,
+              "generatedVideoSeconds": 10,
+              "jobID": "<id3>",
+              "keyFrames": [
+                {
+                  "cnDragOffset": [
+                    0,
+                    0
+                  ],
+                  "cnDragOffsetIsEnabled": true,
+                  "cnImageBackgroundColor": "clear",
+                  "cnRotation": 0,
+                  "cnRotationIsEnabled": true,
+                  "cnZoomScale": 1,
+                  "cnZoomScaleIsEnabled": true,
+                  "controlNetZoomPanIsOn": false,
+                  "currentControlNets": null,
+                  "frameIndex": 0,
+                  "guidanceScale": 7,
+                  "guidanceScaleIsEnabled": true,
+                  "hasContextImage1": false,
+                  "hasContextImage10": false,
+                  "hasContextImage11": false,
+                  "hasContextImage12": false,
+                  "hasContextImage13": false,
+                  "hasContextImage14": false,
+                  "hasContextImage15": false,
+                  "hasContextImage16": false,
+                  "hasContextImage2": false,
+                  "hasContextImage3": false,
+                  "hasContextImage4": false,
+                  "hasContextImage5": false,
+                  "hasContextImage6": false,
+                  "hasContextImage7": false,
+                  "hasContextImage8": false,
+                  "hasContextImage9": false,
+                  "hasStartingImage": true,
+                  "isEnabled": true,
+                  "modelID": "plain-model",
+                  "negativePrompt": "",
+                  "positivePrompt": "a lighthouse",
+                  "processing": "CPU, GPU",
+                  "scheduler": null,
+                  "siDragOffset": [
+                    0,
+                    0
+                  ],
+                  "siDragOffsetIsEnabled": true,
+                  "siImageBackgroundColor": "black",
+                  "siRotation": 0,
+                  "siRotationIsEnabled": true,
+                  "siZoomScale": 1,
+                  "siZoomScaleIsEnabled": true,
+                  "startingImage": null,
+                  "startingImageZoomPanIsOn": false,
+                  "steps": 20,
+                  "stepsIsEnabled": true,
+                  "strength": 0.5,
+                  "strengthIsEnabled": true,
+                  "stylePrompt": "",
+                  "timeStepSpacing": null,
+                  "useLastImageAsCNImageInAnimation": false,
+                  "useLastImageAsGuideImageInAnimation": true
+                }
+              ],
+              "numberOfImages": 1,
+              "outputFormat": "png",
+              "previews": 0,
+              "selectedUpscalingModel": "OFF",
+              "siVideoFrames": []
+            },
+            "type": "jobRequest"
+          },
+          {
+            "connection": 0,
+            "data": {
+              "animationIsOn": false,
+              "canvasIsOn": false,
+              "cnVideoFrames": [],
+              "cnVideoFramesBoth": [],
+              "cnVideoFramesDepth": [],
+              "cnVideoFramesFace": [],
+              "cnVideoFramesPose": [],
+              "cnVideoFramesSegmented": [],
+              "cnVideoFramesSegmentedBackground": [],
+              "cnVideoFramesSegmentedSubject": [],
+              "cnVideoFramesSketch": [],
+              "disableSafety": false,
+              "doCanvasBlending": false,
+              "frameRate": 24,
+              "generatedVideoSeconds": 10,
+              "jobID": "<id4>",
+              "keyFrames": [
+                {
+                  "cnDragOffset": [
+                    0,
+                    0
+                  ],
+                  "cnDragOffsetIsEnabled": true,
+                  "cnImageBackgroundColor": "clear",
+                  "cnRotation": 0,
+                  "cnRotationIsEnabled": true,
+                  "cnZoomScale": 1,
+                  "cnZoomScaleIsEnabled": true,
+                  "controlNetZoomPanIsOn": false,
+                  "currentControlNets": null,
+                  "frameIndex": 0,
+                  "guidanceScale": 7,
+                  "guidanceScaleIsEnabled": true,
+                  "hasContextImage1": false,
+                  "hasContextImage10": false,
+                  "hasContextImage11": false,
+                  "hasContextImage12": false,
+                  "hasContextImage13": false,
+                  "hasContextImage14": false,
+                  "hasContextImage15": false,
+                  "hasContextImage16": false,
+                  "hasContextImage2": false,
+                  "hasContextImage3": false,
+                  "hasContextImage4": false,
+                  "hasContextImage5": false,
+                  "hasContextImage6": false,
+                  "hasContextImage7": false,
+                  "hasContextImage8": false,
+                  "hasContextImage9": false,
+                  "hasStartingImage": true,
+                  "isEnabled": true,
+                  "modelID": "encryptable-model",
+                  "negativePrompt": "",
+                  "positivePrompt": "a lighthouse",
+                  "processing": "CPU, GPU",
+                  "scheduler": null,
+                  "siDragOffset": [
+                    0,
+                    0
+                  ],
+                  "siDragOffsetIsEnabled": true,
+                  "siImageBackgroundColor": "black",
+                  "siRotation": 0,
+                  "siRotationIsEnabled": true,
+                  "siZoomScale": 1,
+                  "siZoomScaleIsEnabled": true,
+                  "startingImage": null,
+                  "startingImageZoomPanIsOn": false,
+                  "steps": 20,
+                  "stepsIsEnabled": true,
+                  "strength": 0.5,
+                  "strengthIsEnabled": true,
+                  "stylePrompt": "",
+                  "timeStepSpacing": null,
+                  "useLastImageAsCNImageInAnimation": false,
+                  "useLastImageAsGuideImageInAnimation": true
+                }
+              ],
+              "numberOfImages": 1,
+              "outputFormat": "png",
+              "previews": 0,
+              "selectedUpscalingModel": "OFF",
+              "siVideoFrames": []
+            },
+            "type": "jobRequest"
+          },
+          {
+            "connection": 1,
+            "data": {
+              "animationIsOn": false,
+              "canvasIsOn": false,
+              "cnVideoFrames": [],
+              "cnVideoFramesBoth": [],
+              "cnVideoFramesDepth": [],
+              "cnVideoFramesFace": [],
+              "cnVideoFramesPose": [],
+              "cnVideoFramesSegmented": [],
+              "cnVideoFramesSegmentedBackground": [],
+              "cnVideoFramesSegmentedSubject": [],
+              "cnVideoFramesSketch": [],
+              "disableSafety": false,
+              "doCanvasBlending": false,
+              "frameRate": 24,
+              "generatedVideoSeconds": 10,
+              "jobID": "<id5>",
+              "keyFrames": [
+                {
+                  "cnDragOffset": [
+                    0,
+                    0
+                  ],
+                  "cnDragOffsetIsEnabled": true,
+                  "cnImageBackgroundColor": "clear",
+                  "cnRotation": 0,
+                  "cnRotationIsEnabled": true,
+                  "cnZoomScale": 1,
+                  "cnZoomScaleIsEnabled": true,
+                  "controlNetZoomPanIsOn": false,
+                  "currentControlNets": null,
+                  "frameIndex": 0,
+                  "guidanceScale": 7,
+                  "guidanceScaleIsEnabled": true,
+                  "hasContextImage1": false,
+                  "hasContextImage10": false,
+                  "hasContextImage11": false,
+                  "hasContextImage12": false,
+                  "hasContextImage13": false,
+                  "hasContextImage14": false,
+                  "hasContextImage15": false,
+                  "hasContextImage16": false,
+                  "hasContextImage2": false,
+                  "hasContextImage3": false,
+                  "hasContextImage4": false,
+                  "hasContextImage5": false,
+                  "hasContextImage6": false,
+                  "hasContextImage7": false,
+                  "hasContextImage8": false,
+                  "hasContextImage9": false,
+                  "hasStartingImage": true,
+                  "isEnabled": true,
+                  "modelID": "encryptable-model",
+                  "negativePrompt": "",
+                  "positivePrompt": "a lighthouse",
+                  "processing": "CPU, GPU",
+                  "scheduler": null,
+                  "siDragOffset": [
+                    0,
+                    0
+                  ],
+                  "siDragOffsetIsEnabled": true,
+                  "siImageBackgroundColor": "black",
+                  "siRotation": 0,
+                  "siRotationIsEnabled": true,
+                  "siZoomScale": 1,
+                  "siZoomScaleIsEnabled": true,
+                  "startingImage": null,
+                  "startingImageZoomPanIsOn": false,
+                  "steps": 20,
+                  "stepsIsEnabled": true,
+                  "strength": 0.5,
+                  "strengthIsEnabled": true,
+                  "stylePrompt": "",
+                  "timeStepSpacing": null,
+                  "useLastImageAsCNImageInAnimation": false,
+                  "useLastImageAsGuideImageInAnimation": true
+                }
+              ],
+              "numberOfImages": 1,
+              "outputFormat": "png",
+              "previews": 0,
+              "selectedUpscalingModel": "OFF",
+              "siVideoFrames": []
+            },
+            "type": "jobRequest"
+          }
+        ],
+        "handshakes": [
+          {
+            "headers": {
+              "api-key": "wire-harness-key"
+            },
+            "query": [
+              [
+                "appId",
+                "wire-harness-app"
+              ],
+              [
+                "clientName",
+                "Sogni/3.0.0 (sogni-client) 5.81.0"
+              ],
+              [
+                "clientType",
+                "artist"
+              ],
+              [
+                "forceWorkerId",
+                "fast"
+              ],
+              [
+                "socketEventSubscriptions",
+                "{\"projectQueue\":true}"
+              ]
+            ]
+          },
+          {
+            "headers": {
+              "api-key": "wire-harness-key"
+            },
+            "query": [
+              [
+                "appId",
+                "wire-harness-app"
+              ],
+              [
+                "clientName",
+                "Sogni/3.0.0 (sogni-client) 5.81.0"
+              ],
+              [
+                "clientType",
+                "artist"
+              ],
+              [
+                "forceWorkerId",
+                "fast"
+              ],
+              [
+                "socketEventSubscriptions",
+                "{\"projectQueue\":true}"
+              ]
+            ]
+          }
+        ],
+        "requests": [
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [[\"contentType\", \"image/png\"], [\"imageId\", \"<uuid>\"], [\"jobId\", \"<id1>\"], [\"type\", \"startingImage\"]], \"url\": \"https://api.wire.test/v1/image/uploadUrl\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [[\"contentType\", \"image/png\"], [\"imageId\", \"<uuid>\"], [\"jobId\", \"<id2>\"], [\"type\", \"contextImage1\"]], \"url\": \"https://api.wire.test/v1/image/uploadUrl\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [[\"contentType\", \"image/png\"], [\"imageId\", \"<uuid>\"], [\"jobId\", \"<id2>\"], [\"type\", \"startingImage\"]], \"url\": \"https://api.wire.test/v1/image/uploadUrl\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [[\"contentType\", \"image/png\"], [\"imageId\", \"<uuid>\"], [\"jobId\", \"<id3>\"], [\"type\", \"startingImage\"]], \"url\": \"https://api.wire.test/v1/image/uploadUrl\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [[\"contentType\", \"image/png\"], [\"imageId\", \"<uuid>\"], [\"jobId\", \"<id4>\"], [\"type\", \"startingImage\"]], \"url\": \"https://api.wire.test/v1/image/uploadUrl\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [[\"contentType\", \"image/png\"], [\"imageId\", \"<uuid>\"], [\"jobId\", \"<id5>\"], [\"type\", \"startingImage\"]], \"url\": \"https://api.wire.test/v1/image/uploadUrl\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/account/me\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/assets/capabilities\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/subscriptions/status\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/subscriptions/status\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://socket.wire.test/api/v1/models/list\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://socket.wire.test/api/v2/models/tiers\"}",
+          "{\"body\": null, \"headers\": {}, \"method\": \"GET\", \"query\": [], \"url\": \"https://storage.wire.test/recovered\"}",
+          "{\"body\": null, \"headers\": {}, \"method\": \"GET\", \"query\": [], \"url\": \"https://storage.wire.test/result-1\"}",
+          "{\"body\": {\"length\": 1200, \"sha256\": \"a2808cf3a8161387775008d3799c6e6fbd5844483a99cbd846df8797ac94e980\"}, \"headers\": {\"content-length\": \"1200\", \"content-type\": \"image/png\"}, \"method\": \"PUT\", \"query\": [], \"url\": \"https://storage.wire.test/upload\"}",
+          "{\"body\": {\"length\": 3000, \"sha256\": \"342b88fe5a4deb98fd72ef6ce90942f0e5b9cdd2331617728892d615308f7bd7\"}, \"headers\": {\"content-length\": \"3000\", \"content-type\": \"image/png\"}, \"method\": \"PUT\", \"query\": [], \"url\": \"https://storage.wire.test/upload\"}",
+          "{\"body\": {\"length\": 3000, \"sha256\": \"342b88fe5a4deb98fd72ef6ce90942f0e5b9cdd2331617728892d615308f7bd7\"}, \"headers\": {\"content-length\": \"3000\", \"content-type\": \"image/png\"}, \"method\": \"PUT\", \"query\": [], \"url\": \"https://storage.wire.test/upload\"}",
+          "{\"body\": {\"length\": 3000, \"sha256\": \"342b88fe5a4deb98fd72ef6ce90942f0e5b9cdd2331617728892d615308f7bd7\"}, \"headers\": {\"content-length\": \"3000\", \"content-type\": \"image/png\"}, \"method\": \"PUT\", \"query\": [], \"url\": \"https://storage.wire.test/upload\"}",
+          "{\"body\": {\"length\": 3000, \"sha256\": \"342b88fe5a4deb98fd72ef6ce90942f0e5b9cdd2331617728892d615308f7bd7\"}, \"headers\": {\"content-length\": \"3000\", \"content-type\": \"image/png\"}, \"method\": \"PUT\", \"query\": [], \"url\": \"https://storage.wire.test/upload\"}",
+          "{\"body\": {\"length\": 3000, \"sha256\": \"342b88fe5a4deb98fd72ef6ce90942f0e5b9cdd2331617728892d615308f7bd7\"}, \"headers\": {\"content-length\": \"3000\", \"content-type\": \"image/png\"}, \"method\": \"PUT\", \"query\": [], \"url\": \"https://storage.wire.test/upload\"}"
+        ]
+      }
+    },
+    "rest_only": {
+      "outcome": {},
+      "wire": {
+        "frames": [],
+        "handshakes": [],
+        "requests": [
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/account/balance\"}",
+          "{\"body\": null, \"headers\": {\"api-key\": \"wire-harness-key\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/account/me\"}"
+        ]
+      }
+    },
+    "token_login": {
+      "outcome": {
+        "login": {
+          "refreshToken": "eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODYwLCAic3ViIjogImFydGlzdCJ9.sig",
+          "token": "eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig",
+          "username": "artist"
+        }
+      },
+      "wire": {
+        "frames": [
+          {
+            "connection": 0,
+            "data": {
+              "animationIsOn": false,
+              "canvasIsOn": false,
+              "cnVideoFrames": [],
+              "cnVideoFramesBoth": [],
+              "cnVideoFramesDepth": [],
+              "cnVideoFramesFace": [],
+              "cnVideoFramesPose": [],
+              "cnVideoFramesSegmented": [],
+              "cnVideoFramesSegmentedBackground": [],
+              "cnVideoFramesSegmentedSubject": [],
+              "cnVideoFramesSketch": [],
+              "disableSafety": false,
+              "doCanvasBlending": false,
+              "frameRate": 24,
+              "generatedVideoSeconds": 10,
+              "jobID": "<id1>",
+              "keyFrames": [
+                {
+                  "cnDragOffset": [
+                    0,
+                    0
+                  ],
+                  "cnDragOffsetIsEnabled": true,
+                  "cnImageBackgroundColor": "clear",
+                  "cnRotation": 0,
+                  "cnRotationIsEnabled": true,
+                  "cnZoomScale": 1,
+                  "cnZoomScaleIsEnabled": true,
+                  "controlNetZoomPanIsOn": false,
+                  "currentControlNets": null,
+                  "frameIndex": 0,
+                  "guidanceScale": 7,
+                  "guidanceScaleIsEnabled": true,
+                  "hasContextImage1": false,
+                  "hasContextImage10": false,
+                  "hasContextImage11": false,
+                  "hasContextImage12": false,
+                  "hasContextImage13": false,
+                  "hasContextImage14": false,
+                  "hasContextImage15": false,
+                  "hasContextImage16": false,
+                  "hasContextImage2": false,
+                  "hasContextImage3": false,
+                  "hasContextImage4": false,
+                  "hasContextImage5": false,
+                  "hasContextImage6": false,
+                  "hasContextImage7": false,
+                  "hasContextImage8": false,
+                  "hasContextImage9": false,
+                  "hasStartingImage": true,
+                  "isEnabled": true,
+                  "modelID": "encryptable-model",
+                  "negativePrompt": "",
+                  "positivePrompt": "a lighthouse",
+                  "processing": "CPU, GPU",
+                  "scheduler": null,
+                  "siDragOffset": [
+                    0,
+                    0
+                  ],
+                  "siDragOffsetIsEnabled": true,
+                  "siImageBackgroundColor": "black",
+                  "siRotation": 0,
+                  "siRotationIsEnabled": true,
+                  "siZoomScale": 1,
+                  "siZoomScaleIsEnabled": true,
+                  "startingImage": null,
+                  "startingImageZoomPanIsOn": false,
+                  "steps": 20,
+                  "stepsIsEnabled": true,
+                  "strength": 0.5,
+                  "strengthIsEnabled": true,
+                  "stylePrompt": "",
+                  "timeStepSpacing": null,
+                  "useLastImageAsCNImageInAnimation": false,
+                  "useLastImageAsGuideImageInAnimation": true
+                }
+              ],
+              "numberOfImages": 1,
+              "outputFormat": "png",
+              "previews": 0,
+              "selectedUpscalingModel": "OFF",
+              "siVideoFrames": []
+            },
+            "type": "jobRequest"
+          }
+        ],
+        "handshakes": [
+          {
+            "headers": {
+              "Authorization": "eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig"
+            },
+            "query": [
+              [
+                "appId",
+                "wire-harness-app"
+              ],
+              [
+                "clientName",
+                "Sogni/3.0.0 (sogni-client) 5.81.0"
+              ],
+              [
+                "clientType",
+                "artist"
+              ],
+              [
+                "forceWorkerId",
+                "fast"
+              ],
+              [
+                "socketEventSubscriptions",
+                "{\"projectQueue\":true}"
+              ]
+            ]
+          }
+        ],
+        "requests": [
+          "{\"body\": null, \"headers\": {\"authorization\": \"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig\"}, \"method\": \"GET\", \"query\": [[\"contentType\", \"image/png\"], [\"imageId\", \"<uuid>\"], [\"jobId\", \"<id1>\"], [\"type\", \"startingImage\"]], \"url\": \"https://api.wire.test/v1/image/uploadUrl\"}",
+          "{\"body\": null, \"headers\": {\"authorization\": \"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/account/me\"}",
+          "{\"body\": null, \"headers\": {\"authorization\": \"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/assets/capabilities\"}",
+          "{\"body\": null, \"headers\": {\"authorization\": \"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://api.wire.test/v1/subscriptions/status\"}",
+          "{\"body\": null, \"headers\": {\"authorization\": \"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://socket.wire.test/api/v1/models/list\"}",
+          "{\"body\": null, \"headers\": {\"authorization\": \"eyJhbGciOiAibm9uZSJ9.eyJleHAiOiA0MTAyNDQ0ODAwLCAic3ViIjogImFydGlzdCJ9.sig\"}, \"method\": \"GET\", \"query\": [], \"url\": \"https://socket.wire.test/api/v2/models/tiers\"}",
+          "{\"body\": {\"length\": 3000, \"sha256\": \"342b88fe5a4deb98fd72ef6ce90942f0e5b9cdd2331617728892d615308f7bd7\"}, \"headers\": {\"content-length\": \"3000\", \"content-type\": \"image/png\"}, \"method\": \"PUT\", \"query\": [], \"url\": \"https://storage.wire.test/upload\"}",
+          "{\"body\": {\"rememberMe\": true, \"signature\": \"0x04f9190b74e32475532bc9544f27da94ec8691d35037ee58b8c015a7ca4a5b1a23da5283c9415487b25bc51049fbc8d18f63e1a6b91e802be3c6a2f83f1c893b1c\", \"walletAddress\": \"0x4DB76aa080D2aC181f91863c21A6de923Bd589Bc\"}, \"headers\": {\"content-length\": \"227\", \"content-type\": \"application/json\"}, \"method\": \"POST\", \"query\": [], \"url\": \"https://api.wire.test/v1/account/login\"}",
+          "{\"body\": {\"walletAddress\": \"0x4DB76aa080D2aC181f91863c21A6de923Bd589Bc\"}, \"headers\": {\"content-length\": \"62\", \"content-type\": \"application/json\"}, \"method\": \"POST\", \"query\": [], \"url\": \"https://api.wire.test/v1/account/nonce\"}"
+        ]
+      }
+    }
+  },
+  "sogniClientVersion": "5.81.0"
+}

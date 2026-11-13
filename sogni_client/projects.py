@@ -14,13 +14,13 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from urllib.parse import quote
 
 from .assets import ReusableUploads
 from .attribution import workload_attribution_to_wire_fields
 from .auth import ACCOUNT_CHANGED_MESSAGE, RequestSessionError, request_session_ended
-from .errors import ApiError, ProjectError
+from .errors import MEDIA_ENCRYPTION_ERROR_CODES, ApiError, MediaEncryptionError, ProjectError
 from .events import DataEntity, EventEmitter
 from .pay_as_you_go import (
     PAY_AS_YOU_GO_REFUSALS_CLEARING_OFFER,
@@ -31,6 +31,7 @@ from .personal_loras import PersonalLoras
 from .queue_state import normalize_job_waiting_reasons, normalize_waiting_reason
 from .recovery import (
     PROJECT_LOST_ERROR,
+    decode_client_request_data,
     is_llm_recovered_project,
     is_recovered_job_finished,
     project_params_from_recovered_project,
@@ -87,6 +88,9 @@ from .utils import (
     read_media,
     result_media_evidence,
 )
+
+if TYPE_CHECKING:
+    from .media_encryption import MediaEncryptionApi
 
 _LOGGER = logging.getLogger("sogni_client")
 
@@ -801,6 +805,50 @@ def _validate_seedream_options(params: dict[str, Any]) -> None:
             f"{model_id} renders 921,600 to {max_pixels:,} pixels at an aspect ratio "
             f"from 1:16 to 16:1; got {params.get('width')}x{params.get('height')}"
         )
+
+
+# Every project param that can carry uploadable media.
+_ENCRYPTABLE_MEDIA_FIELDS = (
+    "startingImage",
+    "controlNet.image",
+    "contextImages",
+    "gptImageMask",
+    "leftViewImage",
+    "backViewImage",
+    "rightViewImage",
+    "referenceImage",
+    "referenceImageEnd",
+    "referenceMask",
+    "referenceAudio",
+    "referenceAudios",
+    "referenceAudioIdentity",
+    "referenceVideo",
+    "referenceVideos",
+)
+# Networks that take encrypted projects (Fast only, for now).
+_MEDIA_ENCRYPTION_NETWORKS = frozenset({"fast"})
+
+
+def _media_uploaded_elsewhere(data: dict[str, Any]) -> str | None:
+    """The first media field set to ``True`` (uploaded outside the SDK), or ``None``."""
+
+    for name in _ENCRYPTABLE_MEDIA_FIELDS:
+        if name == "controlNet.image":
+            control_net = data.get("controlNet")
+            value = (
+                control_net.get("image")
+                if data.get("type") == "image" and isinstance(control_net, dict)
+                else None
+            )
+        else:
+            value = data.get(name)
+        if value is True or (isinstance(value, list) and any(item is True for item in value)):
+            return name
+    if data.get("type") == "video" and any(
+        image is True for _slot, image, _frame in _video_keyframe_slots(data)
+    ):
+        return "keyframes"
+    return None
 
 
 def _saved_upload_binding(project_id: str, role: str) -> dict[str, Any]:
@@ -3243,10 +3291,27 @@ class Job(DataEntity):
 
     getResultUrl = get_result_url
 
+    @property
+    def encrypted(self) -> bool:
+        """Whether this job's project was submitted with encrypted media.
+
+        Read its result with :meth:`get_result_data`, which returns it decrypted.
+        """
+
+        return self._project.encrypted
+
     async def get_result_data(self) -> bytes:
+        """Download the result. Encrypted results are returned decrypted."""
+
         if not self.has_result_media:
             raise RuntimeError("No result media available")
-        return await self._api.client.rest.get_bytes(await self.get_result_url())
+        data = await self._api.client.rest.get_bytes(await self.get_result_url())
+        if not self.encrypted:
+            return data
+        media_encryption = self._api._media_encryption
+        if media_encryption is None or not media_encryption._opted_in:
+            return data
+        return await media_encryption._open_if_encrypted(data)
 
     getResultData = get_result_data
 
@@ -3319,6 +3384,13 @@ class Job(DataEntity):
         )
         if size is not None:
             params.update({"sizePreset": "custom", "width": size[0], "height": size[1]})
+        media_encryption = self._api._media_encryption
+        if (
+            self._project._media_encryption_requested
+            and media_encryption is not None
+            and media_encryption._opted_in
+        ):
+            params["mediaEncryption"] = True
         project = await self._api.create(params)
         self._enhancement_project = project
 
@@ -3483,6 +3555,8 @@ class Project(DataEntity):
         )
         self._api = api
         self._recovered = bool(recovered)
+        self._media_encrypted = False
+        self._media_encryption_requested = params.get("mediaEncryption") is True
         self._jobs: list[Job] = []
         self._queue_revision = 0
         self._completion = asyncio.get_running_loop().create_future()
@@ -3527,6 +3601,21 @@ class Project(DataEntity):
         """
 
         return self._recovered
+
+    @property
+    def encrypted(self) -> bool:
+        """Whether this project was submitted with encrypted media.
+
+        Read its results with ``job.get_result_data()``, which returns them decrypted.
+        """
+
+        return self._media_encrypted or self._media_encryption_requested
+
+    def _mark_media_encrypted(self) -> None:
+        self._media_encrypted = True
+
+    def _mark_media_encryption_requested(self) -> None:
+        self._media_encryption_requested = True
 
     @property
     def params(self) -> dict[str, Any]:
@@ -4059,9 +4148,14 @@ class _PendingPremiumSparkSwitch:
 
 
 class ProjectsApi(EventEmitter):
-    def __init__(self, client: ApiClient) -> None:
+    def __init__(
+        self, client: ApiClient, *, media_encryption: MediaEncryptionApi | None = None
+    ) -> None:
         super().__init__()
         self.client = client
+        self._media_encryption = media_encryption
+        # Encryption of projects whose uploads are in progress, by project id.
+        self._project_encryption: dict[str, Any] = {}
         self._available_models: list[dict[str, Any]] = []
         self._projects: list[Project] = []
         self._supported_models: list[dict[str, Any]] | None = None
@@ -4439,8 +4533,21 @@ class ProjectsApi(EventEmitter):
                 resolver(data.get("attribution"), project.id) if callable(resolver) else None
             )
             request = create_job_request_message(project.id, request_params, options)
+            encrypted = None
+            if self._wants_project_encryption(data):
+                encrypted = await self._project_encryption_for(data)
+                assert_session()
+            encryption = encrypted[0] if encrypted is not None else None
+            if encrypted is not None:
+                # Models that take their inputs as they are get them unencrypted.
+                if encrypted[1]:
+                    self._project_encryption[project.id] = encrypted[0]
+                project._mark_media_encrypted()
             await self._process_assets(project, data, request)
             assert_session()
+            if encryption is not None:
+                # Set after the uploads, which add to it.
+                request["mediaEncryption"] = encryption.wire()
             # A refusal can arrive as soon as send yields to the transport.
             self._unadmitted_requests[project.id] = request
             await self.client.socket.send("jobRequest", request)
@@ -4454,6 +4561,95 @@ class ProjectsApi(EventEmitter):
             self._sent_on_generation.pop(project.id, None)
             project._dispose()
             raise
+        finally:
+            self._project_encryption.pop(project.id, None)
+
+    def _wants_project_encryption(self, data: dict[str, Any]) -> bool:
+        """Whether this project asks for encryption, explicitly or through the client."""
+
+        choice = data.get("mediaEncryption")
+        if choice is True:
+            return True
+        return (
+            choice is None
+            and self._media_encryption is not None
+            and self._media_encryption.automatic
+        )
+
+    async def _project_encryption_for(self, data: dict[str, Any]) -> tuple[Any, bool] | None:
+        """The project's encryption and whether its inputs are encrypted, or ``None``."""
+
+        if data.get("mediaEncryption") is True:
+            return await self._require_project_encryption(data)
+        return await self._automatic_project_encryption(data)
+
+    def _project_network(self, data: dict[str, Any]) -> str:
+        return data.get("network") or self._current_network_type or self.client.socket.supernet_type
+
+    async def _require_project_encryption(self, data: dict[str, Any]) -> tuple[Any, bool]:
+        """``media_encryption=True``: every reason it cannot be done is an error."""
+
+        media_encryption = self._media_encryption
+        if media_encryption is None:
+            raise MediaEncryptionError(
+                "unsupported", "Media encryption is not available on this client instance"
+            )
+        network = self._project_network(data)
+        if network not in _MEDIA_ENCRYPTION_NETWORKS:
+            raise MediaEncryptionError(
+                "unsupported", f"Media encryption is not available on the {network} network"
+            )
+        if not await self.supports_media_encryption(data["modelId"]):
+            raise MediaEncryptionError(
+                "unsupported", f'Media encryption is not available for model "{data["modelId"]}"'
+            )
+        encrypt_inputs = await self._encrypts_inputs(data["modelId"])
+        field = encrypt_inputs and _media_uploaded_elsewhere(data)
+        if field:
+            raise MediaEncryptionError(
+                "unsupported",
+                "Media encryption needs the media itself: pass bytes, a path or a file "
+                f'object for "{field}" instead of True',
+            )
+        return await media_encryption._create_project_encryption(), encrypt_inputs
+
+    async def _automatic_project_encryption(self, data: dict[str, Any]) -> tuple[Any, bool] | None:
+        """``media_encryption="auto"``: encrypt when everything allows it, else send plain."""
+
+        if self._project_network(data) not in _MEDIA_ENCRYPTION_NETWORKS:
+            return None
+        media_encryption = self._media_encryption
+        if media_encryption is None or not await media_encryption._can_encrypt_automatically():
+            return None
+        if not await self.supports_media_encryption(data["modelId"]):
+            return None
+        encrypt_inputs = await self._encrypts_inputs(data["modelId"])
+        if encrypt_inputs and _media_uploaded_elsewhere(data):
+            return None
+        return await media_encryption._create_project_encryption(), encrypt_inputs
+
+    async def supports_media_encryption(self, model_id: str) -> bool:
+        """Whether projects for this model can use media encryption, per the server's model list."""
+
+        models = await self.get_supported_models()
+        return any(
+            isinstance(model, dict)
+            and model.get("id") == model_id
+            and model.get("supportsMediaEncryption") is True
+            for model in models
+        )
+
+    supportsMediaEncryption = supports_media_encryption
+
+    async def _encrypts_inputs(self, model_id: str) -> bool:
+        """Whether an encrypted project on this model has its inputs encrypted too."""
+
+        models = await self.get_supported_models()
+        model = next(
+            (item for item in models if isinstance(item, dict) and item.get("id") == model_id),
+            None,
+        )
+        return model is None or model.get("mediaEncryptionInputs") is not False
 
     async def _process_assets(
         self, project: Project, data: dict[str, Any], request: dict[str, Any]
@@ -4585,6 +4781,10 @@ class ProjectsApi(EventEmitter):
         )
         content_type = detect_content_type(value, slot)
         body = read_media(value)
+        encryption = self._project_encryption.get(job_id)
+        if encryption is not None:
+            body = await encryption.encrypt(body, content_type or "")
+            assert_session()
         bound = await self.assets.try_bind_file(
             body, content_type, _saved_upload_binding(job_id, role)
         )
@@ -5336,12 +5536,16 @@ class ProjectsApi(EventEmitter):
         return result
 
     def _rehydrate_project(self, recovered: dict[str, Any]) -> Project:
-        return Project(
+        project = Project(
             project_params_from_recovered_project(recovered),
             self,
             id=recovered["id"],
             recovered=True,
         )
+        request = decode_client_request_data(recovered.get("clientRequestData")) or {}
+        if isinstance(request.get("mediaEncryption"), dict):
+            project._mark_media_encryption_requested()
+        return project
 
     async def _replay_recovered_project(
         self, project: Project, recovered: dict[str, Any], queue_revision: int | None = None
@@ -6818,6 +7022,9 @@ class ProjectsApi(EventEmitter):
             code = int(data.get("error"))
         except (TypeError, ValueError):
             code = None
+        if not data.get("imgID") and code == MEDIA_ENCRYPTION_ERROR_CODES["UNSUPPORTED"]:
+            # The cached model list said this model could encrypt; read it again.
+            self._supported_models_at = 0.0
         if (
             not data.get("imgID")
             and code == _SERVER_RESTARTING_ERROR_CODE
