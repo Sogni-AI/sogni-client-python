@@ -610,6 +610,7 @@ sticker = await sogni.projects.create(
     width=1536,
     height=1536,
     seedream_background="transparent",
+    number_of_media=1,
     token_type="spark",
 )
 ```
