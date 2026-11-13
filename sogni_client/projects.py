@@ -2962,7 +2962,7 @@ def create_job_request_message(
         # LTX 2.5/2.3 v2v sends the name and a 0-1 strength. MiniMax H3 Control takes
         # a 0-10 strength plus preprocess and the guidance window, which only it
         # reads, so they are sent only for that model. Without a controlNet, the
-        # server runs H3 Control with depth.
+        # server runs MiniMax H3 Control with depth.
         if params.get("controlNet"):
             control = params["controlNet"]
             is_h3_control = is_minimax_h3_control_model(params["modelId"])

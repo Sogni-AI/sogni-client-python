@@ -446,7 +446,8 @@ project = await sogni.projects.create(
 
 Available in version 5.58.0 and later.
 
-Every H3 workflow except text-to-video and Control accepts `keyframes`, 24 ids in all
+Every H3 workflow except text-to-video and MiniMax H3 Control accepts `keyframes`,
+24 ids in all
 (`is_minimax_h3_keyframe_model()`): image-to-video and first/last-frame on every
 tier (Standard, Balanced, LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage), the
 six FastH3 Sound to Video ids (ia2v, flfa2v, a2v, one- and two-stage) and the eight
@@ -590,11 +591,13 @@ project = await sogni.projects.create(
 
 ## MiniMax H3 Control
 
-`minimax-h3-ref2va-fp8_v2v_controlnet` makes a new video that follows the
-structure of a source video (its depth, pose, edges, line segments, scribbles,
-layout or grayscale), and can regenerate a masked part of the source. It is an
-opt-in model: nothing routes to it unless you name it. It needs a worker GPU
-with at least 32 GB of VRAM and runs on both the `fast` and `relaxed` networks.
+MiniMax H3 Control (`minimax-h3-ref2va-fp8_v2v_controlnet`) makes a new video
+that follows the structure of a source video (its depth, pose, edges or straight
+lines), and can regenerate a masked part of the source. It is an opt-in model:
+nothing routes to it unless you name it. It needs a worker GPU with at least
+32 GB of VRAM and runs on both the `fast` and `relaxed` networks. It is for paid
+plans: an Unlimited subscription covers it, Premium Spark or SOGNI also pay for
+it, and free Spark credits can't run it.
 
 - Size: 1344×768 by default. Each side is 480-1344 px on a 32 px grid, up to
   1,032,192 pixels in total.
@@ -617,16 +620,16 @@ project = await sogni.projects.create(
 )
 ```
 
-`control_net["name"]` picks the guide: `canny`, `depth`, `pose`, `hed`, `mlsd`,
-`scribble`, `layout`, `gray` or `inpaint`. Without `control_net` the server
-uses `depth`.
+`control_net["name"]` picks the guide: `canny` (edges), `depth`, `pose`, `hed`
+(soft edges), `mlsd` (straight lines) or `inpaint`. Without `control_net` the
+server uses `depth`.
 
 - `reference_video` is the source video. For canny, depth, pose, hed and mlsd
   the worker extracts the map from it.
-- `control_video` is a map video you prepared, used as it is. Scribble, layout
-  and gray always need prepared maps: pass `control_video`, or pass the maps as
-  `reference_video` with `"preprocess": False` in `control_net`. Without a
-  mask, `control_video` can be the only video.
+- `control_video` is a map video you prepared for the chosen guide, such as a
+  depth or pose clip. The worker uses it as it is, without extraction. You can
+  also pass prepared maps as `reference_video` with `"preprocess": False` in
+  `control_net`. Without a mask, `control_video` can be the only video.
 - `reference_mask` (an image) or `reference_mask_video` (a moving mask), not
   both: white areas are regenerated and black areas are kept as context. A mask
   needs the source `reference_video` and works with every control type;

@@ -6,18 +6,9 @@ import math
 from typing import Any
 
 MINIMAX_H3_CONTROL_MODEL_ID = "minimax-h3-ref2va-fp8_v2v_controlnet"
-MINIMAX_H3_CONTROL_TYPES = (
-    "canny",
-    "depth",
-    "pose",
-    "hed",
-    "mlsd",
-    "scribble",
-    "layout",
-    "gray",
-    "inpaint",
-)
-# Control types the worker can extract from the source video itself.
+# The guide types MiniMax H3 Control takes at launch; the Socket refuses any other.
+MINIMAX_H3_CONTROL_TYPES = ("canny", "depth", "pose", "hed", "mlsd", "inpaint")
+# Guide types the worker can extract from the source video itself (every type but inpaint).
 _AUTOMATIC_CONTROL_TYPES = ("canny", "depth", "pose", "hed", "mlsd")
 
 
@@ -87,4 +78,5 @@ def validate_minimax_h3_control(params: dict[str, Any]) -> None:
     if params.get("controlVideo") and preprocess is True:
         raise ValueError("controlVideo is a prepared map; omit preprocess or set it to false.")
     if preprocess and name not in _AUTOMATIC_CONTROL_TYPES:
-        raise ValueError(f"{name} requires prepared control maps.")
+        # Inpaint has no map to extract; the Socket and worker refuse preprocess for it.
+        raise ValueError(f"{name} has no map to extract; omit preprocess or set it to false.")

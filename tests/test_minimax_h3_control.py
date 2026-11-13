@@ -9,7 +9,7 @@ import pytest
 from test_projects import FakeClient, model_options
 
 from sogni_client.errors import ApiError
-from sogni_client.minimax_h3_control import MINIMAX_H3_CONTROL_MODEL_ID
+from sogni_client.minimax_h3_control import MINIMAX_H3_CONTROL_MODEL_ID, MINIMAX_H3_CONTROL_TYPES
 from sogni_client.projects import ProjectsApi, create_job_request_message
 from sogni_client.utils import (
     camel_to_snake,
@@ -33,6 +33,7 @@ def test_control_model_is_an_h3_v2v_model():
     assert is_minimax_h3_model(MINIMAX_H3_CONTROL_MODEL_ID)
     assert get_video_workflow_type(MINIMAX_H3_CONTROL_MODEL_ID) == "v2v"
     assert not is_minimax_h3_keyframe_model(MINIMAX_H3_CONTROL_MODEL_ID)
+    assert MINIMAX_H3_CONTROL_TYPES == ("canny", "depth", "pose", "hed", "mlsd", "inpaint")
 
 
 @pytest.mark.parametrize("case", PARITY["cases"], ids=lambda case: case["name"])
@@ -73,7 +74,10 @@ def test_a_mask_can_accompany_a_structural_guide():
         {"referenceVideo": None, "controlVideo": True, "referenceMask": True},
         {"referenceVideo": None, "controlVideo": True, "referenceMaskVideo": True},
         {"controlVideo": True, "controlNet": {"name": "pose", "preprocess": True}},
-        {"controlNet": {"name": "layout", "preprocess": True}},
+        {"referenceMask": True, "controlNet": {"name": "inpaint", "preprocess": True}},
+        {"controlVideo": True, "controlNet": {"name": "scribble", "preprocess": False}},
+        {"controlVideo": True, "controlNet": {"name": "layout", "preprocess": False}},
+        {"controlVideo": True, "controlNet": {"name": "gray", "preprocess": False}},
         {"controlNet": {"name": "depth", "preprocess": "yes"}},
         {"controlNet": {"name": "depth", "guidanceStart": 0.9, "guidanceEnd": 0.1}},
         {"controlNet": {"name": "depth", "guidanceStart": "0.1"}},
