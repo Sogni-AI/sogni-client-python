@@ -13,6 +13,15 @@ from .attribution import (
     workloadAttributionToWireFields,
 )
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
+from .changelog import (
+    ChangelogApi,
+    ChangelogAudience,
+    ChangelogEntry,
+    ChangelogEntryType,
+    ChangelogLink,
+    ChangelogProduct,
+    ListChangelogResult,
+)
 from .chat import (
     ChatApi,
     ChatStream,
@@ -159,6 +168,13 @@ __all__ = [
     "AccountApi",
     "AnnouncementsApi",
     "ApiError",
+    "ChangelogApi",
+    "ChangelogAudience",
+    "ChangelogEntry",
+    "ChangelogEntryType",
+    "ChangelogLink",
+    "ChangelogProduct",
+    "ListChangelogResult",
     "ApiKeyAuthManager",
     "AsyncSogniClient",
     "ChatApi",

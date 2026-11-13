@@ -11,6 +11,7 @@ import httpx
 from .account import AccountApi
 from .announcements import AnnouncementsApi
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
+from .changelog import ChangelogApi
 from .chat import ChatApi
 from .media_encryption import MediaEncryptionApi
 from .projects import ProjectsApi
@@ -45,6 +46,7 @@ class SogniClient:
         self.worlds = WorldsApi(api_client)
         self.replay = ReplayApi(api_client)
         self.announcements = AnnouncementsApi(api_client)
+        self.changelog = ChangelogApi(api_client)
         self._closed = False
 
     @classmethod

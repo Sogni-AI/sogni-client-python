@@ -1230,6 +1230,44 @@ await sogni.announcements.dismiss(announcement["id"])
 every reconnect, so a user who was offline when it published still receives it.
 Deduplicate on `id`.
 
+## Platform changelog
+
+`sogni.changelog` reads Sogni's public changelog: what changed for artists,
+developers and worker operators. These reads need no sign-in, so a REST-only
+client without an API key can make them:
+
+```python
+sogni = await SogniClient.create(disable_socket=True)
+
+page = await sogni.changelog.list(audience="developer", since="2026-11-01")
+for entry in page["entries"]:
+    print(entry["publishedAt"], entry["title"], entry["url"])
+
+# The next page takes the same filters plus the cursor; nextCursor is None on the last page.
+if page["nextCursor"]:
+    older = await sogni.changelog.list(
+        audience="developer", since="2026-11-01", cursor=page["nextCursor"]
+    )
+
+entry = await sogni.changelog.get(page["entries"][0]["id"])
+products = await sogni.changelog.products()  # [{"id", "label", "audiences"}]
+```
+
+`list()` returns `{"entries": [...], "nextCursor": ...}`, newest first.
+`audience` (`artist`, `developer`, `worker`), `product` (ids from `products()`)
+and `type` (`new`, `improved`, `fixed`, `release`, `deprecated`, `removed`,
+`notice`) take one value or a list. `since` (inclusive) and `until` (exclusive)
+take an ISO 8601 date or a date-time with a zone. `action_required=True` lists
+only entries you need to act on. `limit` defaults to 50; the API returns at
+most 100. Entries keep the API's field names (`bodyMarkdown`, `actionRequired`,
+`effectiveAt`, `publishedAt`); for a deprecation or removal, `effectiveAt` is
+the day the old behavior stops working. `get()` with an id that has no
+published entry raises `ApiError` with `status` 404 and `error_code` 204.
+
+Responses can be up to five minutes old, so poll no more often than that. The
+[Changelog API reference](https://docs.sogni.ai/api-reference/changelog/) has
+the full contract, including the JSON Feed and Atom feeds.
+
 ## Segmentation and 3D models
 
 These workflows transform a source image instead of generating from a prompt, so
@@ -1346,8 +1384,9 @@ segmentation, Pixal3D image-to-3D, FlashVSR v1.1 promptless video upscaling,
 LoRA catalog discovery, queue start estimates,
 live-benchmarked render/total time on cost quotes, in-flight project recovery
 across reconnects, results by project id and recently completed projects from
-the durable history, confirmed cancellation, connection/workload attribution, and
-admin announcements (`appAlert` plus the announcements read/dismiss pair).
+the durable history, confirmed cancellation, connection/workload attribution,
+admin announcements (`appAlert` plus the announcements read/dismiss pair), and
+the public changelog (`changelog.list`, `get` and `products`).
 
 The Python API is async-first; `AsyncSogniClient` is an alias of
 `SogniClient`, not a synchronous wrapper. Browser-only cookie coordination,
