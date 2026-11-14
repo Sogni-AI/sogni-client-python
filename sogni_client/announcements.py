@@ -44,7 +44,8 @@ class AnnouncementsApi:
         """
         params = {"platform": platform} if platform else None
         body = await self.client.rest.get("/v1/announcements/active", params)
-        announcements = body.get("announcements") if isinstance(body, Mapping) else None
+        data = body.get("data") if isinstance(body, Mapping) else None
+        announcements = data.get("announcements") if isinstance(data, Mapping) else None
         return announcements if isinstance(announcements, list) else []
 
     async def dismiss(self, announcement_id: str) -> None:

@@ -42,9 +42,19 @@ def make_api(responses: list[Any] | None = None) -> tuple[AnnouncementsApi, Fake
     return AnnouncementsApi(SimpleNamespace(rest=rest)), rest
 
 
+def active_response(announcements: Any) -> dict[str, Any]:
+    """The body sogni-api sends for ``GET /v1/announcements/active``."""
+    count = len(announcements) if isinstance(announcements, list) else 0
+    return {
+        "status": "success",
+        "data": {"announcements": announcements},
+        "metadata": {"count": count},
+    }
+
+
 @pytest.mark.asyncio
 async def test_active_returns_announcements() -> None:
-    api, rest = make_api([{"announcements": [{"id": "a1", "kind": "banner", "title": "Hi"}]}])
+    api, rest = make_api([active_response([{"id": "a1", "kind": "banner", "title": "Hi"}])])
 
     result = await api.active()
 
@@ -54,7 +64,7 @@ async def test_active_returns_announcements() -> None:
 
 @pytest.mark.asyncio
 async def test_active_forwards_the_platform_so_scoped_announcements_match() -> None:
-    api, rest = make_api([{"announcements": []}])
+    api, rest = make_api([active_response([])])
 
     await api.active("sogni-mac")
 
@@ -65,16 +75,19 @@ async def test_active_forwards_the_platform_so_scoped_announcements_match() -> N
 async def test_active_tolerates_a_missing_or_malformed_list() -> None:
     # An announcement read must never be the thing that breaks a client's
     # startup, so an unexpected envelope degrades to "nothing to show".
-    api, _ = make_api([{}])
-    assert await api.active() == []
-
-    api, _ = make_api([{"announcements": "nope"}])
-    assert await api.active() == []
+    for body in (
+        {},
+        {"status": "success"},
+        {"status": "success", "data": {}},
+        active_response("nope"),
+    ):
+        api, _ = make_api([body])
+        assert await api.active() == []
 
 
 @pytest.mark.asyncio
 async def test_dismiss_posts_to_the_escaped_id() -> None:
-    api, rest = make_api([{"dismissed": True, "id": "a/1"}])
+    api, rest = make_api([{"status": "success", "data": {"dismissed": True, "id": "a/1"}}])
 
     await api.dismiss("a/1")
 
