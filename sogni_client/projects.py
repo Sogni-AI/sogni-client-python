@@ -2873,14 +2873,14 @@ def create_job_request_message(
                 upscaleResolution=upscale_resolution,
                 steps=1,
                 seed=0 if params.get("seed") is None else int(params["seed"]),
-                generateAudio=True,
-                interpolation="none",
             )
+            # FlashVSR keeps its 5.83.0 key order on the wire; RelayVSR sends neither option.
             if not is_relay_vsr_model(params["modelId"]):
                 keyframe.update(
                     detailPreference=params.get("detailPreference") or "stable",
                     processingSpeed=params.get("processingSpeed") or "stable",
                 )
+            keyframe.update(generateAudio=True, interpolation="none")
             if upscale_frames is not None:
                 # The validated source count, as an int (158.0 is sent as 158).
                 keyframe["frames"] = upscale_frames
