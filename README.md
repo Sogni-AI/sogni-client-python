@@ -258,10 +258,8 @@ rate (including fractional rates such as 24000/1001), the full aspect ratio,
 and the original audio, and it never trims, crops, restyles, or interpolates.
 
 Sources must be at most 768px on the short edge and about 1344×768 pixels
-overall (768×1344 in portrait), 1-60 fps, SDR, and 100 MB or less.
-Variable-frame-rate, rotated and non-square-pixel clips need no re-export: the
-server conforms them, and every limit applies to the clip as it plays. The
-client sets no
+overall (768×1344 in portrait), 1-60 fps at a constant frame rate, SDR, square
+pixels with rotation applied, and 100 MB or less. The client sets no
 frame-count or duration limit: the server enforces the maximum clip length and
 refuses a source that is too long with a clear error. The output is at most
 twice the source size, so 1080p needs a source short edge of at least 540px and
@@ -311,8 +309,10 @@ X2 takes a source up to 1080×1920 pixels (either orientation) and delivers at
 most twice its size; X4 takes a source up to 768×1344 and delivers at most four
 times its size. The target must be larger than the source's short edge, and the
 output's long edge can be at most 3840px, so 2160p needs a source short edge of
-exactly 1080px on X2 or 540px to 768px on X4. Frame rate, file size and format limits
-match FlashVSR's, and the server enforces the maximum clip length.
+exactly 1080px on X2 or 540px to 768px on X4. Sources must be 1-60 fps, SDR, and
+100 MB or less, and the server enforces the maximum clip length.
+Variable-frame-rate, rotated and non-square-pixel clips need no re-export for
+RelayVSR: the server conforms them, and every limit applies to the clip as it plays.
 
 ```python
 from sogni_client import RELAYVSR_X2_VIDEO_UPSCALE_MODEL_ID
