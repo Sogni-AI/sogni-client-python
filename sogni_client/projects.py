@@ -2959,8 +2959,9 @@ def create_job_request_message(
             )
         if params.get("trimEndFrame"):
             keyframe["trimEndFrame"] = True
-        # LTX 2.5/2.3 v2v sends the name and a 0-1 strength. MiniMax H3 Control takes
-        # a 0-10 strength plus preprocess and the guidance window, which only it
+        # LTX 2.5/2.3 v2v sends the name and a 0-1 strength. MiniMax H3 Control also
+        # takes a 0-1 strength (the model author's documented range; higher values
+        # break the video), plus preprocess and the guidance window, which only it
         # reads, so they are sent only for that model. Without a controlNet, the
         # server runs MiniMax H3 Control with depth.
         if params.get("controlNet"):
@@ -2971,7 +2972,7 @@ def create_job_request_message(
                 raw["controlStrength"] = _validate_number(
                     control["strength"],
                     minimum=0,
-                    maximum=10 if is_h3_control else 1,
+                    maximum=1,
                     property_name="strength",
                 )
             if is_h3_control:

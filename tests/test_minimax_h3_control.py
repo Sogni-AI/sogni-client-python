@@ -46,7 +46,7 @@ def test_javascript_wire_parity(case):
         assert actual == expected, name
 
 
-@pytest.mark.parametrize("strength", [0, 1, 2.5, 10])
+@pytest.mark.parametrize("strength", [0, 0.5, 1])
 def test_control_strength_range_reaches_wire(strength):
     frame = create_job_request_message(
         "control-strength",
@@ -83,7 +83,8 @@ def test_a_mask_can_accompany_a_structural_guide():
         {"controlNet": {"name": "depth", "guidanceStart": "0.1"}},
         {"controlNet": {"name": "depth", "guidanceEnd": 2}},
         {"controlNet": {"name": "depth", "strength": float("nan")}},
-        {"controlNet": {"name": "depth", "strength": 10.01}},
+        {"controlNet": {"name": "depth", "strength": 1.01}},
+        {"controlNet": {"name": "depth", "strength": 4}},
         {"controlNet": {"name": "depth", "strength": -0.1}},
         {"referenceVideos": [True]},
         {"referenceAudios": [True]},
