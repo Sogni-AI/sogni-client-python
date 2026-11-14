@@ -28,6 +28,7 @@ from sogni_client.utils import (
     is_minimax_h3_extend_model,
     is_minimax_h3_fasth3_reference_model,
     is_minimax_h3_model,
+    is_minimax_h3_prism_model,
     is_minimax_h3_reference_model,
     is_minimax_h3_turbo_model,
     is_video_model,
@@ -2434,6 +2435,7 @@ def test_minimax_h3_step_counts_are_fixed_per_acceleration_tier() -> None:
         "minimax-h3-fl2va-fp8_t2v_turbo": (4, " Turbo"),
         "minimax-h3-fastvideo-int8_t2v_turbo": (4, " Turbo"),
         "minimax-h3-ref2va-fp8_r2v_balanced": (8, " Balanced"),
+        "minimax-h3-prism-int8_r2v": (8, " Prism"),
     }
     for model_id, (steps, label) in tiers.items():
         params: dict[str, Any] = {
@@ -2443,7 +2445,7 @@ def test_minimax_h3_step_counts_are_fixed_per_acceleration_tier() -> None:
             "numberOfMedia": 1,
             "steps": steps,
         }
-        if model_id.endswith("_r2v_balanced"):
+        if model_id.endswith(("_r2v_balanced", "_r2v")):
             params["referenceImage"] = True
         # The matching step count is accepted.
         create_job_request_message("h3-steps", params, model_options("video"))
@@ -2513,6 +2515,8 @@ _MINIMAX_H3_TIERS = {
         # FastH3 Reference: 8 steps although its ids end in _turbo.
         "minimax-h3-fastvideo-omni-int8_r2v_turbo",
         "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
+        # Prism: its fixed 8-step recipe.
+        "minimax-h3-prism-int8_r2v",
     ),
     4: (
         "minimax-h3-fl2va-fp8_t2v_turbo",
@@ -2705,6 +2709,51 @@ def test_minimax_h3_fasth3_reference_ids_are_8_step_r2v_requests() -> None:
         assert (sent["width"], sent["height"], sent["steps"]) == (width, height, 8)
 
 
+def test_minimax_h3_prism_is_an_8_step_one_stage_r2v_request() -> None:
+    prism = "minimax-h3-prism-int8_r2v"
+    balanced = "minimax-h3-ref2va-fp8_r2v_balanced"
+    assert is_video_model(prism)
+    assert is_minimax_h3_model(prism)
+    assert is_minimax_h3_reference_model(prism)
+    assert is_minimax_h3_prism_model(prism)
+    assert sogni_client.is_minimax_h3_keyframe_model(prism)
+    assert not is_minimax_h3_balanced_model(prism)
+    assert not is_minimax_h3_turbo_model(prism)
+    assert not is_minimax_h3_fasth3_reference_model(prism)
+    assert get_video_workflow_type(prism) == "r2v"
+    # No two-stage id: the 768p class only.
+    assert not is_minimax_h3_model(f"{prism}_2stage")
+    assert not is_minimax_h3_prism_model(balanced)
+    for duration in (5, 6, 10, 15.08):
+        assert calculate_video_frames(prism, duration, 24) == calculate_video_frames(
+            balanced, duration, 24
+        )
+    for steps in (4, 20):
+        with pytest.raises(ApiError, match=r"^MiniMax H3 Prism steps are fixed at 8\.$"):
+            create_job_request_message(
+                "h3-prism-steps", _h3_params(prism, steps), model_options("video")
+            )
+    # Apart from its id and steps, the request is Balanced R2V's: references,
+    # keyframes and LoRAs travel the same way.
+    changes = {
+        "contextImages": [True, True],
+        "keyframes": [{"image": True, "frameIndex": 72}],
+        "loras": ["h3-realism-people-t2v-i2v-r2v"],
+        "loraStrengths": [0.8],
+        "disableNSFWFilter": True,
+    }
+    sent = create_job_request_message(
+        "h3-prism", _h3_params(prism, 8, **changes), model_options("video")
+    )["keyFrames"][0]
+    base = create_job_request_message(
+        "h3-prism", _h3_params(balanced, 8, **changes), model_options("video")
+    )["keyFrames"][0]
+    assert sent["modelID"] == prism
+    assert {**sent, "modelID": balanced} == base
+    assert sent["hasKeyframeImage1"] is True
+    assert sent["keyframeFrameIndices"] == [72]
+
+
 def test_minimax_h3_retired_720p_two_stage_ids_are_not_h3_ids() -> None:
     for model_id in _MINIMAX_H3_RETIRED_720P_IDS:
         assert not is_minimax_h3_model(model_id)
@@ -2738,7 +2787,7 @@ def test_minimax_h3_requests_refuse_the_retired_output_scale() -> None:
                     )
                 assert raised.value.status == 400
             covered += 1
-    assert covered == 22
+    assert covered == 23
 
     # The retired field is refused on every video model, not only on MiniMax H3.
     with pytest.raises(ApiError, match=_RETIRED_OUTPUT_SCALE):
@@ -2971,6 +3020,8 @@ _MINIMAX_H3_KEYFRAME_IDS = (
     "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
     "minimax-h3-fastvideo-omni-int8_r2v_turbo",
     "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
+    # Prism scenes often depend on a pinned still, so it must keep keyframes.
+    "minimax-h3-prism-int8_r2v",
 )
 # Every H3 id without keyframe support: text-to-video.
 _MINIMAX_H3_NON_KEYFRAME_IDS = (
@@ -3024,7 +3075,7 @@ def _keyframes_wrong_model(model_id: str) -> str:
 
 
 def _keyframe_steps(model_id: str) -> int:
-    if is_minimax_h3_fasth3_reference_model(model_id):
+    if is_minimax_h3_fasth3_reference_model(model_id) or is_minimax_h3_prism_model(model_id):
         return 8
     if is_minimax_h3_turbo_model(model_id):
         return 4
@@ -3094,9 +3145,9 @@ def _frame_index_error(
 def test_minimax_h3_keyframe_models_are_every_workflow_except_t2v() -> None:
     assert sogni_client.MINIMAX_H3_MAX_KEYFRAMES == 8
     assert sogni_client.isMinimaxH3KeyframeModel is sogni_client.is_minimax_h3_keyframe_model
-    assert len(_MINIMAX_H3_KEYFRAME_IDS) == 23
+    assert len(_MINIMAX_H3_KEYFRAME_IDS) == 24
     every_id = (*_MINIMAX_H3_KEYFRAME_IDS, *_MINIMAX_H3_NON_KEYFRAME_IDS)
-    assert len(every_id) == 28
+    assert len(every_id) == 29
     assert all(is_minimax_h3_model(model_id) for model_id in every_id)
     assert (
         tuple(filter(sogni_client.is_minimax_h3_keyframe_model, every_id))

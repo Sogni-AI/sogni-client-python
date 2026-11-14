@@ -446,10 +446,10 @@ project = await sogni.projects.create(
 
 Available in version 5.58.0 and later.
 
-Every H3 workflow except text-to-video accepts `keyframes`, 23 ids in all
+Every H3 workflow except text-to-video accepts `keyframes`, 24 ids in all
 (`is_minimax_h3_keyframe_model()`): image-to-video and first/last-frame on every
 tier (Standard, Balanced, LightX2V Turbo, FastH3 Turbo and FastH3 Two-Stage), the
-six FastH3 Sound to Video ids (ia2v, flfa2v, a2v, one- and two-stage) and the seven
+six FastH3 Sound to Video ids (ia2v, flfa2v, a2v, one- and two-stage) and the eight
 r2v ids. A request takes up to `MINIMAX_H3_MAX_KEYFRAMES` (8) still images
 pinned at chosen frames between the first and last frame, alongside the
 workflow's own uploads. Each entry is
@@ -540,6 +540,15 @@ project = await sogni.projects.create(
     height=768,
 )
 ```
+
+## MiniMax H3 Prism
+
+`minimax-h3-prism-int8_r2v` is MiniMax H3 Prism, an optional reference-to-video
+model for mature themes. It takes the same references, keyframes and catalog
+LoRAs as the other one-stage r2v ids, at the 768p class only: it has no
+two-stage id. Its recipe is fixed at 8 Euler steps, so omit `steps` or send 8;
+the schedule is not a request option. It is subject to server authorization and
+needs the Sensitive Content Filter off (`disableNSFWFilter=True`).
 
 ## MiniMax H3 video extension
 

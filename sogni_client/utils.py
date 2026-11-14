@@ -81,6 +81,9 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
     "minimax-h3-fastvideo-omni-int8_r2v_turbo",
     "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
+    # Prism: an optional reference-to-video model for mature themes, 768p class
+    # only (no two-stage id), fixed at 8 Euler steps.
+    "minimax-h3-prism-int8_r2v",
 }
 _MINIMAX_H3_TURBO_PATTERN = re.compile(
     r"^minimax-h3-(?:fl2va-fp8_(?:t2v|i2v|flf2v)_turbo"
@@ -245,6 +248,18 @@ def is_minimax_h3_audio_guide_model(model_id: str) -> bool:
     return bool(_MINIMAX_H3_AUDIO_GUIDE_PATTERN.match(model_id))
 
 
+def is_minimax_h3_prism_model(model_id: str) -> bool:
+    """MiniMax H3 Prism (``minimax-h3-prism-int8_r2v``).
+
+    A one-stage reference-to-video id whose steps are fixed at 8. It is not a
+    Balanced id: it carries no Larry v4 adapter. Server authorization applies,
+    and the Sensitive Content Filter must be off (``disableNSFWFilter=True``).
+    Mirrors the TypeScript ``isMinimaxH3PrismModel``.
+    """
+
+    return model_id == "minimax-h3-prism-int8_r2v"
+
+
 def is_minimax_h3_balanced_model(model_id: str) -> bool:
     """One of the 8-step MiniMax H3 Balanced workflows.
 
@@ -272,12 +287,12 @@ def is_minimax_h3_keyframe_model(model_id: str) -> bool:
 
     Keyframes are still images the worker pins (ComfyUI ``MiniMaxH3AddGuide``) at
     chosen frames between the first and last frame. Every MiniMax H3 workflow
-    except text-to-video accepts them, 23 ids in all: image-to-video (``i2v``)
+    except text-to-video accepts them, 24 ids in all: image-to-video (``i2v``)
     and first/last-frame (``flf2v``) on every tier (Standard, Balanced, LightX2V
     Turbo, FastH3 Turbo and FastH3 Two-Stage), the FastH3 Sound to Video audio
     guide (``ia2v``, ``flfa2v``, ``a2v``, one- and two-stage) and Reference to
-    Video (``r2v``: Standard, Turbo, Balanced, FastH3 Reference and their three
-    two-stage ids). Mirrors the TypeScript ``isMinimaxH3KeyframeModel``.
+    Video (``r2v``: Standard, Turbo, Balanced, FastH3 Reference, Prism and the
+    three two-stage ids). Mirrors the TypeScript ``isMinimaxH3KeyframeModel``.
     """
 
     if not is_minimax_h3_model(model_id):
