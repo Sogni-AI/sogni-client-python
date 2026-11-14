@@ -56,6 +56,31 @@ def test_control_strength_range_reaches_wire(strength):
     assert frame["currentControlNetsJob"] == [{"name": "depth", "controlStrength": strength}]
 
 
+@pytest.mark.parametrize("value,sent", [(True, True), (False, False), (None, False)])
+def test_keep_original_outside_a_still_mask_is_sent_only_when_true(value, sent):
+    control = {"name": "inpaint"}
+    if value is not None:
+        control["preserveUnmasked"] = value
+    frame = create_job_request_message(
+        "keep-original", {**PARAMS, "controlNet": control, "referenceMask": True}, OPTIONS
+    )["keyFrames"][0]
+    expected = {"name": "inpaint", **({"preserveUnmasked": True} if sent else {})}
+    assert frame["currentControlNetsJob"] == [expected]
+
+
+def test_keep_original_outside_the_mask_must_be_a_boolean():
+    with pytest.raises(ValueError):
+        create_job_request_message(
+            "keep-original-bad",
+            {
+                **PARAMS,
+                "controlNet": {"name": "inpaint", "preserveUnmasked": "yes"},
+                "referenceMask": True,
+            },
+            OPTIONS,
+        )
+
+
 def test_a_mask_can_accompany_a_structural_guide():
     frame = create_job_request_message(
         "pose-mask", {**PARAMS, "controlNet": {"name": "pose"}, "referenceMask": True}, OPTIONS

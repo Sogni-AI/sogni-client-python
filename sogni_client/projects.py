@@ -2983,6 +2983,13 @@ def create_job_request_message(
                 ):
                     if control.get(source) is not None:
                         raw[target] = control[source]
+                # With a still referenceMask, keep the source's own pixels outside the mask
+                # (worker 1.0.262+). Sent only when true; the server refuses it otherwise.
+                if control.get("preserveUnmasked") is not None:
+                    if not isinstance(control["preserveUnmasked"], bool):
+                        raise ValueError("controlNet.preserveUnmasked must be a boolean")
+                    if control["preserveUnmasked"]:
+                        raw["preserveUnmasked"] = True
             keyframe["currentControlNetsJob"] = [raw]
         if params.get("width") and params.get("height"):
             if is_minimax_h3_model(params["modelId"]):

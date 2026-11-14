@@ -641,7 +641,9 @@ server uses `depth`.
   resamples the inputs to the output frame rate and scales and center-crops
   them to the output size.
 
-`control_net["strength"]` runs from 0 to 1 (default 1). `"guidance_start"` and
+`control_net["strength"]` runs from 0 to 1 (default 1). With a still `reference_mask`,
+`control_net["preserveUnmasked"] = True` keeps the source video's own pixels outside the mask, blended
+across a soft edge; without it the whole clip is redrawn following the source. `"guidance_start"` and
 `"guidance_end"` in `control_net` set the part of sampling where the guide
 applies, as fractions from 0 to 1 (defaults 0 and 1). The model does not take
 `reference_image_end`, extra references, uploaded audio, a voice reference or
