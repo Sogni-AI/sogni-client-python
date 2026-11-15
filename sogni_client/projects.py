@@ -861,6 +861,72 @@ def _saved_upload_binding(project_id: str, role: str) -> dict[str, Any]:
     return {"projectId": project_id, "type": role}
 
 
+# The label each image slot's refusal names, as in sogni-client's upload helpers.
+_IMAGE_UPLOAD_SLOT_LABELS = {
+    "startingImage": "Guide image",
+    "cnImage": "ControlNet image",
+    "referenceImage": "Reference image",
+    "referenceMask": "Reference mask",
+    "referenceImageEnd": "End reference image",
+}
+_NUMBERED_IMAGE_UPLOAD_SLOT = re.compile(r"(contextImage|keyframeImage)([0-9]+)")
+# Enough leading bytes for an HTML doctype after a byte-order mark and some whitespace.
+_IMAGE_UPLOAD_SNIFF_BYTES = 64
+# JavaScript's \s over one byte per character: tab, LF, VT, FF, CR, space and NBSP.
+_JS_BYTE_WHITESPACE = rb"[\t\n\v\f\r \xa0]"
+_DATA_URL_HEAD = re.compile(rb"data:", re.IGNORECASE)
+# The UTF-8 byte-order mark is optional. JavaScript's case-insensitive match also
+# takes 0xCF for its first byte (one byte per character, "Ï" for "ï"), so this does.
+_HTML_HEAD = re.compile(
+    rb"(?:[\xcf\xef]\xbb\xbf)?"
+    + _JS_BYTE_WHITESPACE
+    + rb"*<(?:!doctype"
+    + _JS_BYTE_WHITESPACE
+    + rb"+html|html[\t\n\v\f\r \xa0>])",
+    re.IGNORECASE,
+)
+# Sixteen base64 characters: no binary image header is made only of them.
+_BASE64_HEAD = re.compile(rb"[A-Za-z0-9+/]{16}")
+
+
+def _image_upload_slot_label(role: str) -> str | None:
+    """The slot name an image upload's refusal uses, or ``None`` for audio and video."""
+
+    numbered = _NUMBERED_IMAGE_UPLOAD_SLOT.fullmatch(role)
+    if numbered:
+        kind = "Context image" if numbered.group(1) == "contextImage" else "Keyframe image"
+        return f"{kind} {numbered.group(2)}"
+    return _IMAGE_UPLOAD_SLOT_LABELS.get(role)
+
+
+def _assert_image_upload_body(body: bytes, slot: str) -> None:
+    """Refuse an image-slot upload whose contents are text instead of image bytes.
+
+    Port of sogni-client's ``assertImageUploadBody`` (5.84.2). Text in an image
+    slot cannot be decoded, so the job would fail after it was submitted;
+    checking the first 64 bytes turns that into a 400 ``ApiError`` naming the
+    slot, before any upload URL, upload or job request. Only contents that
+    cannot be an image are refused: a ``data:`` URL, an HTML page, or base64
+    text. Image bytes, SVG markup and anything else upload as before.
+
+    A ``str`` or ``Path`` is a file path in this client, so its file's bytes are
+    checked here; the JavaScript SDK's refusal of a non-markup string body has no
+    Python counterpart.
+    """
+
+    head = body[:_IMAGE_UPLOAD_SNIFF_BYTES]
+    if _DATA_URL_HEAD.match(head):
+        found = "its contents are a data: URL"
+    elif _HTML_HEAD.match(head):
+        found = "its contents are an HTML page"
+    # GIF's signature is letters and digits, and its size bytes can be too.
+    elif not head.startswith(b"GIF8") and _BASE64_HEAD.match(head):
+        found = "its contents are base64 text"
+    else:
+        return
+    raise _api_error(f"{slot} is not image data: {found}. Upload the image file itself.")
+
+
 def _custom_image_size_bounds(model_id: str) -> tuple[int, int]:
     if model_id in ("moss_image_sft_int8_convrot", "moss_image_sft_dmd8_int8_convrot"):
         return 512, 2048
@@ -4807,6 +4873,9 @@ class ProjectsApi(EventEmitter):
         )
         content_type = detect_content_type(value, slot)
         body = read_media(value)
+        label = _image_upload_slot_label(role)
+        if label is not None:
+            _assert_image_upload_body(body, label)
         encryption = self._project_encryption.get(job_id)
         if encryption is not None:
             body = await encryption.encrypt(body, content_type or "")
