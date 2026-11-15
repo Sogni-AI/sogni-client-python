@@ -305,11 +305,11 @@ finished video to 1080p, 1440p, or 2160p on its short edge. The request is the
 same as FlashVSR's, and the output keeps every source frame, the exact frame
 rate, the full aspect ratio, and the original audio.
 
-X2 takes a source up to 1080×1920 pixels (either orientation) and delivers at
+X2 takes a source up to 1920×1088 pixels (1088×1920 in portrait) and delivers at
 most twice its size; X4 takes a source up to 768×1344 and delivers at most four
 times its size. The target must be larger than the source's short edge, and the
 output's long edge can be at most 3840px, so 2160p needs a source short edge of
-exactly 1080px on X2 or 540px to 768px on X4. Sources must be 1-60 fps, SDR, and
+1080px to 1088px on X2 or 540px to 768px on X4. Sources must be 1-60 fps, SDR, and
 100 MB or less, and the server enforces the maximum clip length.
 Variable-frame-rate, rotated and non-square-pixel clips need no re-export for
 RelayVSR: the server conforms them, and every limit applies to the clip as it plays.
