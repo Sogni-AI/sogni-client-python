@@ -91,8 +91,23 @@ jobs:
             exit 0
           fi
           version="${TAG#v}"
+          # The notes open with what the release changes for a caller: the
+          # annotated tag's message after its first line (git tag -a -m
+          # "<subject>" -m "<what a caller can do now>"). The public Sogni
+          # changelog shows that opening as the release's summary. A tag
+          # without one changes nothing a caller would notice, and the marker
+          # keeps the release out of the changelog.
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq 'select(.object.type == "tag") | .object.sha')"
+          lead=""
+          if [ -n "$tag_sha" ]; then
+            message="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_sha" --jq '.message')"
+            lead="$(printf '%s\n' "$message" | tail -n +2 | sed -e '/./,$!d')"
+          fi
+          if [ -z "$lead" ]; then
+            lead='<!-- changelog: skip -->'
+          fi
           # gh joins these notes and the generated ones with one newline; the
           # trailing newline here keeps them separate paragraphs.
-          printf -v notes 'This release matches [JavaScript SDK %s](https://github.com/Sogni-AI/sogni-client/releases/tag/v%s).\n\nPackage: https://pypi.org/project/sogni-client/%s/\n' "$version" "$version" "$version"
+          printf -v notes '%s\n\nThis release matches [JavaScript SDK %s](https://github.com/Sogni-AI/sogni-client/releases/tag/v%s).\n\nPackage: https://pypi.org/project/sogni-client/%s/\n' "$lead" "$version" "$version" "$version"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "$TAG" --notes "$notes" --generate-notes
