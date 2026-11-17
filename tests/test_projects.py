@@ -1094,6 +1094,18 @@ def test_seedance_draft_and_finalize_wire_contract(model: str) -> None:
     assert final["seedanceDraftJobId"] == "draft-job"
     assert final["positivePrompt"] == "Finalize the Seedance 2.5 draft at 1080p."
     assert "seedanceDraft" not in final
+    assert "seedanceDraftFinalResolution" not in final
+    for resolution in ("1080p", "4k"):
+        selected = create_job_request_message(
+            "final", {**params, "seedanceDraftFinalResolution": resolution}, model_options("video")
+        )["keyFrames"][0]
+        assert selected["seedanceDraftFinalResolution"] == resolution
+        assert selected["seedanceDraftJobId"] == "draft-job"
+        assert "frames" not in selected
+        assert "ratio" not in selected
+    direct = _seedance_request(modelId=model, width=3840, height=2160)["keyFrames"][0]
+    assert (direct["width"], direct["height"]) == (3840, 2160)
+    assert "seedanceDraftFinalResolution" not in direct
     assert _seedance_request(seedanceDraft=False) == _seedance_request()
 
 
@@ -1107,6 +1119,11 @@ def test_seedance_draft_and_finalize_wire_contract(model: str) -> None:
         {"seedanceDraft": True, "seedanceDraftJobId": "draft-job"},
         {"modelId": "seedance-2-0", "seedanceDraft": True},
         {"modelId": "seedance-2-0", "seedanceDraftJobId": "draft-job"},
+        {"seedanceDraftFinalResolution": "4k"},
+        {"seedanceDraftJobId": "draft-job", "seedanceDraftFinalResolution": None},
+        {"seedanceDraftJobId": "draft-job", "seedanceDraftFinalResolution": "720p"},
+        {"seedanceDraftJobId": "draft-job", "seedanceDraftFinalResolution": "4K"},
+        {"seedanceDraftJobId": "draft-job", "seedanceDraftFinalResolution": []},
     ],
 )
 def test_seedance_draft_rejects_invalid_fields(extra: dict[str, Any]) -> None:
@@ -1166,6 +1183,14 @@ def test_seedance_finalize_is_one_render(count: Any) -> None:
         ({"seedance_draft": True}, {"seedanceDraft": "1"}),
         ({"seedance_draft": False}, {}),
         ({"seedance_draft_job_id": "draft-job"}, {"seedanceDraftJobId": "draft-job"}),
+        (
+            {"seedance_draft_job_id": "draft-job", "seedance_draft_final_resolution": "4k"},
+            {"seedanceDraftJobId": "draft-job", "seedanceDraftFinalResolution": "4k"},
+        ),
+        (
+            {"seedance_draft_job_id": "draft-job", "seedance_draft_final_resolution": "1080p"},
+            {"seedanceDraftJobId": "draft-job", "seedanceDraftFinalResolution": "1080p"},
+        ),
     ],
 )
 async def test_seedance_draft_estimates_forward_python_fields(extra, expected) -> None:
@@ -1217,14 +1242,17 @@ async def test_seedance_draft_metadata_survives_socket_and_rest_updates() -> Non
             "imgID": job.id,
             "status": "jobCompleted",
             "seedanceDraftJobId": "top-level-draft",
-            "result": {"seedanceDraftJobId": "receipt-draft"},
+            "seedanceDraftFinalResolution": "4k",
+            "result": {"seedanceDraftJobId": "receipt-draft", "seedanceDraftFinalResolution": "1080p"},
         }
     )
     assert job.seedance_draft_job_id == job.seedanceDraftJobId == "top-level-draft"
+    assert job.seedance_draft_final_resolution == job.seedanceDraftFinalResolution == "4k"
     await job._sync_with_rest_data({"imgID": job.id, "status": "jobCompleted"})
     assert job.seedance_draft is True
     assert job.seedance_draft_expires_at == expiry
     assert job.seedance_draft_job_id == "top-level-draft"
+    assert job.seedance_draft_final_resolution == "4k"
 
 
 @pytest.mark.asyncio
@@ -1238,6 +1266,7 @@ async def test_seedance_draft_metadata_restores_from_nested_receipts(replay: boo
         "seedanceDraft": True,
         "seedanceDraftExpiresAt": "2026-11-17T20:00:00.000Z",
         "seedanceDraftJobId": "source-draft",
+        "seedanceDraftFinalResolution": "4k",
     }
     record = {
         "status": "completed",

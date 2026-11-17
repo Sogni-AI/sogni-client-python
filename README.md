@@ -722,6 +722,11 @@ refreshes one after checking ownership.
 
 ## Seedance 2.5 export options
 
+Both Seedance 2.5 models support explicitly requested 4K output. For a 16:9
+generation, pass `width=3840`, `height=2160`, and `fps=24` to both
+`projects.create()` and `estimate_video_cost()`; existing omitted defaults stay
+the same.
+
 `seedance-2-5` can deliver a MOV container (`output_format="mov"`; video
 defaults to `mp4`) and export a separate image of the final frame
 (`return_last_frame=True`). The frame is available as `job.last_frame_url`, and
@@ -747,10 +752,15 @@ finalized = await sogni.projects.create(
 )
 ```
 
-Finalization renders one 1080p video using the draft's inputs and settings.
+Finalization renders one 1080p video by default using the draft's inputs and settings.
+For a 4K final, pass `seedance_draft_final_resolution="4k"` alongside
+`seedance_draft_job_id` to both `projects.create()` and `estimate_video_cost()`.
+The values are `"1080p"` and `"4k"`; omitting the field retains 1080p. The final
+still uses the draft's aspect ratio, duration, media, seed and audio settings.
 Omit references, duration, frames, ratio, seed, audio-generation settings and
 task type from this request. `seedance_draft` and `seedance_draft_job_id` cannot
-be combined. The completed final job exposes `job.seedance_draft_job_id`.
+be combined. The completed final job exposes `job.seedance_draft_job_id` and,
+when the server supplies it, `job.seedance_draft_final_resolution`.
 
 ## Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored
 

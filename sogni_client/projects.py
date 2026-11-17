@@ -960,7 +960,12 @@ def _raw_result_url(data: dict[str, Any]) -> str | None:
 
 
 _VIDEO_EXPORT_FIELDS = ("lastFrameUrl", "lastFrameKey", "outputFormat")
-_SEEDANCE_DRAFT_FIELDS = ("seedanceDraft", "seedanceDraftExpiresAt", "seedanceDraftJobId")
+_SEEDANCE_DRAFT_FIELDS = (
+    "seedanceDraft",
+    "seedanceDraftExpiresAt",
+    "seedanceDraftJobId",
+    "seedanceDraftFinalResolution",
+)
 
 
 def _video_export_fields(
@@ -986,7 +991,11 @@ def _video_export_fields(
         for field in _SEEDANCE_DRAFT_FIELDS:
             value = source.get(field)
             if (field == "seedanceDraft" and value is True) or (
-                field != "seedanceDraft" and isinstance(value, str) and value
+                field == "seedanceDraftFinalResolution" and value in ("1080p", "4k")
+            ) or (
+                field not in ("seedanceDraft", "seedanceDraftFinalResolution")
+                and isinstance(value, str)
+                and value
             ):
                 fields_found[field] = value
     return fields_found
@@ -1518,6 +1527,12 @@ def _validate_seedance_draft_fields(params: dict[str, Any]) -> None:
         raise _api_error("seedanceDraft must be a boolean.")
     if "seedanceDraftJobId" in params and (not isinstance(job_id, str) or not job_id.strip()):
         raise _api_error("seedanceDraftJobId must be the Sogni job id of a Seedance 2.5 draft.")
+    if "seedanceDraftFinalResolution" in params:
+        resolution = params["seedanceDraftFinalResolution"]
+        if not isinstance(resolution, str) or resolution not in {"1080p", "4k"}:
+            raise _api_error("seedanceDraftFinalResolution must be 1080p or 4k.")
+        if "seedanceDraftJobId" not in params:
+            raise _api_error("seedanceDraftFinalResolution requires seedanceDraftJobId.")
     if draft is not True and "seedanceDraftJobId" not in params:
         return
     if not is_seedance25_model(str(params.get("modelId", params.get("model", "")))):
@@ -2828,7 +2843,13 @@ def create_job_request_message(
             keyframe["seedanceDraft"] = True
         if "seedanceDraftJobId" in params:
             keyframe["seedanceDraftJobId"] = params["seedanceDraftJobId"]
-            keyframe["positivePrompt"] = "Finalize the Seedance 2.5 draft at 1080p."
+            keyframe["positivePrompt"] = (
+                "Finalize the Seedance 2.5 draft at 4K."
+                if params.get("seedanceDraftFinalResolution") == "4k"
+                else "Finalize the Seedance 2.5 draft at 1080p."
+            )
+            if "seedanceDraftFinalResolution" in params:
+                keyframe["seedanceDraftFinalResolution"] = params["seedanceDraftFinalResolution"]
         field_map = {
             "generateAudio": "generateAudio",
             "audioIdentityStrength": "identityGuidanceScale",
@@ -3136,6 +3157,13 @@ class Job(DataEntity):
         return self._data.get("seedanceDraftJobId")
 
     seedanceDraftJobId = seedance_draft_job_id
+
+    @property
+    def seedance_draft_final_resolution(self) -> str | None:
+        """Explicit draft finalization resolution, only when reported by the server."""
+        return self._data.get("seedanceDraftFinalResolution")
+
+    seedanceDraftFinalResolution = seedance_draft_final_resolution
 
     async def get_last_frame_url(self) -> str:
         """Refresh the signed URL for an exported final frame."""
@@ -6521,6 +6549,11 @@ class ProjectsApi(EventEmitter):
                 **(
                     {"seedanceDraftJobId": data["seedanceDraftJobId"]}
                     if "seedanceDraftJobId" in data
+                    else {}
+                ),
+                **(
+                    {"seedanceDraftFinalResolution": data["seedanceDraftFinalResolution"]}
+                    if "seedanceDraftFinalResolution" in data
                     else {}
                 ),
                 **(
