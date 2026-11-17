@@ -187,6 +187,27 @@ def test_ltx_strength_stays_capped_at_one():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["preserve_unmasked", "preserveUnmasked"])
+async def test_project_create_sends_keep_original_in_either_spelling(key):
+    # The README documents control_net keys in snake_case; create() maps them.
+    api = ProjectsApi(FakeClient())
+    api.get_model_options = AsyncMock(return_value=OPTIONS)
+    api._upload_asset = AsyncMock(return_value="video/mp4")
+    data = {
+        **PARAMS,
+        "referenceVideo": b"source-video",
+        "referenceMask": b"white-mask",
+        "controlNet": {"name": "inpaint", key: True},
+    }
+    project = await api.create(**{camel_to_snake(name): value for name, value in data.items()})
+    try:
+        sent = api.client.socket.sent[-1][1]["keyFrames"][0]
+        assert sent["currentControlNetsJob"] == [{"name": "inpaint", "preserveUnmasked": True}]
+    finally:
+        project._dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("moving", [False, True])
 @pytest.mark.parametrize("snake_case", [False, True])
 async def test_project_create_uploads_numbered_roles(moving, snake_case):
