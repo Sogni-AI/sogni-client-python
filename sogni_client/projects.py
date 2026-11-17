@@ -990,12 +990,14 @@ def _video_export_fields(
     for source in (result, data):
         for field in _SEEDANCE_DRAFT_FIELDS:
             value = source.get(field)
-            if (field == "seedanceDraft" and value is True) or (
-                field == "seedanceDraftFinalResolution" and value in ("1080p", "4k")
-            ) or (
-                field not in ("seedanceDraft", "seedanceDraftFinalResolution")
-                and isinstance(value, str)
-                and value
+            if (
+                (field == "seedanceDraft" and value is True)
+                or (field == "seedanceDraftFinalResolution" and value in ("1080p", "4k"))
+                or (
+                    field not in ("seedanceDraft", "seedanceDraftFinalResolution")
+                    and isinstance(value, str)
+                    and value
+                )
             ):
                 fields_found[field] = value
     return fields_found

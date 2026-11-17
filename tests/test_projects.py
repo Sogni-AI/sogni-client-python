@@ -1243,7 +1243,10 @@ async def test_seedance_draft_metadata_survives_socket_and_rest_updates() -> Non
             "status": "jobCompleted",
             "seedanceDraftJobId": "top-level-draft",
             "seedanceDraftFinalResolution": "4k",
-            "result": {"seedanceDraftJobId": "receipt-draft", "seedanceDraftFinalResolution": "1080p"},
+            "result": {
+                "seedanceDraftJobId": "receipt-draft",
+                "seedanceDraftFinalResolution": "1080p",
+            },
         }
     )
     assert job.seedance_draft_job_id == job.seedanceDraftJobId == "top-level-draft"
