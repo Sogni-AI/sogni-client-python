@@ -545,8 +545,9 @@ project = await sogni.projects.create(
 
 `minimax-h3-prism-int8_r2v` is MiniMax H3 Prism, an optional reference-to-video
 model for mature themes. It takes the same references, keyframes and catalog
-LoRAs as the other one-stage r2v ids, at the 768p class only: it has no
-two-stage id. Its recipe is fixed at 8 Euler steps, so omit `steps` or send 8;
+LoRAs as the other r2v ids. Its optional `minimax-h3-prism-int8_r2v_2stage`
+id delivers twice the canvas, with the same size choices as the other MiniMax
+two-stage models. Its recipe is fixed at 8 Euler steps, so omit `steps` or send 8;
 the schedule is not a request option. It is subject to server authorization and
 needs the Sensitive Content Filter off (`disableNSFWFilter=True`).
 

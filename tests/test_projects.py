@@ -2750,8 +2750,8 @@ def test_minimax_h3_prism_is_an_8_step_one_stage_r2v_request() -> None:
     assert not is_minimax_h3_turbo_model(prism)
     assert not is_minimax_h3_fasth3_reference_model(prism)
     assert get_video_workflow_type(prism) == "r2v"
-    # No two-stage id: the 768p class only.
-    assert not is_minimax_h3_model(f"{prism}_2stage")
+    assert is_minimax_h3_model(f"{prism}_2stage")
+    assert is_minimax_h3_prism_model(f"{prism}_2stage")
     assert not is_minimax_h3_prism_model(balanced)
     for duration in (5, 6, 10, 15.08):
         assert calculate_video_frames(prism, duration, 24) == calculate_video_frames(
@@ -2778,6 +2778,10 @@ def test_minimax_h3_prism_is_an_8_step_one_stage_r2v_request() -> None:
         "h3-prism", _h3_params(balanced, 8, **changes), model_options("video")
     )["keyFrames"][0]
     assert sent["modelID"] == prism
+    enlarged = create_job_request_message(
+        "h3-prism", _h3_params(f"{prism}_2stage", 8, **changes), model_options("video")
+    )["keyFrames"][0]
+    assert enlarged == {**sent, "modelID": f"{prism}_2stage"}
     assert {**sent, "modelID": balanced} == base
     assert sent["hasKeyframeImage1"] is True
     assert sent["keyframeFrameIndices"] == [72]

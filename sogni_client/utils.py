@@ -81,9 +81,9 @@ _MINIMAX_H3_VIDEO_MODEL_IDS = {
     "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
     "minimax-h3-fastvideo-omni-int8_r2v_turbo",
     "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
-    # Prism: an optional reference-to-video model for mature themes, 768p class
-    # only (no two-stage id), fixed at 8 Euler steps.
+    # Prism: an optional reference-to-video model with optional two-stage output.
     "minimax-h3-prism-int8_r2v",
+    "minimax-h3-prism-int8_r2v_2stage",
 }
 _MINIMAX_H3_TURBO_PATTERN = re.compile(
     r"^minimax-h3-(?:fl2va-fp8_(?:t2v|i2v|flf2v)_turbo"
@@ -251,13 +251,13 @@ def is_minimax_h3_audio_guide_model(model_id: str) -> bool:
 def is_minimax_h3_prism_model(model_id: str) -> bool:
     """MiniMax H3 Prism (``minimax-h3-prism-int8_r2v``).
 
-    A one-stage reference-to-video id whose steps are fixed at 8. It is not a
+    A reference-to-video model whose steps are fixed at 8. It is not a
     Balanced id: it carries no Larry v4 adapter. Server authorization applies,
     and the Sensitive Content Filter must be off (``disableNSFWFilter=True``).
     Mirrors the TypeScript ``isMinimaxH3PrismModel``.
     """
 
-    return model_id == "minimax-h3-prism-int8_r2v"
+    return model_id in {"minimax-h3-prism-int8_r2v", "minimax-h3-prism-int8_r2v_2stage"}
 
 
 def is_minimax_h3_balanced_model(model_id: str) -> bool:
