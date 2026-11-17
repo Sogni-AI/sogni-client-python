@@ -60,6 +60,13 @@ def validate_minimax_h3_control(params: dict[str, Any]) -> None:
         raise ValueError("MiniMax H3 masked editing requires the source referenceVideo.")
     if name == "inpaint" and not masked:
         raise ValueError("MiniMax H3 inpaint requires referenceMask or referenceMaskVideo.")
+    # Keeping the source outside the mask works only with a still mask image.
+    if control.get("preserveUnmasked") is True and not params.get("referenceMask"):
+        if params.get("referenceMaskVideo"):
+            raise ValueError(
+                "controlNet.preserveUnmasked needs a still referenceMask, not referenceMaskVideo."
+            )
+        raise ValueError("controlNet.preserveUnmasked needs a still referenceMask.")
     start = control.get("guidanceStart")
     end = control.get("guidanceEnd")
     for key, value in (("guidanceStart", start), ("guidanceEnd", end)):

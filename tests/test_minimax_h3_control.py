@@ -81,6 +81,27 @@ def test_keep_original_outside_the_mask_must_be_a_boolean():
         )
 
 
+@pytest.mark.parametrize(
+    "changes,message",
+    [
+        (
+            {
+                "controlNet": {"name": "inpaint", "preserveUnmasked": True},
+                "referenceMaskVideo": True,
+            },
+            r"needs a still referenceMask, not referenceMaskVideo\.$",
+        ),
+        (
+            {"controlNet": {"name": "depth", "preserveUnmasked": True}},
+            r"needs a still referenceMask\.$",
+        ),
+    ],
+)
+def test_keep_original_outside_the_mask_needs_a_still_mask(changes, message):
+    with pytest.raises(ValueError, match=message):
+        create_job_request_message("keep-original-mask", {**PARAMS, **changes}, OPTIONS)
+
+
 def test_a_mask_can_accompany_a_structural_guide():
     frame = create_job_request_message(
         "pose-mask", {**PARAMS, "controlNet": {"name": "pose"}, "referenceMask": True}, OPTIONS

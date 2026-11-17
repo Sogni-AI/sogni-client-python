@@ -631,19 +631,21 @@ server uses `depth`.
   also pass prepared maps as `reference_video` with `"preprocess": False` in
   `control_net`. Without a mask, `control_video` can be the only video.
 - `reference_mask` (an image) or `reference_mask_video` (a moving mask), not
-  both: white areas are regenerated and black areas are kept as context. A mask
-  needs the source `reference_video` and works with every control type;
-  `inpaint` requires one. The kept areas are regenerated to match the source,
-  not copied pixel for pixel.
+  both. Paint white over what you want to replace. With
+  `"preserve_unmasked": True` (still masks only) everything outside the mask is
+  kept exactly as it was in the source; without it the whole clip is redrawn
+  with the same layout and motion, so faces and lettering outside the mask can
+  change. A mask needs the source `reference_video` and works with every
+  control type; `inpaint` requires one.
 - `reference_image` is optional and guides how the subject looks. It does not
   set the first frame.
 - `video_start` trims every input video from the same point. The worker
   resamples the inputs to the output frame rate and scales and center-crops
   them to the output size.
 
-`control_net["strength"]` runs from 0 to 1 (default 1). With a still `reference_mask`,
-`control_net["preserveUnmasked"] = True` keeps the source video's own pixels outside the mask, blended
-across a soft edge; without it the whole clip is redrawn following the source. `"guidance_start"` and
+`control_net["strength"]` runs from 0 to 1 (default 1).
+`control_net["preserve_unmasked"]` is off unless you set it to `True`, and is
+refused with `reference_mask_video` or without a mask. `"guidance_start"` and
 `"guidance_end"` in `control_net` set the part of sampling where the guide
 applies, as fractions from 0 to 1 (defaults 0 and 1). The model does not take
 `reference_image_end`, extra references, uploaded audio, a voice reference or
