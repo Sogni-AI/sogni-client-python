@@ -2951,7 +2951,10 @@ def create_job_request_message(
                 )
             keyframe["currentControlNetsJob"] = [raw]
         if params.get("width") and params.get("height"):
-            if is_minimax_h3_model(params["modelId"]):
+            # Seedance is exempt from the 480px minimum: the server reads only a
+            # ratio and a resolution band (by area) from its canvas, and
+            # Seedance's own 21:9 480p size is 992x432.
+            if is_minimax_h3_model(params["modelId"]) or is_seedance_model(params["modelId"]):
                 keyframe["width"] = params["width"]
                 keyframe["height"] = params["height"]
             else:

@@ -748,6 +748,21 @@ def _seedance_request(**overrides: Any) -> dict[str, Any]:
     )
 
 
+def test_seedance_sizes_skip_the_480px_video_minimum() -> None:
+    # The server resolves Seedance sizes (a ratio and a band by area), so
+    # Seedance's 21:9 480p size, 992x432, reaches the wire unchanged.
+    for model_id in (
+        "seedance-2-5",
+        "seedance-2-5-uncensored",
+        "seedance-2-0",
+        "seedance-2-0-mini",
+    ):
+        keyframe = _seedance_request(modelId=model_id, width=992, height=432)["keyFrames"][0]
+        assert (keyframe["width"], keyframe["height"]) == (992, 432)
+    with pytest.raises(ValueError, match=r"Video height must greater or equal 480, got 432"):
+        _seedance_request(modelId="wan_v2.2-14b-fp8_t2v_lightx2v", width=992, height=432)
+
+
 def test_seedance25_export_options_reach_the_wire_and_are_validated() -> None:
     exported = _seedance_request(outputFormat="mov", returnLastFrame=True)
     assert exported["outputFormat"] == "mov"
