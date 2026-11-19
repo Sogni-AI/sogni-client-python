@@ -1154,6 +1154,43 @@ async def test_chat_tools_forward_seedance_export_options_and_report_last_frames
         None,
     ]
 
+
+@pytest.mark.asyncio
+async def test_chat_tools_respect_explicit_prism_and_keep_it_out_of_automatic_selection() -> None:
+    class VideoProjects(FakeProjects):
+        async def wait_for_models(self, _timeout: float) -> list[dict[str, Any]]:
+            return [
+                {"id": "minimax-h3-prism-int8_r2v_2stage", "media": "video", "workerCount": 8},
+                {"id": "minimax-h3-ref2va-fp8_r2v_balanced", "media": "video", "workerCount": 1},
+            ]
+
+    projects = VideoProjects()
+    api = ChatToolsApi(projects)  # type: ignore[arg-type]
+    call = tool_call(
+        "generate_video",
+        json.dumps(
+            {
+                "prompt": "A harbor at dusk",
+                "videoModel": "minimax-h3-r2v-prism-2stage",
+                "width": 960,
+                "height": 544,
+                "referenceImageIndices": [0],
+            }
+        ),
+    )
+    assert not (await api.execute(call, reference_image="harbor.png"))["success"]
+    assert projects.created == []
+    assert (await api.execute(call, safe_content_filter=False, reference_image="harbor.png"))[
+        "success"
+    ]
+    assert projects.created[0]["modelId"] == "minimax-h3-prism-int8_r2v_2stage"
+    assert projects.created[0]["referenceImage"] == "harbor.png"
+    assert projects.created[0]["disableNSFWFilter"] is True
+    assert (projects.created[0]["width"], projects.created[0]["height"]) == (960, 544)
+    default_call = tool_call("generate_video", '{"prompt":"A harbor at dusk"}')
+    assert (await api.execute(default_call))["success"]
+    assert projects.created[1]["modelId"] == "minimax-h3-ref2va-fp8_r2v_balanced"
+
     # Without an exported frame the tool result keeps its previous shape.
     projects.project.jobs = [SimpleNamespace(last_frame_url=None)]
     plain = await api.execute(tool_call("generate_video", '{"prompt":"Harbor at dusk"}'))

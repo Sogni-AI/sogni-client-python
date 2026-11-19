@@ -24,6 +24,7 @@ from .utils import (
     SEEDREAM_5_5_UNCENSORED_MODEL_ID,
     SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
     is_minimax_h3_model,
+    is_minimax_h3_prism_model,
     is_seedream_model,
     is_wan3_model,
     new_id,
@@ -524,6 +525,8 @@ class ChatToolsApi:
         "minimax-h3-r2v": "minimax-h3-ref2va-fp8_r2v",
         "minimax-h3-r2v-turbo": "minimax-h3-ref2va-fp8_r2v_turbo",
         "minimax-h3-r2v-balanced": "minimax-h3-ref2va-fp8_r2v_balanced",
+        "minimax-h3-r2v-prism": "minimax-h3-prism-int8_r2v",
+        "minimax-h3-r2v-prism-2stage": "minimax-h3-prism-int8_r2v_2stage",
         "minimax-h3-r2v-2stage": "minimax-h3-ref2va-fp8_r2v_2stage",
         "minimax-h3-r2v-balanced-2stage": "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
         "minimax-h3-fasth3-r2v-turbo": "minimax-h3-fastvideo-omni-int8_r2v_turbo",
@@ -564,6 +567,8 @@ class ChatToolsApi:
         "minimax-h3-r2v": "minimax-h3-ref2va-fp8_r2v",
         "minimax-h3-r2v-turbo": "minimax-h3-ref2va-fp8_r2v_turbo",
         "minimax-h3-r2v-balanced": "minimax-h3-ref2va-fp8_r2v_balanced",
+        "minimax-h3-r2v-prism": "minimax-h3-prism-int8_r2v",
+        "minimax-h3-r2v-prism-2stage": "minimax-h3-prism-int8_r2v_2stage",
         "minimax-h3-r2v-2stage": "minimax-h3-ref2va-fp8_r2v_2stage",
         "minimax-h3-r2v-balanced-2stage": "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
         "minimax-h3-fasth3-r2v-turbo": "minimax-h3-fastvideo-omni-int8_r2v_turbo",
@@ -669,6 +674,11 @@ class ChatToolsApi:
                 else "image"
             )
             requested = self._resolve_model(name, args)
+            prism = (
+                name == "generate_video"
+                and isinstance(requested, str)
+                and (is_minimax_h3_prism_model(requested))
+            )
             candidates = [model for model in models if model.get("media", "image") == media]
             music_order = self.MUSIC_MODEL_IDS
             if name == "generate_music":
@@ -687,6 +697,14 @@ class ChatToolsApi:
                         "No compatible audio models currently available on the network"
                     )
             available = {model.get("id") for model in candidates}
+            if prism and options.get("safeContentFilter") is not False:
+                return self._error(
+                    tool_call, "MiniMax H3 Prism requires the Sensitive Content Filter off."
+                )
+            if prism and requested not in available:
+                return self._error(
+                    tool_call, "The requested MiniMax H3 Prism model is unavailable."
+                )
             if requested and requested in available:
                 model_id = requested
             elif name == "generate_music":
@@ -695,7 +713,12 @@ class ChatToolsApi:
                 # Seedream 5.0 Pro Uncensored needs a one-time agreement and is
                 # Spark-only, so it is chosen only when the call names it.
                 model_id = max(
-                    (model for model in candidates if not is_seedream_model(model.get("id"))),
+                    (
+                        model
+                        for model in candidates
+                        if not is_seedream_model(model.get("id"))
+                        and not is_minimax_h3_prism_model(model.get("id"))
+                    ),
                     key=lambda model: model.get("workerCount", 0),
                 )["id"]
             project_params: dict[str, Any] = {
@@ -761,6 +784,18 @@ class ChatToolsApi:
                 project_params.setdefault("duration", 6 if is_minimax_h3_model(model_id) else 5)
                 project_params.setdefault("width", 768)
                 project_params.setdefault("height", 512)
+            if prism:
+                project_params["disableNSFWFilter"] = True
+                for field in (
+                    "referenceImage",
+                    "contextImages",
+                    "referenceVideo",
+                    "referenceVideos",
+                    "referenceAudio",
+                    "referenceAudios",
+                ):
+                    if options.get(field) is not None:
+                        project_params[field] = options[field]
             if options.get("tokenType"):
                 project_params["tokenType"] = options["tokenType"]
             if options.get("network"):

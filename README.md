@@ -551,6 +551,12 @@ two-stage models. Its recipe is fixed at 8 Euler steps, so omit `steps` or send 
 the schedule is not a request option. It is subject to server authorization and
 needs the Sensitive Content Filter off (`disableNSFWFilter=True`).
 
+For local `chat.tools.execute` calls, use `videoModel="minimax-h3-r2v-prism"`
+or `"minimax-h3-r2v-prism-2stage"`. Pass `safe_content_filter=False` and an
+uploaded visual input such as `reference_image="reference.png"` as execution
+options. For two-stage output, pass the half-size canvas in the tool arguments
+(`width=960, height=544` for 1920×1088 or `1344, 768` for 2688×1536).
+
 ## MiniMax H3 video extension
 
 Four H3 text-to-video ids accept an optional `reference_video`, the source video
