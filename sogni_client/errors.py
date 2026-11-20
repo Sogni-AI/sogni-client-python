@@ -234,6 +234,27 @@ class MediaEncryptionError(SogniError):
         super().__init__(message)
 
 
+class ProjectCancellationRefusedError(RuntimeError):
+    """The server refused to cancel a project.
+
+    With ``code == "vendorCannotCancel"``, a third-party provider could not stop
+    work it had already started: those jobs (``finishing_job_ids``) keep running,
+    deliver and are charged like any completed render, and the project stays
+    tracked. A ``RuntimeError``, as cancellation refusals were before.
+    """
+
+    def __init__(
+        self, message: str, code: str | None = None, finishing_job_ids: list[str] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.finishing_job_ids = list(finishing_job_ids or [])
+
+    @property
+    def finishingJobIds(self) -> list[str]:  # noqa: N802 - mirrors the JS SDK field
+        return self.finishing_job_ids
+
+
 class ProjectError(SogniError):
     """A generation project failed after it was accepted.
 

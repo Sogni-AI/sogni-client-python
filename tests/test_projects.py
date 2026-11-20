@@ -10,7 +10,7 @@ from unittest.mock import ANY, AsyncMock
 import pytest
 
 import sogni_client
-from sogni_client.errors import ApiError, ProjectError
+from sogni_client.errors import ApiError, ProjectCancellationRefusedError, ProjectError
 from sogni_client.events import EventEmitter
 from sogni_client.projects import (
     _MINIMAX_H3_T2V_ASSETS,
@@ -1524,6 +1524,126 @@ async def test_cancel_waits_for_server_confirmation_and_deduplicates_requests() 
     assert client.socket.send.await_count == 1
     assert project.status == "canceled"
     assert project not in api.tracked_projects
+
+
+@pytest.mark.asyncio
+async def test_cancel_refusal_names_the_jobs_a_provider_cannot_stop() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    project = Project(
+        {
+            "type": "image",
+            "modelId": "gpt-image-2",
+            "positivePrompt": "refused",
+            "numberOfMedia": 1,
+        },
+        api,
+    )
+    api._projects.append(project)
+
+    async def refuse(message_type: str, data: Any) -> None:
+        client.socket.emit(
+            "artistCancelConfirmation",
+            {
+                "jobID": project.id,
+                "didCancel": False,
+                "error_message": "This is already being made, so it can't be stopped now.",
+                "code": "vendorCannotCancel",
+                "finishingImgIDs": ["IMG-RUNNING"],
+            },
+        )
+
+    client.socket.send = AsyncMock(side_effect=refuse)
+    with pytest.raises(ProjectCancellationRefusedError) as refused:
+        await api.cancel(project.id)
+
+    assert isinstance(refused.value, RuntimeError)
+    assert refused.value.code == "vendorCannotCancel"
+    assert refused.value.finishing_job_ids == ["IMG-RUNNING"]
+    assert refused.value.finishingJobIds == ["IMG-RUNNING"]
+    assert project in api.tracked_projects
+
+
+@pytest.mark.asyncio
+async def test_partial_cancel_keeps_the_job_a_provider_cannot_stop() -> None:
+    client = FakeClient()
+    api = ProjectsApi(client)
+    project = Project(
+        {
+            "type": "image",
+            "modelId": "seedream-5-5-uncensored",
+            "positivePrompt": "partial",
+            "numberOfMedia": 3,
+        },
+        api,
+    )
+    api._projects.append(project)
+    finishing = project._add_job(
+        {
+            "id": "IMG-RUNNING",
+            "projectId": project.id,
+            "status": "processing",
+            "step": 0,
+            "stepCount": 1,
+        }
+    )
+    stopped = project._add_job(
+        {
+            "id": "IMG-STOPPED",
+            "projectId": project.id,
+            "status": "processing",
+            "step": 0,
+            "stepCount": 1,
+        }
+    )
+    late = project._add_job(
+        {
+            "id": "IMG-LATE",
+            "projectId": project.id,
+            "status": "processing",
+            "step": 0,
+            "stepCount": 1,
+        }
+    )
+
+    async def confirm(message_type: str, data: Any) -> None:
+        # A stopped job's notice can arrive before the confirmation.
+        client.socket.emit(
+            "jobError",
+            {
+                "jobID": project.id,
+                "imgID": "IMG-LATE",
+                "error": "artistCanceled",
+                "error_message": "Cancelled",
+            },
+        )
+        client.socket.emit(
+            "artistCancelConfirmation",
+            {
+                "jobID": project.id,
+                "didCancel": True,
+                "partial": True,
+                "code": "vendorCannotCancel",
+                "finishingImgIDs": ["IMG-RUNNING"],
+                "message": "One was already being made and can't be stopped.",
+            },
+        )
+
+    client.socket.send = AsyncMock(side_effect=confirm)
+    result = await api.cancel(project.id)
+
+    assert result == {
+        "partial": True,
+        "finishingJobIds": ["IMG-RUNNING"],
+        "message": "One was already being made and can't be stopped.",
+    }
+    assert stopped.status == "canceled"
+    assert late.status == "canceled"
+    assert finishing.status == "processing"
+    assert not project.finished
+    assert project in api.tracked_projects
+    finishing._stop_runtime_timeout()
+    project._dispose()
 
 
 @pytest.mark.asyncio

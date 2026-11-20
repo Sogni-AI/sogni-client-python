@@ -20,7 +20,13 @@ from urllib.parse import quote
 from .assets import ReusableUploads
 from .attribution import workload_attribution_to_wire_fields
 from .auth import ACCOUNT_CHANGED_MESSAGE, RequestSessionError, request_session_ended
-from .errors import MEDIA_ENCRYPTION_ERROR_CODES, ApiError, MediaEncryptionError, ProjectError
+from .errors import (
+    MEDIA_ENCRYPTION_ERROR_CODES,
+    ApiError,
+    MediaEncryptionError,
+    ProjectCancellationRefusedError,
+    ProjectError,
+)
 from .events import DataEntity, EventEmitter
 from .pay_as_you_go import (
     PAY_AS_YOU_GO_REFUSALS_CLEARING_OFFER,
@@ -3683,6 +3689,8 @@ class Project(DataEntity):
         self._media_encrypted = False
         self._media_encryption_requested = params.get("mediaEncryption") is True
         self._jobs: list[Job] = []
+        # Jobs a provider could not stop in a partial cancellation; they finish.
+        self._finishing_job_ids: set[str] = set()
         self._queue_revision = 0
         self._completion = asyncio.get_running_loop().create_future()
         self._last_emitted_progress = -1
@@ -4288,7 +4296,7 @@ class ProjectsApi(EventEmitter):
         self._model_tiers: dict[str, Any] | None = None
         self._model_tiers_at = 0.0
         self._current_network_type: str | None = None
-        self._cancellation_requests: dict[str, asyncio.Task[None]] = {}
+        self._cancellation_requests: dict[str, asyncio.Task[dict[str, Any]]] = {}
         # Pending Premium Spark switches by upper-cased project id; see switch_to_premium_spark.
         self._pay_as_you_go_switches: dict[str, _PendingPremiumSparkSwitch] = {}
         self._lora_catalog_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -6048,24 +6056,33 @@ class ProjectsApi(EventEmitter):
 
         return _PendingPremiumSparkSwitch(project_id, asyncio.ensure_future(settle_offer()), finish)
 
-    async def cancel(self, project_id: str) -> None:
+    async def cancel(self, project_id: str) -> dict[str, Any]:
+        """Cancel a project after the server confirms it.
+
+        A provider that already started a job may refuse; that raises
+        :class:`ProjectCancellationRefusedError` and the project stays tracked.
+        With ``socket_event_subscriptions={"partialCancel": True}`` the server
+        instead stops every job it can: the result is
+        ``{"partial": True, "finishingJobIds": [...], "message": ...}``, those
+        jobs keep running, finish and are charged, the project stays tracked
+        and its other jobs become ``canceled``.
+        """
         existing = self._cancellation_requests.get(project_id)
         if existing is not None:
-            await existing
-            return
+            return await existing
         task = asyncio.create_task(self._cancel_once(project_id))
         self._cancellation_requests[project_id] = task
         try:
-            await task
+            return await task
         finally:
             if self._cancellation_requests.get(project_id) is task:
                 self._cancellation_requests.pop(project_id, None)
 
-    async def _cancel_once(self, project_id: str) -> None:
+    async def _cancel_once(self, project_id: str) -> dict[str, Any]:
         project = next((item for item in self._projects if item.id == project_id), None)
         if project is not None and project.finished:
-            return
-        confirmation: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            return {"partial": False, "finishingJobIds": []}
+        confirmation: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
 
         def confirmed(data: Any) -> None:
             if not isinstance(data, dict) or data.get("jobID") != project_id:
@@ -6073,18 +6090,23 @@ class ProjectsApi(EventEmitter):
             if confirmation.done():
                 return
             if data.get("didCancel"):
-                confirmation.set_result(None)
+                confirmation.set_result(data)
             else:
+                finishing = data.get("finishingImgIDs")
                 confirmation.set_exception(
-                    RuntimeError(
+                    ProjectCancellationRefusedError(
                         data.get("error_message")
-                        or "Cancellation could not be confirmed. The job is still running; please try again."
+                        or "Cancellation could not be confirmed. The job is still running; please try again.",
+                        data.get("code") if isinstance(data.get("code"), str) else None,
+                        [item for item in finishing if isinstance(item, str)]
+                        if isinstance(finishing, list)
+                        else [],
                     )
                 )
 
         remove = self.client.socket.on("artistCancelConfirmation", confirmed)
         try:
-            await asyncio.gather(
+            _, confirmation_data = await asyncio.gather(
                 self.client.socket.send(
                     "jobError",
                     {
@@ -6102,6 +6124,23 @@ class ProjectsApi(EventEmitter):
             ) from error
         finally:
             remove()
+        finishing_ids = confirmation_data.get("finishingImgIDs")
+        if (
+            confirmation_data.get("partial") is True
+            and isinstance(finishing_ids, list)
+            and finishing_ids
+        ):
+            # The project keeps running for the jobs the provider could not stop.
+            finishing = [item for item in finishing_ids if isinstance(item, str)]
+            if project:
+                project._finishing_job_ids = set(finishing)
+                for job in project.jobs:
+                    if not job.finished and job.id not in project._finishing_job_ids:
+                        job._update({"status": "canceled"})
+            result: dict[str, Any] = {"partial": True, "finishingJobIds": finishing}
+            if isinstance(confirmation_data.get("message"), str) and confirmation_data["message"]:
+                result["message"] = confirmation_data["message"]
+            return result
         if project:
             self._projects.remove(project)
             for job in project.jobs:
@@ -6109,6 +6148,7 @@ class ProjectsApi(EventEmitter):
                     job._update({"status": "canceled"})
             if not project.finished:
                 project._update({"status": "canceled"})
+        return {"partial": False, "finishingJobIds": []}
 
     async def _notify_project_timed_out(self, project_id: str) -> None:
         await self.client.socket.send(
@@ -7210,6 +7250,13 @@ class ProjectsApi(EventEmitter):
             return
         _, job = self._ensure_job(data)
         if not job or job.finished:
+            return
+        # A job the server stopped in a cancellation is canceled, not failed,
+        # even when its notice arrives before the confirmation.
+        if error.get("code") == 5004 and (
+            project.id in self._cancellation_requests or project._finishing_job_ids
+        ):
+            job._update({"status": "canceled"})
             return
         job._update({"status": "failed", "error": error})
         all_started = len(project.jobs) >= project.params.get("numberOfMedia", 1)
