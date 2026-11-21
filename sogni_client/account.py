@@ -62,7 +62,11 @@ def _check_permit(
         type(chain) is int or (isinstance(chain, str) and chain.isascii() and chain.isdecimal()),
         "domain.chainId",
     )
-    _check_signing_field(int(chain) == expected["chainId"], "domain.chainId")
+    try:
+        chain_matches = int(chain) == expected["chainId"]
+    except ValueError:
+        chain_matches = False
+    _check_signing_field(chain_matches, "domain.chainId")
     address_field = "walletAddress" if amount is not None else "owner"
     address = message.get(address_field)
     _check_signing_field(

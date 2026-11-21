@@ -123,6 +123,14 @@ async def invoke(kind, permit, *, testnet=False, provider="base", rejected=False
 
 
 @pytest.mark.parametrize("kind", ["withdraw", "approve"])
+async def test_oversized_chain_uses_plain_error(kind):
+    permit = permit_payload(kind)
+    permit["domain"]["chainId"] = "9" * 5000
+    calls = await invoke(kind, permit, rejected=True)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kind", ["withdraw", "approve"])
 async def test_unknown_provider_stops_before_request(kind):
     assert await invoke(kind, permit_payload(kind), provider="other", rejected=True) == []
 
