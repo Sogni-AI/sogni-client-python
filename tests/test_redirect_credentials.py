@@ -62,6 +62,32 @@ async def test_redirect_headers_follow_origin(supplied, stream, target):
 
 
 @pytest.mark.parametrize("supplied", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("same_origin", [False, True])
+async def test_redirect_userinfo_preserves_origin_headers(supplied, stream, same_origin):
+    requests = []
+    host = "api.example" if same_origin else "other.example"
+
+    def handle(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(308, headers={"Location": f"https://name:example@{host}/next"})
+        return httpx.Response(200, text='{"ok":true}\n')
+
+    async with rest_client(handle, supplied) as rest:
+        if stream:
+            assert [line async for line in rest.stream_lines("/start")] == ['{"ok":true}']
+        else:
+            assert await rest.get("/start") == {"ok": True}
+    assert len(requests) == 2
+    for name in ("api-key", "authorization", "cookie"):
+        if same_origin:
+            assert requests[1].headers[name] == requests[0].headers[name]
+        else:
+            assert name not in requests[1].headers
+
+
+@pytest.mark.parametrize("supplied", [False, True])
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
 async def test_redirect_post_method_and_body(supplied, status):
     requests = []
@@ -184,7 +210,8 @@ async def test_media_caller_headers_follow_origin(ranged):
             await client.aclose()
 
 
-async def test_refresh_stays_on_configured_endpoint():
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+async def test_refresh_stays_on_configured_endpoint(status):
     import time
 
     from sogni_client.auth import TokenAuthManager
@@ -195,7 +222,7 @@ async def test_refresh_stays_on_configured_endpoint():
     def handle(request):
         requests.append(request)
         if len(requests) == 1:
-            return httpx.Response(307, headers={"Location": "https://other.example/refresh"})
+            return httpx.Response(status, headers={"Location": "https://other.example/refresh"})
         return httpx.Response(400, json={"message": "No token pair"})
 
     async with rest_client(handle, True) as rest:

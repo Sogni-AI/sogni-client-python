@@ -14,8 +14,8 @@ async def request_with_redirects(
     hop = 0
     while True:
         # Only the initial request uses client auth; redirected requests already
-        # carry the appropriate headers and must not reapply client defaults.
-        auth = {} if hop == 0 else {"auth": None}
+        # carry the appropriate headers. An explicit no-op also skips URL auth.
+        auth = {} if hop == 0 else {"auth": httpx.Auth()}
         response = await client.send(request, stream=stream, follow_redirects=False, **auth)
         if (
             response.status_code not in (301, 302, 303, 307, 308)
