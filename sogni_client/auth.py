@@ -247,6 +247,7 @@ class TokenAuthManager(AuthManager):
             response = await client.post(
                 f"{self._base_url}/v1/account/refresh-token",
                 json={"refreshToken": self._refresh_token},
+                follow_redirects=False,
             )
         finally:
             if owns_client:
