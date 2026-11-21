@@ -14,17 +14,21 @@ def _port_or_default(url: httpx.URL) -> int | None:
 
 
 def _keeps_credentials(current: httpx.URL, target: httpx.URL) -> bool:
-    """Same origin, or an http -> https upgrade of the same host (httpx's rule for Authorization)."""
+    """Same origin, or an http -> https upgrade of the same host.
+
+    The upgrade keeps credentials between the default ports (as httpx does for
+    Authorization) or on the same port, the cases the JavaScript SDK keeps.
+    """
 
     if current.host != target.host:
         return False
+    current_port, target_port = _port_or_default(current), _port_or_default(target)
     if current.scheme == target.scheme:
-        return _port_or_default(current) == _port_or_default(target)
+        return current_port == target_port
     return (
         current.scheme == "http"
-        and _port_or_default(current) == 80
         and target.scheme == "https"
-        and _port_or_default(target) == 443
+        and ((current_port, target_port) == (80, 443) or current_port == target_port)
     )
 
 

@@ -139,16 +139,20 @@ async def test_redirect_limit_is_the_clients(supplied, stream, limit):
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize(
-    "target,kept",
+    "origin,target,kept",
     [
-        ("https://api.example/next", True),
-        ("https://api.example:443/next", True),
-        ("https://api.example:8443/next", False),
-        ("https://other.example/next", False),
-        ("http://api.example:8080/next", False),
+        ("http://api.example", "https://api.example/next", True),
+        ("http://api.example", "https://api.example:443/next", True),
+        ("http://api.example:8080", "https://api.example:8080/next", True),
+        ("http://api.example:443", "https://api.example/next", True),
+        ("http://api.example", "https://api.example:8443/next", False),
+        ("http://api.example:8080", "https://api.example/next", False),
+        ("http://api.example", "https://other.example/next", False),
+        ("http://api.example", "http://api.example:8080/next", False),
+        ("https://api.example", "http://api.example/next", False),
     ],
 )
-async def test_https_upgrade_keeps_credentials(stream, target, kept):
+async def test_https_upgrade_keeps_credentials(stream, origin, target, kept):
     requests = []
 
     def handle(request):
@@ -157,7 +161,7 @@ async def test_https_upgrade_keeps_credentials(stream, target, kept):
             return httpx.Response(301, headers={"Location": target})
         return httpx.Response(200, text='{"ok":true}\n')
 
-    async with rest_client(handle, True, base_url="http://api.example") as rest:
+    async with rest_client(handle, True, base_url=origin) as rest:
         await read(rest, stream)
     assert len(requests) == 2
     for name in ("api-key", "authorization", "cookie"):
