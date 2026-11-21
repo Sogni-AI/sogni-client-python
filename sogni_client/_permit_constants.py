@@ -32,6 +32,9 @@ WITHDRAW_TYPES = {
         {"name": "nonce", "type": "string"},
     ]
 }
+# sogni-api /v1/contract/token/approve/permit issues deadlines 7 days ahead; 30 days
+# leaves room for a client clock that runs behind.
+APPROVE_DEADLINE_WINDOW = 30 * 86400
 # ERC-2612, returned by sogni-api /v1/contract/token/approve/permit.
 APPROVE_TYPES = {
     "Permit": [

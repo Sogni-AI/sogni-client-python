@@ -106,10 +106,15 @@ async def invoke(kind, permit, *, testnet=False, provider="base", rejected=False
             args = ("unused", "1.25" if kind == "withdraw" else "account", provider)
             operation = account.withdraw if kind == "withdraw" else account.approve_token_usage
             if rejected:
-                with pytest.raises(
-                    ApiError, match="Unexpected signing request; nothing was signed"
-                ):
+                with pytest.raises(ApiError) as caught:
                     await operation(*args)
+                assert caught.value.status == 400
+                assert caught.value.payload == {
+                    "status": "error",
+                    "message": "Unexpected signing request; nothing was signed",
+                    "errorCode": 0,
+                }
+                assert caught.value.error_code == 0
                 sign.assert_not_called()
                 assert all(call.url.path.endswith("/permit") for call in calls)
             else:
@@ -131,8 +136,22 @@ async def test_oversized_chain_uses_plain_error(kind):
 
 
 @pytest.mark.parametrize("kind", ["withdraw", "approve"])
-async def test_unknown_provider_stops_before_request(kind):
-    assert await invoke(kind, permit_payload(kind), provider="other", rejected=True) == []
+@pytest.mark.parametrize("testnet", [False, True])
+@pytest.mark.parametrize("provider", ["Base", "BASE", "Etherlink", "other", ""])
+async def test_other_providers_expect_base_like_the_api(kind, testnet, provider):
+    # sogni-api uses the Etherlink domain only for exactly "etherlink"; any other value is Base.
+    permit = permit_payload(kind, testnet, "base")
+    if kind == "withdraw":
+        permit["message"]["provider"] = provider
+    calls = await invoke(kind, permit, testnet=testnet, provider=provider)
+    assert json.loads(calls[0].content)["provider"] == provider
+    await invoke(
+        kind,
+        permit_payload(kind, testnet, "etherlink"),
+        testnet=testnet,
+        provider=provider,
+        rejected=True,
+    )
 
 
 @pytest.mark.parametrize("kind", ["withdraw", "approve"])
@@ -182,9 +201,14 @@ async def test_withdraw_checks_returned_field(field, value):
         ("types.Permit", []),
         ("types.EIP712Domain", []),
         ("message.owner", "0x" + "12" * 20),
-        ("message.deadline", int(time.time()) + 9 * 86400),
-        ("message.deadline", 0),
+        ("message.deadline", int(time.time()) + 31 * 86400),
+        ("message.deadline", str(int(time.time()) + 31 * 86400)),
         ("message.deadline", "9999999999"),
+        ("message.deadline", -1),
+        ("message.deadline", "-1"),
+        ("message.deadline", "12.5"),
+        ("message.deadline", 12.0),
+        ("message.deadline", None),
         ("message.deadline", True),
     ],
 )
@@ -193,6 +217,24 @@ async def test_approve_checks_returned_field(field, value):
     section, key = field.split(".")
     permit[section][key] = value
     await invoke("approve", permit, rejected=True)
+
+
+@pytest.mark.parametrize(
+    "deadline",
+    [
+        0,
+        int(time.time()) - 86400,
+        int(time.time()) + 7 * 86400,
+        int(time.time()) + 29 * 86400,
+        str(int(time.time()) + 7 * 86400),
+    ],
+)
+async def test_approve_deadline_allows_clock_skew(deadline):
+    # sogni-api issues now + 7 days; a past or later deadline from a skewed clock still signs.
+    permit = permit_payload("approve")
+    permit["message"]["deadline"] = deadline
+    calls = await invoke("approve", permit)
+    assert json.loads(calls[-1].content)["deadline"] == deadline
 
 
 @pytest.mark.parametrize("kind", ["withdraw", "approve"])

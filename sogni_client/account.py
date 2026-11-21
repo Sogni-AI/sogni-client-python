@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any
 
 from ._permit_constants import (
+    APPROVE_DEADLINE_WINDOW,
     APPROVE_TYPES,
     DOMAIN_FIELDS,
     PERMIT_NETWORKS,
@@ -36,7 +37,27 @@ _VERIFYING_CONTRACT = "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"
 def _check_signing_field(valid: bool, field: str) -> None:
     if not valid:
         _LOGGER.debug("Unexpected signing field: %s", field)
-        raise ApiError(400, {"message": "Unexpected signing request; nothing was signed"})
+        raise ApiError(
+            400,
+            {
+                "status": "error",
+                "message": "Unexpected signing request; nothing was signed",
+                "errorCode": 0,
+            },
+        )
+
+
+def _permit_integer(value: Any) -> int | None:
+    """A non-negative JSON integer or a string of ASCII digits, as the API sends uint256 fields."""
+
+    if type(value) is int:
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            return int(value)
+        except ValueError:  # longer than Python's integer string limit
+            return None
+    return None
 
 
 def _check_permit(
@@ -56,17 +77,10 @@ def _check_permit(
         expected_types = {**expected_types, "EIP712Domain": DOMAIN_FIELDS}
     _check_signing_field(types == expected_types, "types")
     network = "testnet" if testnet else "mainnet"
-    expected = PERMIT_NETWORKS[network][provider]
-    chain = domain.get("chainId")
-    _check_signing_field(
-        type(chain) is int or (isinstance(chain, str) and chain.isascii() and chain.isdecimal()),
-        "domain.chainId",
-    )
-    try:
-        chain_matches = int(chain) == expected["chainId"]
-    except ValueError:
-        chain_matches = False
-    _check_signing_field(chain_matches, "domain.chainId")
+    # The API selects the Etherlink domain only for exactly "etherlink"; any other value is Base.
+    expected = PERMIT_NETWORKS[network]["etherlink" if provider == "etherlink" else "base"]
+    chain = _permit_integer(domain.get("chainId"))
+    _check_signing_field(chain is not None and chain == expected["chainId"], "domain.chainId")
     address_field = "walletAddress" if amount is not None else "owner"
     address = message.get(address_field)
     _check_signing_field(
@@ -91,12 +105,13 @@ def _check_permit(
                 isinstance(contract, str) and contract.lower() == expected["token"].lower(),
                 "domain.verifyingContract",
             )
-        deadline = message.get("deadline")
-        now = time.time()
+        # No lower bound: a past deadline only makes the signature unusable.
+        deadline = _permit_integer(message.get("deadline"))
         _check_signing_field(
-            type(deadline) is int and now < deadline <= now + 8 * 86400, "message.deadline"
+            deadline is not None and deadline <= time.time() + APPROVE_DEADLINE_WINDOW,
+            "message.deadline",
         )
-        # TODO: Pin the approval spender once provider addresses are available.
+        # The spender is not compared with an expected address.
 
 
 def _account_defaults() -> dict[str, Any]:
@@ -1067,7 +1082,6 @@ class AccountApi(EventEmitter):
     async def withdraw(
         self, password: str, amount: int | float | str | Decimal, provider: str = "base"
     ) -> None:
-        _check_signing_field(provider in ("base", "etherlink"), "provider")
         wallet = self.get_wallet(self._require_account_username(), password)
         self._assert_wallet_matches(wallet)
         payload = {
@@ -1127,7 +1141,6 @@ class AccountApi(EventEmitter):
     async def approve_token_usage(
         self, password: str, spender: str, provider: str = "base"
     ) -> None:
-        _check_signing_field(provider in ("base", "etherlink"), "provider")
         if spender not in {"account", "staker"}:
             raise ValueError("spender must be 'account' or 'staker'")
         wallet = self.get_wallet(self._require_account_username(), password)
