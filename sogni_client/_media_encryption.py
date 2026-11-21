@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from ._http import stream_with_redirects
 from .errors import MediaEncryptionError
 
 VERSION = 1
@@ -469,7 +470,7 @@ class DecryptedMediaReader:
             "Range": f"bytes={start}-{end - 1}",
             "Accept-Encoding": "identity",
         }
-        async with self._http.stream("GET", self._url, headers=headers) as response:
+        async with stream_with_redirects(self._http, "GET", self._url, headers=headers) as response:
             self._assert_open()
             match = _CONTENT_RANGE.fullmatch(response.headers.get("content-range", ""))
             encoding = response.headers.get("content-encoding")

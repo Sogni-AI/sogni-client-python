@@ -7,11 +7,22 @@ import hashlib
 import logging
 import math
 import re
+import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from ._permit_constants import (
+    APPROVE_DEADLINE_WINDOW,
+    APPROVE_TYPES,
+    DOMAIN_FIELDS,
+    PERMIT_NETWORKS,
+    WITHDRAW_CONTRACT,
+    WITHDRAW_NAMES,
+    WITHDRAW_TYPES,
+    WITHDRAW_VERSION,
+)
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
 from .errors import ApiError, TwoFactorRequiredError
 from .events import DataEntity, EventEmitter
@@ -21,6 +32,86 @@ _LOGGER = logging.getLogger("sogni_client")
 _MAX_DEPOSIT_ATTEMPTS = 4
 _INSUFFICIENT_ALLOWANCE = 149
 _VERIFYING_CONTRACT = "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"
+
+
+def _check_signing_field(valid: bool, field: str) -> None:
+    if not valid:
+        _LOGGER.debug("Unexpected signing field: %s", field)
+        raise ApiError(
+            400,
+            {
+                "status": "error",
+                "message": "Unexpected signing request; nothing was signed",
+                "errorCode": 0,
+            },
+        )
+
+
+def _permit_integer(value: Any) -> int | None:
+    """A non-negative JSON integer or a string of ASCII digits, as the API sends uint256 fields."""
+
+    if type(value) is int:
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        try:
+            return int(value)
+        except ValueError:  # longer than Python's integer string limit
+            return None
+    return None
+
+
+def _check_permit(
+    permit: Any,
+    *,
+    testnet: bool,
+    provider: str,
+    wallet_address: str,
+    amount: str | None = None,
+) -> None:
+    _check_signing_field(isinstance(permit, dict), "permit")
+    for section in ("domain", "types", "message"):
+        _check_signing_field(isinstance(permit.get(section), dict), section)
+    domain, types, message = permit["domain"], permit["types"], permit["message"]
+    expected_types = WITHDRAW_TYPES if amount is not None else APPROVE_TYPES
+    if "EIP712Domain" in types:
+        expected_types = {**expected_types, "EIP712Domain": DOMAIN_FIELDS}
+    _check_signing_field(types == expected_types, "types")
+    network = "testnet" if testnet else "mainnet"
+    # The API selects the Etherlink domain only for exactly "etherlink"; any other value is Base.
+    expected = PERMIT_NETWORKS[network]["etherlink" if provider == "etherlink" else "base"]
+    chain = _permit_integer(domain.get("chainId"))
+    _check_signing_field(chain is not None and chain == expected["chainId"], "domain.chainId")
+    address_field = "walletAddress" if amount is not None else "owner"
+    address = message.get(address_field)
+    _check_signing_field(
+        isinstance(address, str) and address.lower() == wallet_address.lower(),
+        f"message.{address_field}",
+    )
+    contract = domain.get("verifyingContract")
+    if amount is not None:
+        _check_signing_field(set(domain) == {field["name"] for field in DOMAIN_FIELDS}, "domain")
+        _check_signing_field(domain.get("name") == WITHDRAW_NAMES[network], "domain.name")
+        _check_signing_field(domain.get("version") == WITHDRAW_VERSION, "domain.version")
+        _check_signing_field(
+            isinstance(contract, str) and contract.lower() == WITHDRAW_CONTRACT.lower(),
+            "domain.verifyingContract",
+        )
+        _check_signing_field(message.get("amount") == amount, "message.amount")
+        _check_signing_field(message.get("provider") == provider, "message.provider")
+        _check_signing_field(isinstance(message.get("nonce"), str), "message.nonce")
+    else:
+        if expected["token"] is not None:
+            _check_signing_field(
+                isinstance(contract, str) and contract.lower() == expected["token"].lower(),
+                "domain.verifyingContract",
+            )
+        # No lower bound: a past deadline only makes the signature unusable.
+        deadline = _permit_integer(message.get("deadline"))
+        _check_signing_field(
+            deadline is not None and deadline <= time.time() + APPROVE_DEADLINE_WINDOW,
+            "message.deadline",
+        )
+        # The spender is not compared with an expected address.
 
 
 def _account_defaults() -> dict[str, Any]:
@@ -1001,8 +1092,13 @@ class AccountApi(EventEmitter):
         permit = _unwrap_data(
             await self.client.rest.post("/v1/account/token/withdraw/permit", payload)
         )
-        if not isinstance(permit, dict):
-            raise ValueError("Withdrawal permit response did not include data")
+        _check_permit(
+            permit,
+            testnet=self.testnet,
+            provider=provider,
+            wallet_address=wallet.address,
+            amount=payload["amount"],
+        )
         signature = _sign_typed_data(wallet, permit["domain"], permit["types"], permit["message"])
         await self.client.rest.post(
             "/v2/account/token/withdraw", {**payload, "signature": signature}
@@ -1054,8 +1150,12 @@ class AccountApi(EventEmitter):
                 {"walletAddress": wallet.address, "spender": spender, "provider": provider},
             )
         )
-        if not isinstance(permit, dict):
-            raise ValueError("Approval permit response did not include data")
+        _check_permit(
+            permit,
+            testnet=self.testnet,
+            provider=provider,
+            wallet_address=wallet.address,
+        )
         signature = _sign_typed_data(wallet, permit["domain"], permit["types"], permit["message"])
         await self.client.rest.post(
             "/v1/contract/token/approve",

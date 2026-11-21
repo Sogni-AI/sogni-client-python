@@ -17,6 +17,7 @@ import httpx
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from ._http import request_with_redirects, stream_with_redirects
 from .attribution import (
     build_sogni_attribution_headers,
     connection_attribution_query,
@@ -204,7 +205,8 @@ class RestClient:
         if declared is not None and declared() and _declares_media_on(path):
             request_headers[MEDIA_CAPABILITY_HEADER] = MEDIA_CAPABILITY
         clean_params = {key: value for key, value in (params or {}).items() if value is not None}
-        response = await self._client.request(
+        response = await request_with_redirects(
+            self._client,
             method,
             self.url(path),
             params=clean_params,
@@ -274,7 +276,8 @@ class RestClient:
     ) -> AsyncIterator[str]:
         auth_headers = await self.auth.headers()
         request_headers = {**auth_headers, **(headers or {})}
-        async with self._client.stream(
+        async with stream_with_redirects(
+            self._client,
             "GET",
             self.url(path),
             params={k: v for k, v in (params or {}).items() if v is not None},
@@ -320,6 +323,13 @@ class RestClient:
             await self._client.aclose()
 
 
+class _DirectWebSocketConnect(websocket_connect):
+    """Keep the authenticated handshake on the configured socket endpoint."""
+
+    def process_redirect(self, exc: Exception) -> Exception:
+        return exc
+
+
 class WebSocketClient(EventEmitter):
     def __init__(
         self,
@@ -332,7 +342,7 @@ class WebSocketClient(EventEmitter):
         connection_attribution: dict[str, Any] | None = None,
         socket_event_subscriptions: dict[str, bool] | None = None,
         socket_http_client: httpx.AsyncClient | None = None,
-        connect_factory: Callable[..., Any] = websocket_connect,
+        connect_factory: Callable[..., Any] = _DirectWebSocketConnect,
     ) -> None:
         super().__init__()
         self.base_url = base_url
@@ -734,7 +744,7 @@ class ApiClient(EventEmitter):
         disable_socket: bool = False,
         http_client: httpx.AsyncClient | None = None,
         socket_http_client: httpx.AsyncClient | None = None,
-        websocket_factory: Callable[..., Any] = websocket_connect,
+        websocket_factory: Callable[..., Any] = _DirectWebSocketConnect,
         media_encryption: str | None = None,
         declare_media_capability: bool = True,
     ) -> None:
