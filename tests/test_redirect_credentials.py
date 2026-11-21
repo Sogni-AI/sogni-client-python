@@ -5,26 +5,33 @@ import httpx
 import pytest
 
 from sogni_client.auth import ApiKeyAuthManager
+from sogni_client.errors import ApiError
 from sogni_client.transport import RestClient
 
 
 @asynccontextmanager
-async def rest_client(handler, supplied):
+async def rest_client(handler, supplied, base_url="https://api.example", **options):
     auth = ApiKeyAuthManager()
     await auth.authenticate("example-key")
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler),
-        follow_redirects=True,
         headers={"Authorization": "Bearer example", "Cookie": "session=example"},
         cookies={"client-cookie": "example"},
         auth=httpx.BasicAuth("example", "example"),
+        **{"follow_redirects": True, **options},
     ) as http:
         if supplied:
-            rest = RestClient("https://api.example", auth, http_client=http)
+            rest = RestClient(base_url, auth, http_client=http)
         else:
             with patch("sogni_client.transport.httpx.AsyncClient", return_value=http):
-                rest = RestClient("https://api.example", auth)
+                rest = RestClient(base_url, auth)
         yield rest
+
+
+async def read(rest, stream, path="/start"):
+    if stream:
+        return [line async for line in rest.stream_lines(path)]
+    return await rest.get(path)
 
 
 @pytest.mark.parametrize("supplied", [False, True])
@@ -114,20 +121,90 @@ async def test_redirect_post_method_and_body(supplied, status):
 
 @pytest.mark.parametrize("supplied", [False, True])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_redirect_limit(supplied, stream):
+@pytest.mark.parametrize("limit", [None, 2])
+async def test_redirect_limit_is_the_clients(supplied, stream, limit):
     requests = []
 
     def handle(request):
         requests.append(request)
         return httpx.Response(302, headers={"Location": "/again"})
 
-    async with rest_client(handle, supplied) as rest:
-        with pytest.raises(httpx.TooManyRedirects):
-            if stream:
-                _ = [line async for line in rest.stream_lines("/start")]
-            else:
-                await rest.get("/start")
-    assert len(requests) == 6
+    options = {} if limit is None else {"max_redirects": limit}
+    async with rest_client(handle, supplied, **options) as rest:
+        with pytest.raises(httpx.TooManyRedirects, match="Too many redirects"):
+            await read(rest, stream)
+    # httpx's default is 20: that many redirects are followed, the next one fails.
+    assert len(requests) == (20 if limit is None else limit) + 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "target,kept",
+    [
+        ("https://api.example/next", True),
+        ("https://api.example:443/next", True),
+        ("https://api.example:8443/next", False),
+        ("https://other.example/next", False),
+        ("http://api.example:8080/next", False),
+    ],
+)
+async def test_https_upgrade_keeps_credentials(stream, target, kept):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(301, headers={"Location": target})
+        return httpx.Response(200, text='{"ok":true}\n')
+
+    async with rest_client(handle, True, base_url="http://api.example") as rest:
+        await read(rest, stream)
+    assert len(requests) == 2
+    for name in ("api-key", "authorization", "cookie"):
+        if kept:
+            assert requests[1].headers[name] == requests[0].headers[name]
+        else:
+            assert name not in requests[1].headers
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_client_without_redirects_gets_the_redirect(stream):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(302, headers={"Location": "https://other.example/next"})
+
+    async with rest_client(handle, True, follow_redirects=False) as rest:
+        with pytest.raises(ApiError) as caught:
+            await read(rest, stream)
+    assert caught.value.status == 302
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "target,scheme",
+    [
+        ("ftp://other.example/file", "ftp"),
+        ("file:///etc/passwd", "file"),
+        ("ws://api.example/socket", "ws"),
+        ("wss://other.example/socket", "wss"),
+    ],
+)
+async def test_redirect_to_other_protocols_is_refused(stream, target, scheme):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(307, headers={"Location": target})
+
+    async with rest_client(handle, True) as rest:
+        message = f"Request URL has an unsupported protocol '{scheme}://'."
+        with pytest.raises(httpx.UnsupportedProtocol) as caught:
+            await read(rest, stream)
+    assert str(caught.value) == message
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
@@ -215,7 +292,6 @@ async def test_refresh_stays_on_configured_endpoint(status):
     import time
 
     from sogni_client.auth import TokenAuthManager
-    from sogni_client.errors import ApiError
 
     requests = []
 
@@ -267,18 +343,18 @@ async def test_default_port_is_same_origin():
     assert requests[1].headers["api-key"] == "example-key"
 
 
-async def test_five_hops_are_allowed():
+async def test_client_redirect_limit_is_allowed():
     requests = []
 
     def handle(request):
         requests.append(request)
-        if len(requests) <= 5:
+        if len(requests) <= 20:
             return httpx.Response(302, headers={"Location": "/next"})
         return httpx.Response(200, json={})
 
     async with rest_client(handle, True) as rest:
         assert await rest.get("/start") == {}
-    assert len(requests) == 6
+    assert len(requests) == 21
 
 
 async def test_stream_remains_lazy_and_closes_responses():
