@@ -32,8 +32,42 @@ def _keeps_credentials(current: httpx.URL, target: httpx.URL) -> bool:
     )
 
 
+# The client methods this module or the code before it calls.
+_DISPATCH_METHODS = ("build_request", "send", "request", "stream", "get", "post")
+
+
+def uses_own_dispatch(client: Any) -> bool:
+    """Whether a supplied client sends requests its own way.
+
+    A client that is not an ``httpx.AsyncClient``, or a subclass that overrides
+    how requests are sent (retries, logging, auth), keeps the calls the SDK made
+    before redirect handling, so its overrides still run.
+    """
+
+    if not isinstance(client, httpx.AsyncClient):
+        return True
+    cls = type(client)
+    return any(
+        getattr(cls, name) is not getattr(httpx.AsyncClient, name) for name in _DISPATCH_METHODS
+    )
+
+
 async def request_with_redirects(
-    client: httpx.AsyncClient, method: str, url: str, *, stream: bool = False, **kwargs: Any
+    client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
+) -> httpx.Response:
+    if uses_own_dispatch(client):
+        return await client.request(method, url, **kwargs)
+    return await _follow(client, method, url, stream=False, **kwargs)
+
+
+async def get_with_redirects(client: httpx.AsyncClient, url: str, **kwargs: Any) -> httpx.Response:
+    if uses_own_dispatch(client):
+        return await client.get(url, **kwargs)
+    return await _follow(client, "GET", url, stream=False, **kwargs)
+
+
+async def _follow(
+    client: httpx.AsyncClient, method: str, url: str, *, stream: bool, **kwargs: Any
 ) -> httpx.Response:
     request = client.build_request(method, url, **kwargs)
     hop = 0
@@ -81,7 +115,11 @@ async def request_with_redirects(
 async def stream_with_redirects(
     client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
 ) -> AsyncIterator[httpx.Response]:
-    response = await request_with_redirects(client, method, url, stream=True, **kwargs)
+    if uses_own_dispatch(client):
+        async with client.stream(method, url, **kwargs) as response:
+            yield response
+        return
+    response = await _follow(client, method, url, stream=True, **kwargs)
     try:
         yield response
     finally:

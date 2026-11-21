@@ -53,8 +53,7 @@ class FakeRefreshClient:
         self.pause = pause
         self.release = asyncio.Event()
 
-    async def post(self, url: str, *, json: Any, follow_redirects: bool = False) -> httpx.Response:
-        assert follow_redirects is False
+    async def post(self, url: str, *, json: Any) -> httpx.Response:
         self.calls.append((url, json))
         if self.pause:
             await self.release.wait()

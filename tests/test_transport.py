@@ -37,17 +37,11 @@ class FakeHttpClient:
         self.gets: list[dict[str, Any]] = []
         self.closed = False
 
-    def build_request(self, method: str, url: str, **kwargs: Any) -> httpx.Request:
+    async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         self.requests.append({"method": method, "url": url, **kwargs})
-        return httpx.Request(method, url)
-
-    async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
-        assert kwargs["follow_redirects"] is False
         if not self.responses:
-            raise AssertionError(f"Unexpected request: {request.method} {request.url}")
-        response = self.responses.pop(0)
-        response.request = request
-        return response
+            raise AssertionError(f"Unexpected request: {method} {url}")
+        return self.responses.pop(0)
 
     async def put(self, url: str, **kwargs: Any) -> httpx.Response:
         self.puts.append({"url": url, **kwargs})

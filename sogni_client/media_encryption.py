@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ._http import request_with_redirects
+from ._http import get_with_redirects
 from ._media_encryption import (
     KEY_BYTES,
     MAX_INPUT_KEYS,
@@ -233,8 +233,8 @@ class MediaEncryptionApi(EventEmitter):
         """
 
         assert_current = self._capture_media_session()
-        response = await request_with_redirects(
-            self.client.rest._client, "GET", url, headers=headers, timeout=300
+        response = await get_with_redirects(
+            self.client.rest._client, url, headers=headers, timeout=300
         )
         response.raise_for_status()
         assert_current()

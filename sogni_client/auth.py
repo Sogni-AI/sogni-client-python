@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 import httpx
 
+from ._http import uses_own_dispatch
 from .errors import ApiError
 from .events import EventEmitter
 
@@ -243,12 +244,13 @@ class TokenAuthManager(AuthManager):
             raise ValueError("Refresh token expired")
         owns_client = self._refresh_client is None
         client = self._refresh_client or httpx.AsyncClient(timeout=30)
+        url = f"{self._base_url}/v1/account/refresh-token"
+        body = {"refreshToken": self._refresh_token}
         try:
-            response = await client.post(
-                f"{self._base_url}/v1/account/refresh-token",
-                json={"refreshToken": self._refresh_token},
-                follow_redirects=False,
-            )
+            if uses_own_dispatch(client):
+                response = await client.post(url, json=body)
+            else:
+                response = await client.post(url, json=body, follow_redirects=False)
         finally:
             if owns_client:
                 await client.aclose()

@@ -73,7 +73,9 @@ def permit_payload(kind, testnet=False, provider="base"):
     }
 
 
-async def invoke(kind, permit, *, testnet=False, provider="base", rejected=False):
+async def invoke(
+    kind, permit, *, testnet=False, provider="base", rejected=False, http_class=httpx.AsyncClient
+):
     calls = []
 
     def handle(request):
@@ -82,7 +84,7 @@ async def invoke(kind, permit, *, testnet=False, provider="base", rejected=False
             200, json={"data": permit if request.url.path.endswith("/permit") else {}}
         )
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+    async with http_class(transport=httpx.MockTransport(handle)) as http:
         client = ApiClient(
             base_url="https://api.example",
             socket_url="wss://socket.example",
@@ -244,3 +246,15 @@ async def test_permit_requires_objects(kind, section, value):
     permit = permit_payload(kind)
     permit[section] = value
     await invoke(kind, permit, rejected=True)
+
+
+@pytest.mark.parametrize("kind", ["withdraw", "approve"])
+async def test_permit_checks_apply_with_an_integrator_client(kind):
+    class OwnRequest(httpx.AsyncClient):
+        async def request(self, method, url, **kwargs):
+            return await super().request(method, url, **kwargs)
+
+    await invoke(kind, permit_payload(kind), http_class=OwnRequest)
+    permit = permit_payload(kind)
+    permit["domain"]["chainId"] = "1"
+    await invoke(kind, permit, http_class=OwnRequest, rejected=True)

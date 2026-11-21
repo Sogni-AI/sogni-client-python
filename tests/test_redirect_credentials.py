@@ -388,3 +388,99 @@ async def test_stream_remains_lazy_and_closes_responses():
         await lines.aclose()
     assert not redirect_body.read
     assert redirect_body.closed and final_body.closed
+
+
+class IntegratorClient(httpx.AsyncClient):
+    """A supplied client with its own request(), stream(), get() and post()."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.calls = []
+
+    async def request(self, method, url, **kwargs):
+        self.calls.append(("request", kwargs))
+        headers = {**(kwargs.pop("headers", None) or {}), "x-integrator": "1"}
+        return await super().request(method, url, headers=headers, **kwargs)
+
+    def stream(self, method, url, **kwargs):
+        self.calls.append(("stream", kwargs))
+        return super().stream(method, url, **kwargs)
+
+    async def get(self, url, **kwargs):
+        self.calls.append(("get", kwargs))
+        return await super().get(url, **kwargs)
+
+    async def post(self, url, **kwargs):
+        self.calls.append(("post", kwargs))
+        return await super().post(url, **kwargs)
+
+
+def test_own_dispatch_detection():
+    from sogni_client._http import uses_own_dispatch
+
+    class Hooked(httpx.AsyncClient):
+        pass
+
+    class OwnSend(httpx.AsyncClient):
+        async def send(self, request, **kwargs):
+            return await super().send(request, **kwargs)
+
+    assert not uses_own_dispatch(httpx.AsyncClient())
+    assert not uses_own_dispatch(Hooked())
+    assert uses_own_dispatch(OwnSend())
+    assert uses_own_dispatch(IntegratorClient())
+    assert uses_own_dispatch(object())
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_integrator_client_keeps_the_earlier_calls(stream):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(302, headers={"Location": "https://other.example/next"})
+        return httpx.Response(200, text='{"ok":true}\n')
+
+    auth = ApiKeyAuthManager()
+    await auth.authenticate("example-key")
+    async with IntegratorClient(
+        transport=httpx.MockTransport(handle), follow_redirects=True
+    ) as http:
+        rest = RestClient("https://api.example", auth, http_client=http)
+        assert await read(rest, stream) == (['{"ok":true}'] if stream else {"ok": True})
+        assert [name for name, _ in http.calls] == ["stream" if stream else "request"]
+    # httpx follows the redirect itself, exactly as before redirect handling was added.
+    assert len(requests) == 2
+    assert requests[1].headers["api-key"] == "example-key"
+    if not stream:
+        assert requests[1].headers["x-integrator"] == "1"
+
+
+async def test_integrator_client_media_and_refresh_keep_the_earlier_calls():
+    import time
+
+    from sogni_client import SogniClient
+    from sogni_client.auth import TokenAuthManager
+
+    def handle(request):
+        if request.url.path.endswith("/refresh-token"):
+            return httpx.Response(400, json={"message": "No token pair"})
+        return httpx.Response(200, content=b"plain bytes")
+
+    async with IntegratorClient(transport=httpx.MockTransport(handle)) as http:
+        client = await SogniClient.create(disable_socket=True, http_client=http)
+        try:
+            media = await client.media_encryption.fetch_decrypted("https://media.example/file")
+            assert media == b"plain bytes"
+        finally:
+            await client.aclose()
+        auth = TokenAuthManager("https://api.example", refresh_client=http)
+        auth._refresh_token = "example-refresh"
+        auth._refresh_expires_at = time.time() + 3600
+        with pytest.raises(ApiError):
+            await auth.headers()
+    gets = [kwargs for name, kwargs in http.calls if name == "get"]
+    posts = [kwargs for name, kwargs in http.calls if name == "post"]
+    assert gets == [{"headers": None, "timeout": 300}]
+    assert len(posts) == 1 and "follow_redirects" not in posts[0]
