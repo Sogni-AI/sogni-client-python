@@ -7,11 +7,21 @@ import hashlib
 import logging
 import math
 import re
+import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from ._permit_constants import (
+    APPROVE_TYPES,
+    DOMAIN_FIELDS,
+    PERMIT_NETWORKS,
+    WITHDRAW_CONTRACT,
+    WITHDRAW_NAMES,
+    WITHDRAW_TYPES,
+    WITHDRAW_VERSION,
+)
 from .auth import ApiKeyAuthManager, CookieAuthManager, TokenAuthManager
 from .errors import ApiError, TwoFactorRequiredError
 from .events import DataEntity, EventEmitter
@@ -21,6 +31,68 @@ _LOGGER = logging.getLogger("sogni_client")
 _MAX_DEPOSIT_ATTEMPTS = 4
 _INSUFFICIENT_ALLOWANCE = 149
 _VERIFYING_CONTRACT = "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"
+
+
+def _check_signing_field(valid: bool, field: str) -> None:
+    if not valid:
+        _LOGGER.debug("Unexpected signing field: %s", field)
+        raise ApiError(400, {"message": "Unexpected signing request; nothing was signed"})
+
+
+def _check_permit(
+    permit: Any,
+    *,
+    testnet: bool,
+    provider: str,
+    wallet_address: str,
+    amount: str | None = None,
+) -> None:
+    _check_signing_field(isinstance(permit, dict), "permit")
+    for section in ("domain", "types", "message"):
+        _check_signing_field(isinstance(permit.get(section), dict), section)
+    domain, types, message = permit["domain"], permit["types"], permit["message"]
+    expected_types = WITHDRAW_TYPES if amount is not None else APPROVE_TYPES
+    if "EIP712Domain" in types:
+        expected_types = {**expected_types, "EIP712Domain": DOMAIN_FIELDS}
+    _check_signing_field(types == expected_types, "types")
+    network = "testnet" if testnet else "mainnet"
+    expected = PERMIT_NETWORKS[network][provider]
+    chain = domain.get("chainId")
+    _check_signing_field(
+        type(chain) is int or (isinstance(chain, str) and chain.isascii() and chain.isdecimal()),
+        "domain.chainId",
+    )
+    _check_signing_field(int(chain) == expected["chainId"], "domain.chainId")
+    address_field = "walletAddress" if amount is not None else "owner"
+    address = message.get(address_field)
+    _check_signing_field(
+        isinstance(address, str) and address.lower() == wallet_address.lower(),
+        f"message.{address_field}",
+    )
+    contract = domain.get("verifyingContract")
+    if amount is not None:
+        _check_signing_field(set(domain) == {field["name"] for field in DOMAIN_FIELDS}, "domain")
+        _check_signing_field(domain.get("name") == WITHDRAW_NAMES[network], "domain.name")
+        _check_signing_field(domain.get("version") == WITHDRAW_VERSION, "domain.version")
+        _check_signing_field(
+            isinstance(contract, str) and contract.lower() == WITHDRAW_CONTRACT.lower(),
+            "domain.verifyingContract",
+        )
+        _check_signing_field(message.get("amount") == amount, "message.amount")
+        _check_signing_field(message.get("provider") == provider, "message.provider")
+        _check_signing_field(isinstance(message.get("nonce"), str), "message.nonce")
+    else:
+        if expected["token"] is not None:
+            _check_signing_field(
+                isinstance(contract, str) and contract.lower() == expected["token"].lower(),
+                "domain.verifyingContract",
+            )
+        deadline = message.get("deadline")
+        now = time.time()
+        _check_signing_field(
+            type(deadline) is int and now < deadline <= now + 8 * 86400, "message.deadline"
+        )
+        # TODO: Pin the approval spender once provider addresses are available.
 
 
 def _account_defaults() -> dict[str, Any]:
@@ -991,6 +1063,7 @@ class AccountApi(EventEmitter):
     async def withdraw(
         self, password: str, amount: int | float | str | Decimal, provider: str = "base"
     ) -> None:
+        _check_signing_field(provider in ("base", "etherlink"), "provider")
         wallet = self.get_wallet(self._require_account_username(), password)
         self._assert_wallet_matches(wallet)
         payload = {
@@ -1001,8 +1074,13 @@ class AccountApi(EventEmitter):
         permit = _unwrap_data(
             await self.client.rest.post("/v1/account/token/withdraw/permit", payload)
         )
-        if not isinstance(permit, dict):
-            raise ValueError("Withdrawal permit response did not include data")
+        _check_permit(
+            permit,
+            testnet=self.testnet,
+            provider=provider,
+            wallet_address=wallet.address,
+            amount=payload["amount"],
+        )
         signature = _sign_typed_data(wallet, permit["domain"], permit["types"], permit["message"])
         await self.client.rest.post(
             "/v2/account/token/withdraw", {**payload, "signature": signature}
@@ -1045,6 +1123,7 @@ class AccountApi(EventEmitter):
     async def approve_token_usage(
         self, password: str, spender: str, provider: str = "base"
     ) -> None:
+        _check_signing_field(provider in ("base", "etherlink"), "provider")
         if spender not in {"account", "staker"}:
             raise ValueError("spender must be 'account' or 'staker'")
         wallet = self.get_wallet(self._require_account_username(), password)
@@ -1054,8 +1133,12 @@ class AccountApi(EventEmitter):
                 {"walletAddress": wallet.address, "spender": spender, "provider": provider},
             )
         )
-        if not isinstance(permit, dict):
-            raise ValueError("Approval permit response did not include data")
+        _check_permit(
+            permit,
+            testnet=self.testnet,
+            provider=provider,
+            wallet_address=wallet.address,
+        )
         signature = _sign_typed_data(wallet, permit["domain"], permit["types"], permit["message"])
         await self.client.rest.post(
             "/v1/contract/token/approve",
