@@ -44,6 +44,7 @@ _SEEDANCE_VIDEO_MODEL_IDS = {
     "seedance-2-0-mini-uncensored",
     "seedance-2-0-fast",
     "seedance-2-5",
+    "seedance-2-5-flash",
     "seedance-2-5-uncensored",
 }
 _HAPPYHORSE_VIDEO_MODEL_IDS = {
@@ -176,7 +177,7 @@ def is_seedance25_model(model_id: str) -> bool:
     # Seedance 2.5 Uncensored is the same model with every Seedance 2.5 limit,
     # under its own id: never rewrite it to seedance-2-5. Its jobs fail with
     # error 4103 until the account accepts its agreement in a Sogni app.
-    return model_id in {"seedance-2-5", "seedance-2-5-uncensored"}
+    return model_id in {"seedance-2-5", "seedance-2-5-flash", "seedance-2-5-uncensored"}
 
 
 def is_happyhorse_model(model_id: str) -> bool:
