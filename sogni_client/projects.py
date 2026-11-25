@@ -1644,11 +1644,9 @@ def _validate_wan3_references(params: dict[str, Any]) -> None:
         raise _api_error("Wan 3 accepts either one reference file or one reference link, not both.")
     if is_enhanced and (params.get("referenceFileUrl") or params.get("referenceLinkUrl")):
         raise _api_error("Wan 3.0 Enhanced does not accept document or webpage references.")
-    for field in ("promptExtend", "watermark"):
-        if params.get(field) is not None and not isinstance(params[field], bool):
-            raise _api_error(f"Wan 3 {field} must be a boolean.")
-    if is_enhanced and params.get("watermark") is not None:
-        raise _api_error("Wan 3.0 Enhanced does not expose a watermark option.")
+    # The legacy watermark parameter is deprecated and ignored for Wan.
+    if params.get("promptExtend") is not None and not isinstance(params["promptExtend"], bool):
+        raise _api_error("Wan 3 promptExtend must be a boolean.")
     # smartDuration is retired. It let Wan 3 choose 2-30s AFTER admission, so the
     # quote had to reserve the 30-second maximum for a render that usually came
     # back far shorter - and the Wan 3 Enhanced launch credit settled against that
@@ -2832,11 +2830,12 @@ def create_job_request_message(
                     "extendOutput must be 'extended' (the source and the new footage as one video) or 'continuation' (the new footage alone)."
                 )
             keyframe["extendOutput"] = extend_output
+        if params.get("watermark") is not None and not is_wan3_model(params["modelId"]):
+            keyframe["watermark"] = params["watermark"]
         for source, target in (
             ("referenceFileUrl", "referenceFileURL"),
             ("referenceLinkUrl", "referenceLinkURL"),
             ("promptExtend", "promptExtend"),
-            ("watermark", "watermark"),
             ("ratio", "ratio"),
             ("returnLastFrame", "returnLastFrame"),
             ("seedanceTaskType", "seedanceTaskType"),
