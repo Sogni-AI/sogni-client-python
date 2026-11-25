@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from urllib.parse import quote
 
 import pytest
@@ -209,6 +210,48 @@ def test_sogni_tools_expose_all_canonical_names_and_helpers() -> None:
     assert parse_tool_call_arguments(tool_call(arguments="[]")) == {}
     with pytest.raises(AttributeError):
         _ = SogniTools.not_a_tool
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "selector"),
+    [
+        ("generate_video", " HappyHorse "),
+        ("generate_video", "happyhorse1.1"),
+        ("animate_photo", "happyhorse-1.1-i2v"),
+        ("sound_to_video", "happyhorse-1.1-t2v"),
+        ("video_to_video", "HappyHorse-1.1-r2v"),
+    ],
+)
+def test_video_tools_reject_retired_happyhorse_selectors(tool_name, selector) -> None:
+    with pytest.raises(ValueError) as caught:
+        ChatToolsApi._resolve_model(tool_name, {"videoModel": selector})
+    assert str(caught.value) == "HappyHorse has been retired. Select an available video model."
+
+
+async def test_generate_video_refuses_happyhorse_and_prefers_minimax_h3_for_r2v_fallback() -> None:
+    projects = FakeProjects()
+    projects.wait_for_models = AsyncMock(
+        return_value=[
+            {"id": "happyhorse-1.1-r2v", "media": "video", "workerCount": 10},
+            {"id": "minimax-h3-ref2va-fp8_r2v", "media": "video", "workerCount": 1},
+        ]
+    )
+    api = ChatToolsApi(projects)
+    call = tool_call(
+        "generate_video",
+        '{"prompt":"Harbor","videoModel":"happyhorse-1.1-r2v","referenceImageIndices":[0]}',
+    )
+    refusal = await api.execute(call)
+    assert refusal["success"] is False
+    assert refusal["error"] == "HappyHorse has been retired. Select an available video model."
+    assert projects.created == []
+
+    call = tool_call(
+        "generate_video",
+        '{"prompt":"Harbor","videoModel":"minimax-h3-r2v-balanced","referenceImageIndices":[0]}',
+    )
+    assert (await api.execute(call))["success"] is True
+    assert projects.created[0]["modelId"] == "minimax-h3-ref2va-fp8_r2v"
 
 
 def test_direct_video_to_video_does_not_route_wan3_as_an_edit_model() -> None:

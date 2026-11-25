@@ -74,7 +74,14 @@ def permit_payload(kind, testnet=False, provider="base"):
 
 
 async def invoke(
-    kind, permit, *, testnet=False, provider="base", rejected=False, http_class=httpx.AsyncClient
+    kind,
+    permit,
+    *,
+    testnet=False,
+    provider="base",
+    rejected=False,
+    http_class=httpx.AsyncClient,
+    proof=None,
 ):
     calls = []
 
@@ -120,13 +127,27 @@ async def invoke(
                 sign.assert_not_called()
                 assert all(call.url.path.endswith("/permit") for call in calls)
             else:
-                await operation(*args)
+                await operation(*args, **({"proof": proof} if proof is not None else {}))
                 sign.assert_called_once()
                 assert len(calls) == 2
                 body = json.loads(calls[-1].content)
                 assert len(body.get("signature", body.get("approveSignature"))) == 132
         await client.aclose()
     return calls
+
+
+@pytest.mark.parametrize(
+    "proof", [None, {"code": "012345"}, {"challengeId": "c1", "assertion": {"id": "key"}}]
+)
+async def test_withdraw_sends_proof_only_in_signed_submission(proof):
+    permit, submit = await invoke("withdraw", permit_payload("withdraw"), proof=proof)
+    assert "proof" not in json.loads(permit.content)
+    assert submit.url.path == "/v2/account/token/withdraw"
+    body = json.loads(submit.content)
+    if proof is None:
+        assert "proof" not in body
+    else:
+        assert body["proof"] == proof
 
 
 @pytest.mark.parametrize("kind", ["withdraw", "approve"])

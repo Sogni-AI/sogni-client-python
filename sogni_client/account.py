@@ -1080,8 +1080,13 @@ class AccountApi(EventEmitter):
             )
 
     async def withdraw(
-        self, password: str, amount: int | float | str | Decimal, provider: str = "base"
+        self,
+        password: str,
+        amount: int | float | str | Decimal,
+        provider: str = "base",
+        proof: dict[str, Any] | None = None,
     ) -> None:
+        """Withdraw tokens with an optional code or passkey (challengeId and assertion) proof."""
         wallet = self.get_wallet(self._require_account_username(), password)
         self._assert_wallet_matches(wallet)
         payload = {
@@ -1100,9 +1105,10 @@ class AccountApi(EventEmitter):
             amount=payload["amount"],
         )
         signature = _sign_typed_data(wallet, permit["domain"], permit["types"], permit["message"])
-        await self.client.rest.post(
-            "/v2/account/token/withdraw", {**payload, "signature": signature}
-        )
+        body = {**payload, "signature": signature}
+        if proof is not None:
+            body["proof"] = proof
+        await self.client.rest.post("/v2/account/token/withdraw", body)
 
     async def deposit(
         self, password: str, amount: int | float | str | Decimal, provider: str = "base"

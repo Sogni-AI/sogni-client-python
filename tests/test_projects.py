@@ -438,37 +438,44 @@ def test_external_video_request_uses_fixed_fps_urls_and_omits_negative_prompt() 
         )
 
 
-@pytest.mark.parametrize(
-    ("model_id", "params", "message"),
-    [
-        ("wan_v2.2-14b-fp8_i2v", {}, "requires at least one"),
-        (
-            "happyhorse-1.1-i2v",
-            {"referenceImageUrls": ["https://cdn.example/1.png", "https://cdn.example/2.png"]},
-            "exactly one",
-        ),
-        (
-            "happyhorse-1.1-r2v",
-            {"referenceVideo": True, "referenceImage": True},
-            "do not support reference video",
-        ),
-    ],
-)
-def test_video_workflow_asset_requirements_are_enforced(
-    model_id: str, params: dict[str, Any], message: str
-) -> None:
-    with pytest.raises(ApiError, match=message):
+def test_wan_i2v_requires_a_reference_image() -> None:
+    with pytest.raises(ApiError, match="requires at least one"):
         create_job_request_message(
             "invalid-assets",
+            {
+                "type": "video",
+                "modelId": "wan_v2.2-14b-fp8_i2v",
+                "positivePrompt": "motion",
+                "numberOfMedia": 1,
+            },
+            model_options("video"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "assets"),
+    [
+        ("happyhorse-1.1-t2v", {}),
+        ("happyhorse-1.1-i2v", {"referenceImage": True}),
+        ("happyhorse-1.1-r2v", {"referenceImageUrls": ["https://cdn.example/1.png"]}),
+    ],
+)
+def test_retired_happyhorse_projects_refuse_previously_valid_inputs(model_id, assets) -> None:
+    with pytest.raises(ApiError) as caught:
+        create_job_request_message(
+            "retired-video",
             {
                 "type": "video",
                 "modelId": model_id,
                 "positivePrompt": "motion",
                 "numberOfMedia": 1,
-                **params,
+                **assets,
             },
             model_options("video"),
         )
+    assert caught.value.status == 400
+    assert caught.value.error_code == 0
+    assert str(caught.value) == "HappyHorse has been retired. Select an available video model."
 
 
 def test_audio_request_keeps_audio_fields_and_omits_negative_prompt() -> None:
@@ -3943,8 +3950,9 @@ def test_minimax_h3_extension_source_rides_the_unnumbered_reference_video_upload
     # The worker needs a Sogni upload, so external video URLs stay refused.
     with pytest.raises(ApiError) as caught:
         _h3_extend_frame(referenceVideoUrls=["https://example.com/source.mp4"])
-    assert str(caught.value) == (
-        "External reference URLs are supported only by Seedance, HappyHorse, and Wan 3 models."
+    assert (
+        str(caught.value)
+        == "External reference URLs are supported only by Seedance and Wan 3 models."
     )
     with pytest.raises(ApiError, match="i2v workflow does not support referenceVideo"):
         _h3_extend_frame(

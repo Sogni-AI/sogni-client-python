@@ -18,13 +18,14 @@ import httpx
 from .attribution import workload_attribution_to_wire_fields
 from .errors import ApiError, ChatJobError, extract_chat_job_error_fields
 from .events import EventEmitter
-from .projects import ProjectsApi
+from .projects import HAPPYHORSE_RETIRED_MESSAGE, ProjectsApi
 from .transport import SWITCH_CONNECTION, ApiClient
 from .utils import (
     SEEDREAM_5_5_UNCENSORED_MODEL_ID,
     SEEDREAM_5_PRO_UNCENSORED_MODEL_ID,
     is_minimax_h3_model,
     is_minimax_h3_prism_model,
+    is_minimax_h3_reference_model,
     is_seedream_model,
     is_wan3_model,
     new_id,
@@ -532,8 +533,6 @@ class ChatToolsApi:
         "minimax-h3-r2v-balanced-2stage": "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
         "minimax-h3-fasth3-r2v-turbo": "minimax-h3-fastvideo-omni-int8_r2v_turbo",
         "minimax-h3-fasth3-r2v-turbo-2stage": "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
-        "happyhorse": "happyhorse-1.1-t2v",
-        "happyhorse1.1": "happyhorse-1.1-t2v",
         "wan3": "wan3.0-video",
         "wan3.0": "wan3.0-video",
         "wan3-video": "wan3.0-video",
@@ -575,10 +574,6 @@ class ChatToolsApi:
         "minimax-h3-r2v-balanced-2stage": "minimax-h3-ref2va-fp8_r2v_balanced_2stage",
         "minimax-h3-fasth3-r2v-turbo": "minimax-h3-fastvideo-omni-int8_r2v_turbo",
         "minimax-h3-fasth3-r2v-turbo-2stage": "minimax-h3-fastvideo-omni-int8_r2v_turbo_2stage",
-        "happyhorse": "happyhorse-1.1-i2v",
-        "happyhorse1.1": "happyhorse-1.1-i2v",
-        "happyhorse-1.1-i2v": "happyhorse-1.1-i2v",
-        "happyhorse-1.1-r2v": "happyhorse-1.1-r2v",
         "wan3": "wan3.0-video",
         "wan3.0": "wan3.0-video",
         "wan3-video": "wan3.0-video",
@@ -624,11 +619,14 @@ class ChatToolsApi:
 
     @classmethod
     def _resolve_model(cls, name: str, args: dict[str, Any]) -> str | None:
-        video_tool = name in {"generate_video", "sound_to_video", "video_to_video"}
+        video_tool = name in {"generate_video", "animate_photo", "sound_to_video", "video_to_video"}
         requested = args.get("videoModel") if video_tool else args.get("model")
         requested = requested or (args.get("video_model") if video_tool else None)
         if not isinstance(requested, str) or not requested.strip():
             return None
+        key = cls._selector_key(requested)
+        if video_tool and key.startswith("happyhorse"):
+            raise ValueError(HAPPYHORSE_RETIRED_MESSAGE)
         selectors = (
             cls._EDIT_SELECTORS
             if name == "edit_image"
@@ -639,12 +637,13 @@ class ChatToolsApi:
             else cls._V2V_SELECTORS
             if name == "video_to_video"
             else cls._IMAGE_VIDEO_SELECTORS
-            if name == "generate_video" and args.get("referenceImageIndices")
+            if name == "animate_photo"
+            or (name == "generate_video" and args.get("referenceImageIndices"))
             else cls._VIDEO_SELECTORS
             if name == "generate_video"
             else {}
         )
-        resolved = selectors.get(requested, selectors.get(cls._selector_key(requested), requested))
+        resolved = selectors.get(requested, selectors.get(key, requested))
         if name == "video_to_video" and (
             is_wan3_model(resolved)
             or cls._selector_key(resolved) in {"wan3", "wan3.0", "wan3-video"}
@@ -669,6 +668,7 @@ class ChatToolsApi:
             )
         args = parse_tool_call_arguments(tool_call)
         try:
+            requested = self._resolve_model(name, args)
             models = await self.projects.wait_for_models(10)
             media = (
                 "audio"
@@ -677,7 +677,6 @@ class ChatToolsApi:
                 if name in {"generate_video", "sound_to_video", "video_to_video"}
                 else "image"
             )
-            requested = self._resolve_model(name, args)
             prism = (
                 name == "generate_video"
                 and isinstance(requested, str)
@@ -711,6 +710,12 @@ class ChatToolsApi:
                 )
             if requested and requested in available:
                 model_id = requested
+            elif (
+                name == "generate_video"
+                and is_minimax_h3_reference_model(requested or "")
+                and self._VIDEO_SELECTORS["minimax-h3-r2v"] in available
+            ):
+                model_id = self._VIDEO_SELECTORS["minimax-h3-r2v"]
             elif name == "generate_music":
                 model_id = next(m for m in music_order if m in available)
             else:

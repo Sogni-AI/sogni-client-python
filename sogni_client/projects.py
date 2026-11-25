@@ -414,6 +414,13 @@ def _project_failure(value: Any) -> dict[str, str] | None:
     return failure or None
 
 
+def _recovered_error_message(reason: str, raw: dict[str, Any]) -> str:
+    if reason == "4081":
+        failure = _project_failure(raw.get("failure")) or {}
+        return failure.get("message", reason)
+    return reason
+
+
 def _format_runtime_limit(seconds: float) -> str:
     minutes = round(seconds / 60)
     if minutes % 60 == 0:
@@ -425,6 +432,8 @@ def _format_runtime_limit(seconds: float) -> str:
 def _api_error(message: str) -> ApiError:
     return ApiError(400, {"status": "error", "message": message, "errorCode": 0})
 
+
+HAPPYHORSE_RETIRED_MESSAGE = "HappyHorse has been retired. Select an available video model."
 
 RETIRED_OUTPUT_SCALE_MESSAGE = (
     "outputScale is no longer supported. For MiniMax H3 1080p or 2K output use the two-stage "
@@ -1722,27 +1731,11 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
         model_id
     ):
         raise _api_error("referenceVideoDurations is supported only by MiniMax H3 r2v models.")
+    if is_happyhorse_model(model_id):
+        raise _api_error(HAPPYHORSE_RETIRED_MESSAGE)
     images = _validate_reference_array(params.get("referenceImageUrls"), "referenceImageUrls")
     videos = _validate_reference_array(params.get("referenceVideoUrls"), "referenceVideoUrls")
     audios = _validate_reference_array(params.get("referenceAudioUrls"), "referenceAudioUrls")
-    if is_happyhorse_model(model_id):
-        if params.get("referenceVideo") or videos:
-            raise _api_error("HappyHorse models do not support reference video assets.")
-        if params.get("referenceAudio") or params.get("referenceAudioIdentity") or audios:
-            raise _api_error("HappyHorse models do not support reference audio assets.")
-        if params.get("referenceImageEnd"):
-            raise _api_error(
-                "HappyHorse models do not support a separate end-frame image (referenceImageEnd)."
-            )
-        workflow = get_video_workflow_type(model_id)
-        count = bool(params.get("referenceImage")) + len(images)
-        if workflow == "i2v" and count != 1:
-            raise _api_error("HappyHorse i2v requires exactly one first-frame reference image.")
-        if workflow == "r2v" and not 1 <= count <= 9:
-            raise _api_error("HappyHorse r2v requires between 1 and 9 reference images.")
-        if workflow == "t2v" and count:
-            raise _api_error("HappyHorse t2v does not support reference images.")
-        return
     if is_wan3_model(model_id):
         _validate_wan3_references(params)
         return
@@ -1791,9 +1784,7 @@ def _validate_video_assets(params: dict[str, Any]) -> None:
         or params.get("referenceFileUrl")
         or params.get("referenceLinkUrl")
     ):
-        raise _api_error(
-            "External reference URLs are supported only by Seedance, HappyHorse, and Wan 3 models."
-        )
+        raise _api_error("External reference URLs are supported only by Seedance and Wan 3 models.")
     workflow = get_video_workflow_type(model_id)
     if not workflow:
         return
@@ -3051,6 +3042,8 @@ def create_job_request_message(
     )
     if params.get("network"):
         template["network"] = params["network"]
+    if params.get("retainFailureMessage") is True:
+        template["retainFailureMessage"] = True
     if "priorityMode" in params:
         if not isinstance(params["priorityMode"], bool):
             raise ValueError("Priority mode must be true or false.")
@@ -4219,7 +4212,7 @@ class Project(DataEntity):
             code = int(reason) if reason.isascii() and reason.isdigit() and len(reason) <= 16 else 0
             delta["error"] = self.error or {
                 "code": code if code <= 9007199254740991 else 0,
-                "message": reason
+                "message": _recovered_error_message(reason, data)
                 or ("Project canceled" if status == "canceled" else "Project failed"),
             }
             for job in self._jobs:
@@ -4315,6 +4308,7 @@ class ProjectsApi(EventEmitter):
         # Requests sent but not yet acknowledged by any server frame. Kept so a
         # request the socket refused while restarting can be sent again unchanged.
         self._unadmitted_requests: dict[str, dict[str, Any]] = {}
+        self._submitting_refusals: dict[str, dict[str, Any] | None] = {}
         # Projects waiting for a reconnect to be resubmitted on.
         self._awaiting_resubmit: set[str] = set()
         # Initial sends finish after model lookups and reference preparation.
@@ -4407,6 +4401,7 @@ class ProjectsApi(EventEmitter):
             project._dispose()
         self._projects.clear()
         self._unadmitted_requests.clear()
+        self._submitting_refusals.clear()
         self._awaiting_resubmit.clear()
         self._submitted_at.clear()
         self._resubmitted_at.clear()
@@ -4624,6 +4619,7 @@ class ProjectsApi(EventEmitter):
     waitForModels = wait_for_models
 
     async def create(self, params: dict[str, Any] | None = None, **kwargs: Any) -> Project:
+        """Set retain_failure_message=True to retain a subscription refusal in project status."""
         assert_session = self._capture_session()
         data = _nested_params(normalize_params(params, **kwargs))
         for required in ("type", "modelId", "positivePrompt", "numberOfMedia"):
@@ -4686,18 +4682,31 @@ class ProjectsApi(EventEmitter):
                 request["mediaEncryption"] = encryption.wire()
             # A refusal can arrive as soon as send yields to the transport.
             self._unadmitted_requests[project.id] = request
+            if request.get("retainFailureMessage") is True:
+                self._submitting_refusals[project.id] = None
             await self.client.socket.send("jobRequest", request)
             assert_session()
-            self._sent_on_generation[project.id] = self._transport_generation
-            self._submitted_at[project.id] = time.time()
-            self._projects.append(project)
-            return project
+            tracked = self._project(project.id)
+            if tracked is None:
+                self._sent_on_generation[project.id] = self._transport_generation
+                self._submitted_at[project.id] = time.time()
+                self._projects.append(project)
+                tracked = project
+            else:
+                # Reconnect may have restored this ID while the send was pending.
+                self._unadmitted_requests.pop(project.id, None)
+                project._dispose()
+            refusal = self._submitting_refusals.get(project.id)
+            if refusal is not None:
+                tracked._update({"status": "failed", "error": refusal})
+            return tracked
         except BaseException:
             self._unadmitted_requests.pop(project.id, None)
             self._sent_on_generation.pop(project.id, None)
             project._dispose()
             raise
         finally:
+            self._submitting_refusals.pop(project.id, None)
             self._project_encryption.pop(project.id, None)
 
     def _wants_project_encryption(self, data: dict[str, Any]) -> bool:
@@ -5838,6 +5847,7 @@ class ProjectsApi(EventEmitter):
         elif status == "errored":
             reason = raw.get("reason") if isinstance(raw.get("reason"), str) else ""
             reason = reason if reason and reason != "allJobsCompleted" else "genfailure"
+            message = _recovered_error_message(reason, raw)
             # Compact status snapshots omit jobs. Settle every known unfinished
             # attempt before the parent, preserving already delivered results.
             for job in project.jobs:
@@ -5849,7 +5859,7 @@ class ProjectsApi(EventEmitter):
                         "imgID": job.id,
                         "isFromWorker": True,
                         "error": reason,
-                        "error_message": reason,
+                        "error_message": message,
                     }
                 )
             self._handle_job_error(
@@ -5857,7 +5867,7 @@ class ProjectsApi(EventEmitter):
                     "jobID": project_id,
                     "isFromWorker": True,
                     "error": reason,
-                    "error_message": reason,
+                    "error_message": message,
                 }
             )
         elif status == "cancelled":
@@ -7214,8 +7224,11 @@ class ProjectsApi(EventEmitter):
                     "error": error,
                 },
             )
-        project = self._project(data.get("jobID", ""))
+        project_id = data.get("jobID", "")
+        project = self._project(project_id)
         if not project:
+            if not data.get("imgID") and code == 4081 and project_id in self._submitting_refusals:
+                self._submitting_refusals[project_id] = error
             return
         if not data.get("imgID"):
             project._update({"status": "failed", "error": error})

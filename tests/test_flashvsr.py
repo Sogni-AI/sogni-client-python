@@ -35,9 +35,7 @@ CONTROLS = (
     "generation controls are unsupported."
 )
 ONE_SOURCE = "Upscale one source video per project."
-EXTERNAL_URLS = (
-    "External reference URLs are supported only by Seedance, HappyHorse, and Wan 3 models."
-)
+EXTERNAL_URLS = "External reference URLs are supported only by Seedance and Wan 3 models."
 
 # The server-advertised FlashVSR tier, as delivered in the model catalog. Its
 # frame range is left out on purpose: the client never caps FlashVSR length,

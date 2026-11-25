@@ -612,6 +612,101 @@ def stop_timers(api: ProjectsApi) -> None:
             project._timeout_handle.cancel()
 
 
+@pytest.mark.parametrize(
+    ("options", "code", "restore_during_send"),
+    [
+        ({}, 4081, False),
+        ({"retain_failure_message": False}, 4081, False),
+        ({"retain_failure_message": 1}, 4081, False),
+        ({"retain_failure_message": True}, 4081, False),
+        ({"retain_failure_message": True}, 4081, True),
+        ({"retain_failure_message": True}, 4079, False),
+    ],
+)
+async def test_create_retains_only_opted_in_early_subscription_refusals(
+    options, code, restore_during_send
+) -> None:
+    api, client, events, _ = restart_harness()
+    api.get_model_options = AsyncMock(return_value={"type": "image"})
+    message = "This feature requires a subscription."
+    opted_in = options.get("retain_failure_message") is True
+
+    async def send(message_type, wire):
+        assert message_type == "jobRequest"
+        assert "retain_failure_message" not in wire
+        assert "retainFailureMessage" not in wire["keyFrames"][0]
+        if opted_in:
+            assert wire["retainFailureMessage"] is True
+        else:
+            assert "retainFailureMessage" not in wire
+        client.socket.emit(
+            "jobError", {"jobID": wire["jobID"], "error": str(code), "error_message": message}
+        )
+        if restore_during_send:
+            await api._reconcile(
+                {"activeProjects": [recovered_project(id=wire["jobID"])]}, "reconnect", time.time()
+            )
+
+    client.socket.send = send
+    project = await api.create(
+        type="image", model_id="flux", positive_prompt="Clouds", number_of_media=1, **options
+    )
+    try:
+        error = {"code": code, "message": message}
+        assert events == [{"type": "error", "projectId": project.id, "error": error}]
+        assert api.tracked_projects == [project]
+        if opted_in and code == 4081:
+            assert project.status == "failed"
+            assert project.error == error
+            assert project.recovered == restore_during_send
+            with pytest.raises(ProjectError) as caught:
+                await project.wait_for_completion()
+            assert str(caught.value) == message
+        else:
+            assert project.status == "pending"
+    finally:
+        stop_timers(api)
+        settle(project)
+
+
+@pytest.mark.parametrize(
+    ("reason", "failure", "expected"),
+    [
+        ("4081", {"message": "Subscription required."}, "Subscription required."),
+        ("4081", {}, "4081"),
+        ("4079", {"message": "Other failure details"}, "4079"),
+    ],
+)
+async def test_recovered_refusal_message_reaches_project_and_jobs(
+    reason, failure, expected
+) -> None:
+    api, client, events, _ = restart_harness()
+    project = track(api)
+    job = project._add_job({"id": "J", "status": "pending", "projectId": project.id})
+    job_events = []
+    api.on("job", job_events.append)
+    snapshot = {
+        "id": project.id,
+        "reason": reason,
+        "failure": failure,
+        "status": "failed",
+        "finished": True,
+    }
+    api.get = AsyncMock(side_effect=ApiError(404, {}))
+    api.get_status = AsyncMock(return_value=snapshot)
+    result = await api._reconcile({}, "reconnect", time.time())
+    error = {"code": int(reason), "message": expected}
+    assert result["completed"] == [project.id]
+    assert project.error == job.error == events[-1]["error"] == job_events[-1]["error"] == error
+    settle(project)
+
+    restored = track(api)
+    await restored._sync_to_server({**snapshot, "id": restored.id, "status": "errored"})
+    assert restored.error == error
+    settle(restored)
+    stop_timers(api)
+
+
 async def test_reference_preparation_does_not_consume_admission_grace() -> None:
     api, client, _events, _synced = restart_harness()
     api._recovery_tuning["recently_created_grace_seconds"] = 5
