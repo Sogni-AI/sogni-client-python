@@ -512,6 +512,7 @@ class ChatToolsApi:
         "seedance2-fast": "seedance-2-0-mini",
         "seedance2-5": "seedance-2-5",
         "seedance2-5-flash": "seedance-2-5-flash",
+        "seedance2-5-flash-uncensored": "seedance-2-5-flash-uncensored",
         # Seedance 2.5 Uncensored keeps its own id; never route it to seedance-2-5.
         "seedance2-5-uncensored": "seedance-2-5-uncensored",
         "minimax-h3": "minimax-h3-fl2va-fp8_t2v",
@@ -549,6 +550,7 @@ class ChatToolsApi:
         "seedance2-fast": "seedance-2-0-mini",
         "seedance2-5": "seedance-2-5",
         "seedance2-5-flash": "seedance-2-5-flash",
+        "seedance2-5-flash-uncensored": "seedance-2-5-flash-uncensored",
         "seedance2-5-uncensored": "seedance-2-5-uncensored",
         "minimax-h3": "minimax-h3-fl2va-fp8_i2v",
         "minimax-h3-i2v": "minimax-h3-fl2va-fp8_i2v",
@@ -586,6 +588,7 @@ class ChatToolsApi:
         "seedance2-fast": "seedance-2-0",
         "seedance2-5": "seedance-2-5",
         "seedance2-5-flash": "seedance-2-5-flash",
+        "seedance2-5-flash-uncensored": "seedance-2-5-flash-uncensored",
         "seedance2-5-uncensored": "seedance-2-5-uncensored",
         "ltx25-ia2v": "ltx25-22b-int8_ia2v_distilled",
         "ltx25-a2v": "ltx25-22b-int8_a2v_distilled",
@@ -610,6 +613,7 @@ class ChatToolsApi:
         "seedance2-mini-uncensored": "seedance-2-0-mini-uncensored",
         "seedance2-5": "seedance-2-5",
         "seedance2-5-flash": "seedance-2-5-flash",
+        "seedance2-5-flash-uncensored": "seedance-2-5-flash-uncensored",
         "seedance2-5-uncensored": "seedance-2-5-uncensored",
     }
 

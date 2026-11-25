@@ -826,9 +826,15 @@ def test_minimax_last_frame_export_is_explicit(model_id: str, steps: int) -> Non
         assert wire["keyFrames"][0]["returnLastFrame"] is enabled
 
 
-def test_seedance25_uncensored_keeps_its_id_and_every_seedance25_limit() -> None:
+@pytest.mark.parametrize(("model_id", "images", "videos", "audios"), [
+    ("seedance-2-5-uncensored", 30, 10, 10),
+    ("seedance-2-5-flash-uncensored", 10, 5, 5),
+])
+def test_seedance25_uncensored_keeps_its_id_and_sku_limits(
+    model_id: str, images: int, videos: int, audios: int
+) -> None:
     def uncensored(**overrides: Any) -> dict[str, Any]:
-        return _seedance_request(modelId="seedance-2-5-uncensored", **overrides)
+        return _seedance_request(modelId=model_id, **overrides)
 
     def urls(kind: str, count: int, extension: str) -> list[str]:
         return [f"https://cdn.example/{kind}-{index}.{extension}" for index in range(count)]
@@ -837,7 +843,7 @@ def test_seedance25_uncensored_keeps_its_id_and_every_seedance25_limit() -> None
         frame = uncensored(
             referenceVideoUrls=["https://cdn.example/source.mp4"], seedanceTaskType=task
         )["keyFrames"][0]
-        assert frame["modelID"] == "seedance-2-5-uncensored"
+        assert frame["modelID"] == model_id
         assert frame["seedanceTaskType"] == task
     audio_only = uncensored(
         referenceAudioUrls=["https://cdn.example/voice.mp3"], seedanceTaskType="reference"
@@ -847,20 +853,20 @@ def test_seedance25_uncensored_keeps_its_id_and_every_seedance25_limit() -> None
         uncensored(referenceVideoUrls=["https://cdn.example/source.mp4"])
 
     maximum = uncensored(
-        referenceImageUrls=urls("image", 30, "jpg"),
-        referenceVideoUrls=urls("video", 10, "mp4"),
-        referenceAudioUrls=urls("audio", 10, "mp3"),
+        referenceImageUrls=urls("image", images, "jpg"),
+        referenceVideoUrls=urls("video", videos, "mp4"),
+        referenceAudioUrls=urls("audio", audios, "mp3"),
         seedanceTaskType="reference",
     )["keyFrames"][0]
-    assert len(maximum["referenceImageURLs"]) == 30
-    assert len(maximum["referenceVideoURLs"]) == 10
-    assert len(maximum["referenceAudioURLs"]) == 10
+    assert len(maximum["referenceImageURLs"]) == images
+    assert len(maximum["referenceVideoURLs"]) == videos
+    assert len(maximum["referenceAudioURLs"]) == audios
     for field, kind, count, extension in (
-        ("referenceImageUrls", "image", 31, "jpg"),
-        ("referenceVideoUrls", "video", 11, "mp4"),
-        ("referenceAudioUrls", "audio", 11, "mp3"),
+        ("referenceImageUrls", "image", images + 1, "jpg"),
+        ("referenceVideoUrls", "video", videos + 1, "mp4"),
+        ("referenceAudioUrls", "audio", audios + 1, "mp3"),
     ):
-        with pytest.raises(ApiError, match=f"seedance-2-5-uncensored supports at most {count - 1}"):
+        with pytest.raises(ApiError, match=f"{model_id} supports at most {count - 1}"):
             uncensored(**{field: urls(kind, count, extension)}, seedanceTaskType="reference")
 
     assert uncensored(duration=30)["keyFrames"][0]["frames"] == 30 * 24 + 1
@@ -872,6 +878,13 @@ def test_seedance25_uncensored_keeps_its_id_and_every_seedance25_limit() -> None
     exported = uncensored(outputFormat="mov", returnLastFrame=True)
     assert exported["outputFormat"] == "mov"
     assert exported["keyFrames"][0]["returnLastFrame"] is True
+
+@pytest.mark.parametrize("model_id", ["seedance-2-5-flash", "seedance-2-5-flash-uncensored"])
+def test_seedance_flash_rejects_1080p_and_draft(model_id: str) -> None:
+    with pytest.raises(ApiError, match="480p and 720p"):
+        _seedance_request(modelId=model_id, width=1920, height=1080)
+    with pytest.raises(ApiError, match="draft mode"):
+        _seedance_request(modelId=model_id, seedanceDraft=True)
 
 
 @pytest.mark.parametrize("model_id", ["seedance-2-0-mini", "seedance-2-0-mini-uncensored"])

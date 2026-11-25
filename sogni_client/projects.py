@@ -269,6 +269,7 @@ _SEEDANCE_REFERENCE_LIMITS = {
     "seedance-2-0-fast": (9, 3, 3, 12),
     "seedance-2-5": (30, 10, 10, 50),
     "seedance-2-5-flash": (10, 5, 5, 20),
+    "seedance-2-5-flash-uncensored": (10, 5, 5, 20),
     # Seedance 2.5 Uncensored: the same model and limits as Seedance 2.5.
     "seedance-2-5-uncensored": (30, 10, 10, 50),
 }
@@ -1533,7 +1534,7 @@ def _validate_h3_references(params: dict[str, Any]) -> None:
 
 
 def _validate_seedance_flash_size(params: dict[str, Any]) -> None:
-    if params.get("modelId", params.get("model")) != "seedance-2-5-flash":
+    if params.get("modelId", params.get("model")) not in {"seedance-2-5-flash", "seedance-2-5-flash-uncensored"}:
         return
     width, height = params.get("width"), params.get("height")
     if width and height and float(width) * float(height) >= (1280 * 720 + 1920 * 1080) / 2:
@@ -1556,7 +1557,7 @@ def _validate_seedance_draft_fields(params: dict[str, Any]) -> None:
     if draft is not True and "seedanceDraftJobId" not in params:
         return
     draft_model = str(params.get("modelId", params.get("model", "")))
-    if not is_seedance25_model(draft_model) or draft_model == "seedance-2-5-flash":
+    if not is_seedance25_model(draft_model) or draft_model in {"seedance-2-5-flash", "seedance-2-5-flash-uncensored"}:
         raise _api_error("Seedance draft mode is supported only by Seedance 2.5.")
     if draft is True and "seedanceDraftJobId" in params:
         raise _api_error(

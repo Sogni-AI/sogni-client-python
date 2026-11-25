@@ -771,6 +771,8 @@ when the server supplies it, `job.seedance_draft_final_resolution`.
 
 ## Seedance 2.5 Uncensored and Seedance 2.0 Mini Uncensored
 
+Seedance 2.5 Flash Uncensored uses `seedance-2-5-flash-uncensored` (hosted selector `seedance2-5-flash-uncensored`). It supports 4–30 seconds at 480p or 720p and uses the same one-time likeness and consent agreement.
+
 `seedance-2-5-uncensored` (hosted tool selector `seedance2-5-uncensored`) is
 Seedance 2.5 Uncensored: the same model with every Seedance 2.5 limit and option
 above, under its own model id. `seedance-2-0-mini-uncensored` (hosted tool
