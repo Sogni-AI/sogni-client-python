@@ -637,7 +637,7 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
     assert wan3["referenceLinkURL"] == "https://example.com/reference"
     assert wan3["promptExtend"] is False
     assert wan3["ratio"] == "9:16"
-    assert wan3["watermark"] is False
+    assert "watermark" not in wan3
     assert "wan3TaskType" not in wan3
     # 30 seconds is the maximum smartDuration used to reach implicitly, and the
     # retired field never reaches the wire.
@@ -686,8 +686,7 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
             model_options("video"),
         )
 
-    # Wan 3.0 Enhanced is its own model id, with no document/link context and no
-    # watermark control, and it accepts an end frame without a first frame.
+    # Enhanced accepts an end frame without a first frame and ignores legacy options.
     enhanced = create_job_request_message(
         "wan3-enhanced",
         {
@@ -697,29 +696,26 @@ def test_wan3_and_seedance25_use_current_external_video_contracts() -> None:
             "numberOfMedia": 1,
             "duration": 10,
             "referenceImageEnd": True,
+            "watermark": True,
         },
         model_options("video"),
     )["keyFrames"][0]
+    assert "watermark" not in enhanced
     assert enhanced["frames"] == 301
 
-    for field, message in (
-        ("referenceLinkUrl", "does not accept document or webpage references"),
-        ("watermark", "does not expose a watermark option"),
-    ):
-        value = "https://example.com/ref" if field == "referenceLinkUrl" else False
-        with pytest.raises(ApiError, match=message):
-            create_job_request_message(
-                f"wan3-enhanced-{field}",
-                {
-                    "type": "video",
-                    "modelId": "wan3.0-spicy-video",
-                    "positivePrompt": "Enhanced render.",
-                    "numberOfMedia": 1,
-                    "duration": 10,
-                    field: value,
-                },
-                model_options("video"),
-            )
+    with pytest.raises(ApiError, match="does not accept document or webpage references"):
+        create_job_request_message(
+            "wan3-enhanced-link",
+            {
+                "type": "video",
+                "modelId": "wan3.0-spicy-video",
+                "positivePrompt": "Enhanced render.",
+                "numberOfMedia": 1,
+                "duration": 10,
+                "referenceLinkUrl": "https://example.com/ref",
+            },
+            model_options("video"),
+        )
 
     seedance = create_job_request_message(
         "seedance25",
