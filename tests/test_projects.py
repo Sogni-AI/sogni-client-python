@@ -822,10 +822,13 @@ def test_minimax_last_frame_export_is_explicit(model_id: str, steps: int) -> Non
         assert wire["keyFrames"][0]["returnLastFrame"] is enabled
 
 
-@pytest.mark.parametrize(("model_id", "images", "videos", "audios"), [
-    ("seedance-2-5-uncensored", 30, 10, 10),
-    ("seedance-2-5-flash-uncensored", 10, 5, 5),
-])
+@pytest.mark.parametrize(
+    ("model_id", "images", "videos", "audios"),
+    [
+        ("seedance-2-5-uncensored", 30, 10, 10),
+        ("seedance-2-5-flash-uncensored", 10, 5, 5),
+    ],
+)
 def test_seedance25_uncensored_keeps_its_id_and_sku_limits(
     model_id: str, images: int, videos: int, audios: int
 ) -> None:
@@ -874,6 +877,7 @@ def test_seedance25_uncensored_keeps_its_id_and_sku_limits(
     exported = uncensored(outputFormat="mov", returnLastFrame=True)
     assert exported["outputFormat"] == "mov"
     assert exported["keyFrames"][0]["returnLastFrame"] is True
+
 
 @pytest.mark.parametrize("model_id", ["seedance-2-5-flash", "seedance-2-5-flash-uncensored"])
 def test_seedance_flash_rejects_1080p_and_draft(model_id: str) -> None:
