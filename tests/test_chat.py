@@ -283,8 +283,9 @@ def test_seedance25_uncensored_selector_keeps_its_own_model_id() -> None:
         "replace_video_segment",
     ):
         enum = definitions[tool_name]["function"]["parameters"]["properties"]["videoModel"]["enum"]
-        assert enum[enum.index("seedance2-5") + 1 : enum.index("seedance2-5") + 3] == [
+        assert enum[enum.index("seedance2-5") + 1 : enum.index("seedance2-5") + 4] == [
             "seedance2-5-flash",
+            "seedance2-5-flash-uncensored",
             "seedance2-5-uncensored",
         ], tool_name
     animate_photo = definitions["animate_photo"]["function"]["parameters"]["properties"]

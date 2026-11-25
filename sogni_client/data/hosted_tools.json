@@ -253,6 +253,7 @@
                 "seedance2-mini-uncensored",
                 "seedance2-5",
                 "seedance2-5-flash",
+                "seedance2-5-flash-uncensored",
                 "seedance2-5-uncensored",
                 "minimax-h3-t2v",
                 "minimax-h3-t2v-turbo",
@@ -1154,6 +1155,7 @@
                 "seedance2-mini-uncensored",
                 "seedance2-5",
                 "seedance2-5-flash",
+                "seedance2-5-flash-uncensored",
                 "seedance2-5-uncensored"
               ],
               "description": "Model selector for this video-to-video request. Usually omit: non-Seedance controls default to \"ltx25-v2v\"; use \"ltx23-v2v\" only for rollback. LTX 2.5 Fast, HQ, and Pro currently use the release-validated official Distilled workflow for canny, pose, depth, detailer, inpaint, and outpaint. Dev is not publicly routed until upstream publishes and Sogni validates an official ComfyUI Dev recipe. For controlMode=\"seedance-v2v\", Seedance quality is selected only by model: use \"seedance2-mini\" for faster/lower-cost drafts and use \"seedance2\" for full-quality Seedance or 1080p/4K. \"seedance2-5\" supports 480p/720p/1080p/4K, 4-30s at 24 fps, native audio, and first/last-frame conditioning. Preserve the selected Seedance version for explicitly requested 4K. \"seedance2-5-uncensored\": Seedance 2.5 Uncensored — the uncensored variant of Seedance 2.5, with every mode, resolution, duration, reference limit, and output option described for \"seedance2-5\". Choose it only when the user asks for Seedance 2.5 Uncensored (including \"Seedance Uncensored\" or \"Seedance Spicy\") or for uncensored Seedance output; never swap it in for \"seedance2-5\" otherwise. Each account must accept a one-time likeness and consent agreement in the Sogni app before its first render; until then the job fails with error 4103, so tell the user to accept it in the Sogni app instead of retrying. \"seedance2-mini-uncensored\": Seedance 2.0 Mini Uncensored — the uncensored variant of Seedance 2.0 Mini, with every mode, resolution (480p/720p), duration (4-15s), reference limit, and output option of \"seedance2-mini\". Choose it only when the user asks for Seedance 2.0 Mini Uncensored (including \"Seedance Mini Uncensored\" or \"Seedance Mini Spicy\") or for uncensored Seedance Mini output; never swap it in for \"seedance2-mini\" or \"seedance2-5-uncensored\" otherwise. It shares the Seedance 2.5 Uncensored likeness and consent agreement: until the account accepts it in the Sogni app the job fails with error 4103, so tell the user to accept it there instead of retrying."
@@ -1476,6 +1478,7 @@
                 "seedance2-mini-uncensored",
                 "seedance2-5",
                 "seedance2-5-flash",
+                "seedance2-5-flash-uncensored",
                 "seedance2-5-uncensored",
                 "ltx25-ia2v",
                 "ltx25-a2v",
@@ -1581,6 +1584,7 @@
                 "seedance2-mini-uncensored",
                 "seedance2-5",
                 "seedance2-5-flash",
+                "seedance2-5-flash-uncensored",
                 "seedance2-5-uncensored"
               ],
               "description": "Which model to use for the new segment. Default: \"auto\" — preserve Seedance for a Seedance base and otherwise use LTX 2.5. Use ltx23 only for explicit rollback. \"seedance2-5\" and \"seedance2-5-uncensored\" (Seedance 2.5 Uncensored, only when requested) support 480p/720p and 4-30s of new footage at 24 fps. \"seedance2-mini-uncensored\" (Seedance 2.0 Mini Uncensored, only when requested) supports the same 480p/720p and 4-15s of new footage as \"seedance2-mini\"."
@@ -1646,6 +1650,7 @@
                 "seedance2-mini-uncensored",
                 "seedance2-5",
                 "seedance2-5-flash",
+                "seedance2-5-flash-uncensored",
                 "seedance2-5-uncensored"
               ],
               "description": "Which model to use for the new segment. Default: \"auto\" — preserve Seedance or WAN for matching base clips and otherwise use LTX 2.5. Use ltx23 only for explicit rollback. \"seedance2-5\" and \"seedance2-5-uncensored\" (Seedance 2.5 Uncensored, only when requested) support 480p/720p and 4-30s replacement windows at 24 fps. \"seedance2-mini-uncensored\" (Seedance 2.0 Mini Uncensored, only when requested) supports the same 480p/720p and 4-15s replacement windows as \"seedance2-mini\"."
