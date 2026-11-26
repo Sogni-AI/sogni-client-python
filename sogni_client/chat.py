@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
+import ipaddress
 import json
-import mimetypes
+import re
+import socket
 from collections.abc import AsyncIterator, Mapping
 from copy import deepcopy
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -179,28 +182,214 @@ def parse_tool_call_arguments(tool_call: dict[str, Any]) -> dict[str, Any]:
 parseToolCallArguments = parse_tool_call_arguments
 
 
-async def _inline_image(value: str) -> str:
-    if value.startswith("data:"):
-        return value
-    if value.startswith(("http://", "https://")):
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            response = await client.get(value)
-            response.raise_for_status()
-            raw = response.content
-            mime = response.headers.get("content-type", "").split(";", 1)[0]
-    else:
-        path = await asyncio.to_thread(Path(value).expanduser)
-        raw = await asyncio.to_thread(path.read_bytes)
-        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    if len(raw) > 10 * 1024 * 1024:
-        raise ValueError("image input exceeds 10MB limit")
-    if mime in {"image/jpg", "image/jpeg"} or raw.startswith(b"\xff\xd8\xff"):
-        mime = "image/jpeg"
-    elif mime == "image/png" or raw.startswith(b"\x89PNG"):
-        mime = "image/png"
-    else:
+_MAX_VISION_IMAGE_BYTES = 10 * 1024 * 1024
+_MAX_BASE64_PAYLOAD_CHARS = ((_MAX_VISION_IMAGE_BYTES // 3) + 1) * 4
+_REMOTE_IMAGE_TIMEOUT_SECONDS = 20.0
+_UNSUPPORTED_IMAGE_URL_MESSAGE = (
+    "Only inline base64-encoded data URIs or Sogni media HTTPS URLs are supported for image "
+    "inputs; remote URLs are not allowed"
+)
+_SOGNI_R2_MEDIA_HOSTS = frozenset(
+    {
+        "generation-output-production.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
+        "generation-output-staging.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
+        "generation-input-production.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
+        "generation-input-staging.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
+    }
+)
+_SOGNI_SUBDOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+sogni\.ai$")
+_SOGNI_S3_MEDIA_HOST_RE = re.compile(
+    r"^(?:complete-images|artist-upload)-(?:production|staging)"
+    r"\.(?:s3(?:\.[a-z0-9-]+)?|s3-accelerate(?:\.dualstack)?)\.amazonaws\.com$"
+)
+_URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+_NON_PATH_SCHEMES = (
+    "http:",
+    "https:",
+    "file:",
+    "ftp:",
+    "gopher:",
+    "ws:",
+    "wss:",
+    "blob:",
+    "javascript:",
+    "mailto:",
+)
+
+
+def _split_base64_data_uri(value: str) -> tuple[str, str] | None:
+    comma = value.find(",")
+    if comma < 0 or comma == len(value) - 1:
+        return None
+    header = value[:comma]
+    if len(header) <= 12:
+        return None
+    if header[:5].lower() != "data:" or header[-7:].lower() != ";base64":
+        return None
+    mime_type = header[5:-7].lower()
+    if not mime_type or ";" in mime_type:
+        return None
+    return mime_type, value[comma + 1 :]
+
+
+def _validate_inline_image_data_uri(trimmed: str) -> str:
+    parsed = _split_base64_data_uri(trimmed)
+    if parsed is None:
+        raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
+    mime_type, raw_b64 = parsed
+    if mime_type not in {"image/png", "image/jpeg", "image/jpg"}:
         raise ValueError("Vision chat supports PNG and JPEG images only")
-    return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+    sanitized = "".join(raw_b64.split())
+    if not sanitized or not sanitized.isascii():
+        raise ValueError("Invalid base64 payload")
+    remainder = len(sanitized) % 4
+    if remainder == 1:
+        raise ValueError("Invalid base64 payload")
+    padded = sanitized + ("=" * ((4 - remainder) % 4))
+    if len(padded) > _MAX_BASE64_PAYLOAD_CHARS:
+        chunk_size = 65536
+        for offset in range(0, len(padded), chunk_size):
+            piece = padded[offset : offset + chunk_size]
+            is_last = offset + chunk_size >= len(padded)
+            if not is_last and "=" in piece:
+                raise ValueError("Invalid base64 payload")
+            try:
+                decoded_piece = base64.b64decode(piece, validate=True)
+            except binascii.Error as error:
+                raise ValueError("Invalid base64 payload") from error
+            if is_last and base64.b64encode(decoded_piece).decode("ascii") != piece:
+                raise ValueError("Invalid base64 payload")
+        raise ValueError("image input exceeds 10MB limit")
+    try:
+        decoded = base64.b64decode(padded, validate=True)
+    except binascii.Error as error:
+        raise ValueError("Invalid base64 payload") from error
+    if not decoded or base64.b64encode(decoded).decode("ascii") != padded:
+        raise ValueError("Invalid base64 payload")
+    if len(decoded) > _MAX_VISION_IMAGE_BYTES:
+        raise ValueError("image input exceeds 10MB limit")
+    return trimmed
+
+
+def _is_trusted_sogni_media_host(host: str) -> bool:
+    return bool(
+        host == "cdn.sogni.ai"
+        or _SOGNI_SUBDOMAIN_RE.fullmatch(host)
+        or host in _SOGNI_R2_MEDIA_HOSTS
+        or _SOGNI_S3_MEDIA_HOST_RE.fullmatch(host)
+    )
+
+
+def _trusted_remote_media_url(value: str) -> httpx.URL | None:
+    trimmed = value.strip()
+    try:
+        parts = urlsplit(trimmed)
+        if parts.scheme.lower() != "https":
+            return None
+        if not parts.hostname or "@" in parts.netloc or parts.username or parts.password:
+            return None
+        _ = parts.port
+        url = httpx.URL(trimmed)
+    except (ValueError, httpx.InvalidURL):
+        return None
+    if url.scheme != "https" or not url.host or url.username or url.password:
+        return None
+    host = parts.hostname.lower()
+    if url.host.lower() != host:
+        return None
+    return url if _is_trusted_sogni_media_host(host) else None
+
+
+def _is_global_ip(raw_ip: str) -> bool:
+    ip_text = raw_ip.split("%", 1)[0]
+    addr = ipaddress.ip_address(ip_text)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return bool(
+        addr.is_global
+        and not addr.is_loopback
+        and not addr.is_private
+        and not addr.is_link_local
+        and not addr.is_reserved
+        and not addr.is_multicast
+        and not addr.is_unspecified
+    )
+
+
+async def _assert_global_remote_host(url: httpx.URL) -> None:
+    port = url.port or 443
+    infos = await asyncio.to_thread(socket.getaddrinfo, url.host, port, type=socket.SOCK_STREAM)
+    if not infos:
+        raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
+    for _family, _socktype, _proto, _canonname, sockaddr in infos:
+        if not _is_global_ip(str(sockaddr[0])):
+            raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
+
+
+def _looks_like_url(value: str) -> bool:
+    lower = value.lower()
+    return bool(_URL_SCHEME_RE.match(value) or lower.startswith(_NON_PATH_SCHEMES))
+
+
+def _read_local_image_bytes(value: str) -> bytes:
+    path = Path(value).expanduser()
+    if path.stat().st_size > _MAX_VISION_IMAGE_BYTES:
+        raise ValueError("image input exceeds 10MB limit")
+    with path.open("rb") as handle:
+        raw = handle.read(_MAX_VISION_IMAGE_BYTES + 1)
+    if len(raw) > _MAX_VISION_IMAGE_BYTES:
+        raise ValueError("image input exceeds 10MB limit")
+    return raw
+
+
+def _detect_image_mime(raw: bytes) -> str:
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    raise ValueError("Vision chat supports PNG and JPEG images only")
+
+
+async def _inline_image(value: str) -> str:
+    trimmed = value.strip()
+    if trimmed[:5].lower() == "data:":
+        return _validate_inline_image_data_uri(trimmed)
+    if _looks_like_url(trimmed):
+        remote_url = _trusted_remote_media_url(trimmed)
+        if remote_url is None:
+            raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
+        await _assert_global_remote_host(remote_url)
+        async with httpx.AsyncClient(
+            timeout=_REMOTE_IMAGE_TIMEOUT_SECONDS, follow_redirects=False
+        ) as client:
+            async with client.stream("GET", str(remote_url)) as response:
+                if 300 <= response.status_code < 400:
+                    raise ValueError(
+                        f"Remote image redirects are not allowed (HTTP {response.status_code})"
+                    )
+                response.raise_for_status()
+                content_length = response.headers.get("content-length")
+                if content_length is not None:
+                    try:
+                        declared_length = int(content_length.strip())
+                    except ValueError:
+                        declared_length = None
+                    if declared_length is not None and declared_length > _MAX_VISION_IMAGE_BYTES:
+                        raise ValueError("image input exceeds 10MB limit")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > _MAX_VISION_IMAGE_BYTES:
+                        raise ValueError("image input exceeds 10MB limit")
+                    chunks.append(chunk)
+                raw = b"".join(chunks)
+    else:
+        raw = await asyncio.to_thread(_read_local_image_bytes, trimmed)
+    mime = _detect_image_mime(raw)
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
 async def normalize_vision_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
