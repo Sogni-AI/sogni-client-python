@@ -489,7 +489,7 @@ async def test_get_status_reads_the_live_lookup_and_get_keeps_its_v1_path() -> N
         await api.get("A/B")
     assert [call["path"] for call in client.rest.calls] == [
         "/v2/projects/A%2FB",
-        "/v1/projects/A/B",
+        "/v1/projects/A%2FB",
     ]
 
 
