@@ -7,6 +7,7 @@ import base64
 import binascii
 import ipaddress
 import json
+import os
 import re
 import socket
 from collections.abc import AsyncIterator, Mapping
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
+import httpcore
 import httpx
 
 from .attribution import workload_attribution_to_wire_fields
@@ -195,11 +197,13 @@ _SOGNI_R2_MEDIA_HOSTS = frozenset(
         "generation-output-staging.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
         "generation-input-production.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
         "generation-input-staging.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
+        "sogni-user-assets-production.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
+        "sogni-user-assets-staging.234df6a88ee221ecac622f8b1a9609e0.r2.cloudflarestorage.com",
     }
 )
 _SOGNI_SUBDOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+sogni\.ai$")
 _SOGNI_S3_MEDIA_HOST_RE = re.compile(
-    r"^(?:complete-images|artist-upload)-(?:production|staging)"
+    r"^(?:complete-images|artist-upload|preview-images|sogni-user-assets)-(?:production|staging)"
     r"\.(?:s3(?:\.[a-z0-9-]+)?|s3-accelerate(?:\.dualstack)?)\.amazonaws\.com$"
 )
 _URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
@@ -300,11 +304,25 @@ def _trusted_remote_media_url(value: str) -> httpx.URL | None:
     return url if _is_trusted_sogni_media_host(host) else None
 
 
-def _is_global_ip(raw_ip: str) -> bool:
-    ip_text = raw_ip.split("%", 1)[0]
-    addr = ipaddress.ip_address(ip_text)
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
+_NON_GLOBAL_IPV6_NETWORKS = (
+    ipaddress.IPv6Network("::/96"),
+    ipaddress.IPv6Network("64:ff9b::/96"),
+    ipaddress.IPv6Network("64:ff9b:1::/48"),
+    ipaddress.IPv6Network("100::/64"),
+    ipaddress.IPv6Network("2001::/23"),
+    ipaddress.IPv6Network("2001:db8::/32"),
+    ipaddress.IPv6Network("2002::/16"),
+)
+
+
+def _is_global_ip_obj(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return _is_global_ip_obj(addr.ipv4_mapped)
+        if addr.sixtofour is not None or addr.teredo is not None:
+            return False
+        if any(addr in network for network in _NON_GLOBAL_IPV6_NETWORKS):
+            return False
     return bool(
         addr.is_global
         and not addr.is_loopback
@@ -316,14 +334,130 @@ def _is_global_ip(raw_ip: str) -> bool:
     )
 
 
-async def _assert_global_remote_host(url: httpx.URL) -> None:
+def _is_global_ip(raw_ip: str) -> bool:
+    ip_text = raw_ip.split("%", 1)[0]
+    try:
+        addr = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return False
+    return _is_global_ip_obj(addr)
+
+
+def _env_var(name: str) -> str:
+    return (os.environ.get(name.lower()) or os.environ.get(name) or "").strip()
+
+
+def _host_matches_no_proxy(host: str, port: int, no_proxy: str) -> bool:
+    host_lower = host.lower()
+    for raw_entry in no_proxy.split(","):
+        entry = raw_entry.strip().lower()
+        if not entry:
+            continue
+        if entry == "*":
+            return True
+        if "://" in entry:
+            entry = urlsplit(entry).netloc or entry
+        entry_host, sep, entry_port = entry.rpartition(":")
+        if sep and entry_port.isdigit():
+            if int(entry_port) != port:
+                continue
+            target = entry_host
+        else:
+            target = entry
+        target = target.lstrip(".")
+        if not target:
+            continue
+        if host_lower == target or host_lower.endswith(f".{target}"):
+            return True
+    return False
+
+
+def _uses_https_proxy(url: httpx.URL) -> bool:
+    if not (_env_var("HTTPS_PROXY") or _env_var("ALL_PROXY")):
+        return False
+    no_proxy = _env_var("NO_PROXY")
+    if no_proxy and _host_matches_no_proxy(url.host, url.port or 443, no_proxy):
+        return False
+    return True
+
+
+async def _resolve_global_remote_ips(url: httpx.URL) -> tuple[str, ...]:
     port = url.port or 443
     infos = await asyncio.to_thread(socket.getaddrinfo, url.host, port, type=socket.SOCK_STREAM)
     if not infos:
         raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
+    resolved: list[str] = []
     for _family, _socktype, _proto, _canonname, sockaddr in infos:
-        if not _is_global_ip(str(sockaddr[0])):
+        raw_ip = str(sockaddr[0])
+        if not _is_global_ip(raw_ip):
             raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
+        clean_ip = raw_ip.split("%", 1)[0]
+        if clean_ip not in resolved:
+            resolved.append(clean_ip)
+    return tuple(resolved)
+
+
+class _ResolvedAddressBackend(httpcore.AsyncNetworkBackend):
+    """Connect directly to the resolved addresses validated for a single host."""
+
+    def __init__(
+        self,
+        inner: httpcore.AsyncNetworkBackend,
+        expected_host: str,
+        addresses: tuple[str, ...],
+    ) -> None:
+        self._inner = inner
+        self._expected_host = expected_host.lower()
+        self._addresses = addresses
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        if host.lower() != self._expected_host or not self._addresses:
+            raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
+        last_error: Exception | None = None
+        for address in self._addresses:
+            try:
+                return await self._inner.connect_tcp(
+                    address,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except Exception as error:
+                last_error = error
+        assert last_error is not None
+        raise last_error
+
+    async def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:  # pragma: no cover - HTTPS TCP only
+        return await self._inner.connect_unix_socket(
+            path, timeout=timeout, socket_options=socket_options
+        )
+
+    async def sleep(self, seconds: float) -> None:  # pragma: no cover - passthrough
+        await self._inner.sleep(seconds)
+
+
+def _attach_resolved_addresses(
+    client: httpx.AsyncClient, host: str, addresses: tuple[str, ...]
+) -> None:
+    transport = getattr(client, "_transport", None)
+    pool = getattr(transport, "_pool", None)
+    if isinstance(transport, httpx.AsyncHTTPTransport) and isinstance(
+        pool, httpcore.AsyncConnectionPool
+    ):
+        pool._network_backend = _ResolvedAddressBackend(pool._network_backend, host, addresses)
 
 
 def _looks_like_url(value: str) -> bool:
@@ -358,10 +492,13 @@ async def _inline_image(value: str) -> str:
         remote_url = _trusted_remote_media_url(trimmed)
         if remote_url is None:
             raise ValueError(_UNSUPPORTED_IMAGE_URL_MESSAGE)
-        await _assert_global_remote_host(remote_url)
+        use_proxy = _uses_https_proxy(remote_url)
+        resolved_ips = () if use_proxy else await _resolve_global_remote_ips(remote_url)
         async with httpx.AsyncClient(
             timeout=_REMOTE_IMAGE_TIMEOUT_SECONDS, follow_redirects=False
         ) as client:
+            if not use_proxy:
+                _attach_resolved_addresses(client, remote_url.host, resolved_ips)
             async with client.stream("GET", str(remote_url)) as response:
                 if 300 <= response.status_code < 400:
                     raise ValueError(
