@@ -4967,7 +4967,7 @@ class ProjectsApi(EventEmitter):
         """Stored record of a finished project; raises a 404 while it is still
         queued or rendering. Use :meth:`get_status` for a project of your own
         that has not finished yet."""
-        response = await self.client.rest.get(f"/v1/projects/{quote(project_id)}")
+        response = await self.client.rest.get(f"/v1/projects/{quote(project_id, safe='')}")
         return response["data"]["project"]
 
     async def get_status(self, project_id: str) -> dict[str, Any]:
@@ -6315,14 +6315,14 @@ class ProjectsApi(EventEmitter):
     ) -> list[dict[str, Any]]:
         # Unlike JS's global 10m cache, rely on the HTTP layer; callers can cache safely.
         return await self.client.socket.get(
-            f"/api/v1/size-presets/network/{quote(network)}/model/{quote(model_id)}"
+            f"/api/v1/size-presets/network/{quote(network, safe='')}/model/{quote(model_id, safe='')}"
         )
 
     getSizePresets = get_size_presets
 
     async def get_available_models(self, network: str) -> list[dict[str, Any]]:
         workers, models = await asyncio.gather(
-            self.client.socket.get(f"/api/v1/status/network/{quote(network)}/models"),
+            self.client.socket.get(f"/api/v1/status/network/{quote(network, safe='')}/models"),
             self.get_supported_models(),
         )
         result = []
@@ -6451,7 +6451,8 @@ class ProjectsApi(EventEmitter):
         if data.get("includeMonthlyFairUse") is True:
             query["includeMonthlyFairUse"] = "true"
         response = await self.client.socket.get(
-            f"/api/v{version}/job/estimate/" + "/".join(map(str, path)), query
+            f"/api/v{version}/job/estimate/" + "/".join(quote(str(item), safe="") for item in path),
+            query,
         )
         return self._cost(response)
 
@@ -6531,7 +6532,7 @@ class ProjectsApi(EventEmitter):
             if sam3_video_prompt.get("memory") is not None:
                 sam3_query["sam3Memory"] = sam3_video_prompt["memory"]
         response = await self.client.socket.get(
-            "/api/v1/job-video/estimate/" + "/".join(quote(str(item)) for item in path),
+            "/api/v1/job-video/estimate/" + "/".join(quote(str(item), safe="") for item in path),
             {
                 "sourceWidth": source_size[0],
                 "sourceHeight": source_size[1],
@@ -6612,7 +6613,7 @@ class ProjectsApi(EventEmitter):
             data["numberOfMedia"],
         ]
         response = await self.client.socket.get(
-            "/api/v1/job-audio/estimate/" + "/".join(quote(str(item)) for item in path),
+            "/api/v1/job-audio/estimate/" + "/".join(quote(str(item), safe="") for item in path),
             {
                 # Unpinned, the job renders on the connection's network, so
                 # quote that one.

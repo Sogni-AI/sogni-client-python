@@ -162,10 +162,28 @@ def _date_from_milliseconds(value: Any) -> datetime:
     return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
 
 
+_MAX_ETHER_TEXT_LENGTH = 100
+_MAX_UINT256 = 2**256 - 1
+
+
 def _parse_ether(value: int | float | str | Decimal) -> str:
     """Match ethers.parseEther for ordinary decimal input."""
 
+    if isinstance(value, bool):
+        raise ValueError("amount must be a base-10 decimal with at most 18 decimal places")
+    if isinstance(value, str) and len(value.strip()) > _MAX_ETHER_TEXT_LENGTH:
+        raise ValueError("Invalid token amount")
+    if (
+        isinstance(value, Decimal)
+        and value.is_finite()
+        and abs(value.adjusted()) > _MAX_ETHER_TEXT_LENGTH
+    ):
+        raise ValueError("Invalid token amount")
+    if isinstance(value, int) and value.bit_length() > 333:
+        raise ValueError("Invalid token amount")
     text = (format(value, "f") if isinstance(value, Decimal) else str(value)).strip()
+    if len(text) > _MAX_ETHER_TEXT_LENGTH:
+        raise ValueError("Invalid token amount")
     if not re.fullmatch(r"-?(?:\d+(?:\.\d*)?|\.\d+)", text):
         raise ValueError("amount must be a base-10 decimal with at most 18 decimal places")
     negative = text.startswith("-")
@@ -176,6 +194,15 @@ def _parse_ether(value: int | float | str | Decimal) -> str:
     fraction = fraction[:18].ljust(18, "0")
     wei = int(whole or "0") * 10**18 + int(fraction or "0")
     return str(-wei if negative else wei)
+
+
+def _parse_positive_token_amount(value: int | float | str | Decimal) -> str:
+    wei = int(_parse_ether(value))
+    if wei <= 0:
+        raise ValueError("Token amount must be positive")
+    if wei > _MAX_UINT256:
+        raise ValueError("Token amount exceeds uint256 range")
+    return str(wei)
 
 
 def _load_eth_account() -> tuple[Any, Any]:
@@ -1087,11 +1114,12 @@ class AccountApi(EventEmitter):
         proof: dict[str, Any] | None = None,
     ) -> None:
         """Withdraw tokens with an optional code or passkey (challengeId and assertion) proof."""
+        wei = _parse_positive_token_amount(amount)
         wallet = self.get_wallet(self._require_account_username(), password)
         self._assert_wallet_matches(wallet)
         payload = {
             "walletAddress": wallet.address,
-            "amount": _parse_ether(amount),
+            "amount": wei,
             "provider": provider,
         }
         permit = _unwrap_data(
@@ -1113,12 +1141,13 @@ class AccountApi(EventEmitter):
     async def deposit(
         self, password: str, amount: int | float | str | Decimal, provider: str = "base"
     ) -> None:
-        await self._deposit(password, amount, provider, attempt=1)
+        wei = _parse_positive_token_amount(amount)
+        await self._deposit(password, wei, provider, attempt=1)
 
     async def _deposit(
         self,
         password: str,
-        amount: int | float | str | Decimal,
+        wei: str,
         provider: str,
         *,
         attempt: int,
@@ -1130,7 +1159,7 @@ class AccountApi(EventEmitter):
                 "/v3/account/token/deposit",
                 {
                     "walletAddress": wallet.address,
-                    "amount": _parse_ether(amount),
+                    "amount": wei,
                     "provider": provider,
                 },
             )
@@ -1142,7 +1171,7 @@ class AccountApi(EventEmitter):
             if attempt >= _MAX_DEPOSIT_ATTEMPTS:
                 raise
             await asyncio.sleep(10)
-            await self._deposit(password, amount, provider, attempt=attempt + 1)
+            await self._deposit(password, wei, provider, attempt=attempt + 1)
 
     async def approve_token_usage(
         self, password: str, spender: str, provider: str = "base"

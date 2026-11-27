@@ -5436,3 +5436,83 @@ async def test_monthly_capacity_estimate_is_optional(kind: str) -> None:
         result = await estimate({**params, "includeMonthlyFairUse": opt_in})
         assert "monthlyFairUsePct" not in result
         assert "includeMonthlyFairUse" not in client.socket.get.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_project_routes_percent_encode_slashes_in_path_segments() -> None:
+    client = FakeClient(
+        [
+            {"data": {"project": {"id": "a/b"}}},
+            {"data": {"project": {"id": "a/b", "status": "completed", "finished": True}}},
+        ]
+    )
+    quote_body = {
+        "quote": {
+            "project": {
+                "costInToken": "1",
+                "costInUSD": "0.1",
+                "costInSpark": "2",
+                "costInSogni": "4",
+            }
+        }
+    }
+    socket_paths: list[str] = []
+
+    async def fake_socket_get(path: str, _params: dict[str, Any] | None = None) -> Any:
+        socket_paths.append(path)
+        if "/size-presets/" in path:
+            return [{"id": "square", "width": 512, "height": 512}]
+        if path.endswith("/models"):
+            return {}
+        return quote_body
+
+    client.socket.get = fake_socket_get  # type: ignore[method-assign]
+    api = ProjectsApi(client)
+    api.get_supported_models = AsyncMock(return_value=[])
+    api.get_model_options = AsyncMock(return_value=model_options("image"))
+
+    assert await api.get("a/b") == {"id": "a/b"}
+    assert (await api.get_status("a/b"))["id"] == "a/b"
+    assert [call["path"] for call in client.rest.calls] == [
+        "/v1/projects/a%2Fb",
+        "/v2/projects/a%2Fb",
+    ]
+
+    await api.get_size_presets("fast/tier", "org/model")
+    await api.get_available_models("fast/tier")
+    await api.estimate_cost(
+        token_type="spark/bonus",
+        network="fast/tier",
+        model="org/model",
+        image_count=1,
+        step_count=8,
+        preview_count=0,
+        width=512,
+        height=512,
+        sampler="euler/a",
+    )
+    await api.estimate_video_cost(
+        token_type="spark/bonus",
+        model="org/video-model",
+        width=512,
+        height=512,
+        frames=49,
+        fps=24,
+        network="fast",
+    )
+    await api.estimate_audio_cost(
+        token_type="spark/bonus",
+        model="org/audio-model",
+        duration=30,
+        steps=8,
+        number_of_media=1,
+        network="fast",
+    )
+
+    assert socket_paths == [
+        "/api/v1/size-presets/network/fast%2Ftier/model/org%2Fmodel",
+        "/api/v1/status/network/fast%2Ftier/models",
+        "/api/v3/job/estimate/spark%2Fbonus/fast%2Ftier/org%2Fmodel/1/8/0/0/0/512/512/0/euler%2Fa/0",
+        "/api/v1/job-video/estimate/spark%2Fbonus/org%2Fvideo-model/512/512/49/24",
+        "/api/v1/job-audio/estimate/spark%2Fbonus/org%2Faudio-model/30/8/1",
+    ]

@@ -927,7 +927,44 @@ def test_parse_ether_matches_decimal_ether_units(value: Any, wei: str) -> None:
     assert _parse_ether(value) == wei
 
 
-@pytest.mark.parametrize("value", ["", "1e3", "nan", "0.0000000000000000001"])
-def test_parse_ether_rejects_non_decimal_or_overprecise_values(value: str) -> None:
+@pytest.mark.parametrize("value", ["", "1e3", "nan", "0.0000000000000000001", True])
+def test_parse_ether_rejects_non_decimal_or_overprecise_values(value: Any) -> None:
     with pytest.raises(ValueError):
         _parse_ether(value)
+
+
+@pytest.mark.parametrize("value", ["9" * 101, 10**400, Decimal("1e101")])
+def test_parse_ether_rejects_overlong_inputs(value: Any) -> None:
+    with pytest.raises(ValueError, match="Invalid token amount"):
+        _parse_ether(value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["withdraw", "deposit"])
+@pytest.mark.parametrize(
+    ("amount", "message"),
+    [
+        (0, "Token amount must be positive"),
+        ("0", "Token amount must be positive"),
+        ("0.0", "Token amount must be positive"),
+        ("-1", "Token amount must be positive"),
+        ("-.5", "Token amount must be positive"),
+        (Decimal("-0.01"), "Token amount must be positive"),
+        ("1" + "0" * 60, "Token amount exceeds uint256 range"),
+        (Decimal("1e60"), "Token amount exceeds uint256 range"),
+        (2**256, "Token amount exceeds uint256 range"),
+        ("9" * 101, "Invalid token amount"),
+    ],
+)
+async def test_withdraw_and_deposit_require_positive_uint256_amounts_before_rest(
+    method: str, amount: Any, message: str
+) -> None:
+    rest = FakeRest()
+    api = AccountApi(FakeClient(rest))
+    api.current_account._update({"username": "ada", "wallet_address": "0x" + "11" * 20})
+    operation = getattr(api, method)
+
+    with pytest.raises(ValueError, match=message):
+        await operation("secret", amount)
+
+    assert rest.calls == []
